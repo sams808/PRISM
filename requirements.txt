@@ -1,0 +1,7 @@
+lmfit
+matplotlib
+numpy
+pandas
+rampy
+scipy
+ttkthemes
