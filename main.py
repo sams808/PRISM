@@ -302,9 +302,12 @@ def _show_xy_selector_dialog(parent, df: pd.DataFrame, meta: Dict,
     # Hint / auto-detect info
     hint_txt = tk.Text(frm, height=3, width=56)
     hint_txt.grid(row=3, column=0, columnspan=2, sticky="we", pady=(10,0))
-    hint_txt.insert("1.0", f"Detected: {_friendly_kind(meta)}\n"
-                           f"Columns: {', '.join(cols[:6])}{'…' if len(cols)>6 else ''}\n"
-                           f"Pick X/Y or accept the suggestion.")
+    hint_msg = (
+        f"Detected: {_friendly_kind(meta)}\n"
+        f"Columns: {', '.join(cols[:6])}{'…' if len(cols)>6 else ''}\n"
+        "Pick X/Y or accept the suggestion."
+    )
+    hint_txt.insert("1.0", hint_msg)
     hint_txt.configure(state="disabled")
 
     # Buttons

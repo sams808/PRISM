@@ -674,7 +674,10 @@ class SimplePlotWindow(tk.Toplevel):
             self.listbox.selection_set(0, tk.END)
         else:
             self.listbox.selection_clear(0, tk.END)
-        self.plot_selected_spectrum()
+        # Reuse the same selection-change hook so that spectral-diff UI state
+        # (combobox visibility, reference list, etc.) stays in sync when this
+        # shortcut checkbox is toggled.
+        self.on_selection_change()
 
     def export_all_formats(self):
         basename = filedialog.asksaveasfilename(defaultextension=".png",
