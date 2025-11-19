@@ -33,9 +33,8 @@ import lmfit
 from scipy.signal import find_peaks
 import colorsys
 
-# CUSTOM IMPORTS (patched: use io_importers with an adapter)
-from io_importers import load_any as _io_load_any  # primitive loader from new module
-# from io_universal import load_any as load_any, import_xy as import_xy, list_columns as list_columns   # <-- removed
+# CUSTOM IMPORTS (patched: use io_universal universal loader)
+from io_universal import load_any as _io_load_any
 from ui_fit_params import FitParamWindow
 from ui_simple_plot import SimplePlotWindow
 # cif_tools.py est importé par ui_simple_plot.py
@@ -119,11 +118,9 @@ def _safe_trapz(y: np.ndarray, x: np.ndarray) -> float:
 
 # ------------------------------ loading helpers ---------------------------
 
-# ==== Adapter over io_importers =================================================
-# io_importers.load_any(path) -> returns a payload dict.
-# We adapt it to the legacy interface expected by this file: (df, meta) where:
-#   meta['selected_parser'] in {'ta_sdt','generic_xy'}
-#   meta['canonical_map'] provides mappings used by DEFAULT_RULES when possible.
+# ==== Adapter over io_universal =================================================
+# io_universal.load_any(path, return_meta=True) -> returns (df, meta).
+# We keep a tiny wrapper so the rest of this module can remain unchanged.
 def _build_canonical_map_for_ta(df: pd.DataFrame) -> Dict[str, str]:
     cols = {c.lower(): c for c in df.columns}
     cmap = {}
@@ -152,28 +149,13 @@ def _build_canonical_map_for_ta(df: pd.DataFrame) -> Dict[str, str]:
     return cmap
 
 def load_any(file_path: str, return_meta: bool = False):
-    """
-    Adapter returning (df, meta) compatible with the rest of this file.
-    Under the hood, uses io_importers.load_any which returns a payload dict.
-    """
-    payload = _io_load_any(file_path)
+    """Adapter returning (df, meta) compatible with the rest of this file."""
+    df, meta = _io_load_any(file_path, return_meta=True)
+    meta = (meta or {}).copy()
 
-    # Build df + meta
-    if payload.get("kind") == "TA":
-        df = payload["df"]
-        meta = payload.get("meta", {}).copy()
-        meta["selected_parser"] = "ta_sdt"
-        # Provide a canonical_map to make DEFAULT_RULES effective
+    # Older code expects canonical_map for TA datasets.
+    if meta.get("selected_parser") == "ta_sdt" and "canonical_map" not in meta:
         meta["canonical_map"] = _build_canonical_map_for_ta(df)
-    elif payload.get("kind") == "XY":
-        # Create a simple two-column DataFrame
-        x = payload["x"]
-        y = payload["y"]
-        df = pd.DataFrame({"X": np.asarray(x, dtype=float), "Y": np.asarray(y, dtype=float)})
-        meta = {"selected_parser": "generic_xy", "canonical_map": {"x": "X", "y": "Y"}}
-    else:
-        # Unknown — try to coerce into a generic XY if possible
-        raise ValueError("Unsupported file payload returned by io_importers.")
 
     if return_meta:
         return df, meta
@@ -685,41 +667,27 @@ class RamanApp:
             if path in self.file_paths:
                 continue
             try:
-                df, meta = load_any(path, return_meta=True)
-                try:
-                    x0, y0, _, _ = _auto_pick_xy(df, meta)
-                except Exception:
-                    cols = list(df.columns)
-                    if len(cols) >= 2:
-                        x0, y0 = cols[0], cols[1]
-                    else:
-                        raise
-
-                picked = _show_xy_selector_dialog(self.root, df, meta, suggested=(x0, y0))
-                if picked is None:
+                payload = load_file_as_xy(path, parent=self.root, force_popup=True)
+            except RuntimeError as e:
+                # User canceled the selector dialog → silently skip
+                if "User canceled" in str(e):
                     continue
-                kind, x_col, y_col = picked
-
-                x = df[x_col].astype(float).to_numpy()
-                y = df[y_col].astype(float).to_numpy()
-                order = np.argsort(x, kind="mergesort")
-                x, y = x[order], y[order]
-
-                simple_kind = _map_parser_to_simple_kind(kind)
-
-                self.xy_by_path[path] = {
-                    "kind": simple_kind,
-                    "x": x,
-                    "y": y,
-                    "df": df,
-                    "meta": meta,
-                    "x_col": x_col,
-                    "y_col": y_col,
-                }
-
+                messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
+                continue
             except Exception as e:
                 messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
                 continue
+
+            simple_kind = _map_parser_to_simple_kind((payload.meta or {}).get("selected_parser", "generic_xy"))
+            self.xy_by_path[path] = {
+                "kind": simple_kind,
+                "x": payload.x,
+                "y": payload.y,
+                "df": payload.df,
+                "meta": payload.meta,
+                "x_col": payload.x_col,
+                "y_col": payload.y_col,
+            }
 
             self.file_paths.append(path)
             self.file_titles.append(Path(path).stem)
