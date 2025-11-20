@@ -339,7 +339,22 @@ def load_file_as_xy(file_path: str, parent=None, *, force_popup: bool = False) -
         picked = _show_xy_selector_dialog(parent, df, meta, suggested=(x_col, y_col))
         if picked is None:
             raise RuntimeError("User canceled column selection.")
-        kind, x_col, y_col = picked
+        selected_kind, x_col, y_col = picked
+
+        # If the user overrides the detected parser, reload accordingly and, if needed, re-ask for columns
+        if selected_kind != kind:
+            df, meta = load_any(file_path, return_meta=True, prefer=selected_kind)
+            kind = (meta or {}).get("selected_parser", selected_kind)
+            if x_col not in df.columns or y_col not in df.columns:
+                x_col2, y_col2, _reason2, _conf2 = _auto_pick_xy(df, meta)
+                picked2 = _show_xy_selector_dialog(
+                    parent, df, meta, suggested=(x_col2, y_col2), force_type=selected_kind
+                )
+                if picked2 is None:
+                    raise RuntimeError("User canceled column selection.")
+                _kind_again, x_col, y_col = picked2
+        else:
+            kind = selected_kind
 
     # Extract arrays
     x = df[x_col].astype(float).to_numpy()
@@ -356,13 +371,19 @@ def load_file_as_xy(file_path: str, parent=None, *, force_popup: bool = False) -
         source_path=str(file_path)
     )
 
-def load_file_as_xy_noprompt(file_path: str) -> LoadedXY:
-    """Comme load_file_as_xy, mais ne déclenche JAMAIS de popup (accepte l'auto-pick même peu sûr)."""
+def load_file_as_xy_noprompt(file_path: str, *, require_confident: bool = False) -> LoadedXY:
+    """
+    Comme load_file_as_xy, mais ne déclenche JAMAIS de popup (accepte l'auto-pick même peu sûr).
+    If require_confident=True and the auto-pick is not confident, a RuntimeError is raised so
+    callers can fall back to the interactive popup.
+    """
     df, meta = load_any(file_path, return_meta=True)
     kind = meta.get("selected_parser", "generic_xy")
 
     # Auto-pick (accepte même si 'not confident')
-    x_col, y_col, _reason, _confident = _auto_pick_xy(df, meta)
+    x_col, y_col, _reason, confident = _auto_pick_xy(df, meta)
+    if require_confident and not confident:
+        raise RuntimeError("Ambiguous data type/columns; user selection required.")
 
     # Fallback s'il n'y a vraiment pas 2 colonnes
     if x_col is None or y_col is None:
@@ -617,7 +638,7 @@ class RamanApp:
     # ========== File Import/Management ==========
 
     def import_files_quick(self):
-        """Batch import silencieux : auto-détection type + X/Y ; jamais de popup."""
+        """Batch import silencieux : auto-détection type + X/Y ; popup si ambigu."""
         paths = filedialog.askopenfilenames(title="Select files")
         if not paths:
             return
@@ -628,7 +649,16 @@ class RamanApp:
             if path in self.file_paths:
                 continue
             try:
-                payload = load_file_as_xy_noprompt(path)  # <<< no prompt
+                payload = load_file_as_xy_noprompt(path, require_confident=True)  # <<< no prompt unless ambiguous
+            except RuntimeError:
+                # Ambiguous → fallback to interactive popup
+                try:
+                    payload = load_file_as_xy(path, parent=self.root, force_popup=True)
+                except RuntimeError as e:
+                    if "User canceled" in str(e):
+                        continue
+                    messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
+                    continue
             except Exception as e:
                 messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
                 continue
