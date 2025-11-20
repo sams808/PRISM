@@ -195,6 +195,7 @@ def _auto_pick_xy(df: pd.DataFrame, meta: Dict) -> Tuple[str, str, str, bool]:
     parser = (meta or {}).get("selected_parser", "generic_xy")
     c = (meta or {}).get("canonical_map", {}) or {}
     columns = list(df.columns)
+    numeric_cols = list(df.select_dtypes(include=[np.number]).columns)
 
     # 1) Try rule table for this parser with canonical keys
     for (want_keys, reason) in DEFAULT_RULES.get(parser, []):
@@ -221,8 +222,17 @@ def _auto_pick_xy(df: pd.DataFrame, meta: Dict) -> Tuple[str, str, str, bool]:
         if cx and cy:
             return cx, cy, "Heuristic: q vs I", False
 
-    # 3) Fallback → first two columns
+    # 3) Fallback → numeric sanity checks then first two columns
     if len(columns) >= 2:
+        # Only two numeric columns (with or without headers) → confident generic XY
+        if len(numeric_cols) == 2:
+            return numeric_cols[0], numeric_cols[1], "Two numeric columns", True
+        # Exactly two columns and both convertible to numeric → confident
+        if len(columns) == 2 and all(_is_numericish(df[col]) for col in columns):
+            return columns[0], columns[1], "Two columns (numeric)", True
+        # More numeric columns → pick first two but stay unconfident to allow popup
+        if len(numeric_cols) >= 2:
+            return numeric_cols[0], numeric_cols[1], "First two numeric columns", False
         return columns[0], columns[1], "First two columns", False
 
     raise ValueError("Not enough columns to choose X/Y.")
@@ -235,6 +245,12 @@ def _guess_col(columns: List[str], patterns: Tuple[str, ...]) -> Optional[str]:
         if all(pat.strip().lower() in low for pat in patterns):
             return col
     return None
+
+
+def _is_numericish(series: pd.Series) -> bool:
+    """Check if a Series can be fully coerced to numeric values (no NaNs after coercion)."""
+    coerced = pd.to_numeric(series, errors="coerce")
+    return coerced.notna().all()
 
 
 def _show_xy_selector_dialog(parent, df: pd.DataFrame, meta: Dict,
