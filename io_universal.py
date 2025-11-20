@@ -416,9 +416,9 @@ def load_any(path: str, *, x_key: str | None = None, y_key: str | None = None,
 
     chosen = None
     if prefer:
-        for spec in _REGISTRY:
-            if spec.name == prefer and spec.sniff(path, head):
-                chosen = spec; break
+        chosen = next((spec for spec in _REGISTRY if spec.name == prefer), None)
+        if chosen is None:
+            raise ValueError(f"Unknown parser requested via 'prefer': {prefer}")
     if chosen is None:
         for spec in _REGISTRY:
             try:
