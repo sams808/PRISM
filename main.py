@@ -341,20 +341,17 @@ def load_file_as_xy(file_path: str, parent=None, *, force_popup: bool = False) -
             raise RuntimeError("User canceled column selection.")
         selected_kind, x_col, y_col = picked
 
-        # If the user overrides the detected parser, reload accordingly and, if needed, re-ask for columns
-        if selected_kind != kind:
-            df, meta = load_any(file_path, return_meta=True, prefer=selected_kind)
-            kind = (meta or {}).get("selected_parser", selected_kind)
-            if x_col not in df.columns or y_col not in df.columns:
-                x_col2, y_col2, _reason2, _conf2 = _auto_pick_xy(df, meta)
-                picked2 = _show_xy_selector_dialog(
-                    parent, df, meta, suggested=(x_col2, y_col2), force_type=selected_kind
-                )
-                if picked2 is None:
-                    raise RuntimeError("User canceled column selection.")
-                _kind_again, x_col, y_col = picked2
-        else:
-            kind = selected_kind
+        # Always reload with the user's chosen parser to honor the explicit selection
+        df, meta = load_any(file_path, return_meta=True, prefer=selected_kind)
+        kind = (meta or {}).get("selected_parser", selected_kind)
+        if x_col not in df.columns or y_col not in df.columns:
+            x_col2, y_col2, _reason2, _conf2 = _auto_pick_xy(df, meta)
+            picked2 = _show_xy_selector_dialog(
+                parent, df, meta, suggested=(x_col2, y_col2), force_type=selected_kind
+            )
+            if picked2 is None:
+                raise RuntimeError("User canceled column selection.")
+            _kind_again, x_col, y_col = picked2
 
     # Extract arrays
     x = df[x_col].astype(float).to_numpy()
