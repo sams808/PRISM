@@ -4,7 +4,10 @@
 # Supports:
 #   1) TA SDT Q600 ASCII (DSC-TGA) with SigN + StartOfData
 #   2) SAXS EDF ASCII exports (header with '#', then 'q(A-1)  I(q)  Sig(q)')
-#   3) Generic XY text (spaces/commas/tabs/semicolons; decimal comma; Fortran 'D')
+#   3) Raman XY (Raman shift vs intensity; common ASCII exports)
+#   4) XRD XY   (2theta vs intensity; CSV/TSV variants)
+#   5) Richer DTA/STA text exports (semicolon/comma/tab; decimal comma aware)
+#   6) Generic XY text (spaces/commas/tabs/semicolons; decimal comma; Fortran 'D')
 #
 # Public API:
 #   - load_any(path, *, x_key=None, y_key=None, prefer=None, return_meta=False)
@@ -15,6 +18,9 @@
 # Canonical keys exposed in meta["canonical_map"] for robust references:
 #   TA SDT: 't_min', 'T_C', 'm_mg', 'HF_mW', 'dT_C', 'dT_uV', 'flow_mL_min'
 #   SAXS  : 'q_A^-1', 'I', 'sigma'
+#   Raman : 'shift_cm^-1', 'intensity'
+#   XRD   : '2theta_deg', 'intensity'
+#   DTA   : 'T_C', 'time_min', 'HF_mW', 'DSC_mW_mg', 'TG_pct', 'DTG_pct_min'
 #
 from __future__ import annotations
 
@@ -171,6 +177,37 @@ def sniff_generic_xy(path: str, head: str) -> bool:
             return True
     return False
 
+def sniff_raman(path: str, head: str) -> bool:
+    low = head.lower()
+    if "raman" in low and ("shift" in low or "cm-1" in low or "cm^" in low):
+        return True
+    if re.search(r"raman\s*shift", head, re.I):
+        return True
+    # simple two-column numeric tables with Raman-ish headers
+    for ln in head.splitlines()[:20]:
+        if re.search(r"raman\s*shift" , ln, re.I) and re.search(r"intensity|counts|a\.u", ln, re.I):
+            return True
+    return False
+
+def sniff_xrd(path: str, head: str) -> bool:
+    low = head.lower()
+    if "xrd" in low and ("2theta" in low or "two theta" in low):
+        return True
+    for ln in head.splitlines()[:30]:
+        if re.search(r"2\s*theta|two\s*theta", ln, re.I) and re.search(r"intensity|counts", ln, re.I):
+            return True
+    return False
+
+def sniff_dta_table(path: str, head: str) -> bool:
+    low = head.lower()
+    if "netzsch" in low or "ta instruments" in low or "universal analysis" in low:
+        return True
+    if re.search(r"dsc|heat\s*flow|tg|dtg", low):
+        return True
+    if ";" in head and re.search(r"temperature", low):
+        return True
+    return False
+
 # ==============================
 # Parsers
 # ==============================
@@ -234,6 +271,11 @@ def parse_ta_sdt(path: str) -> tuple[pd.DataFrame, dict]:
             canonical["HF_mW"] = col
         elif "purge" in key and ("flow" in key or "ml/min" in key):
             canonical["flow_mL_min"] = col
+
+    x_col = canonical.get("T_C") or canonical.get("t_min") or df.columns[0]
+    y_col = canonical.get("HF_mW") or canonical.get("dT_C") or canonical.get("dT_uV") or canonical.get("m_mg") or df.columns[1]
+    canonical["X"] = x_col
+    canonical["Y"] = y_col
 
     meta = {
         "parser": "ta_sdt",
@@ -305,6 +347,9 @@ def parse_saxs_edf_ascii(path: str) -> tuple[pd.DataFrame, dict]:
             canonical["sigma"] = col
         else:
             canonical["I"] = col
+
+    canonical.setdefault("X", canonical.get("q_A^-1"))
+    canonical.setdefault("Y", canonical.get("I"))
 
     meta = {
         "parser": "saxs_edf_ascii",
@@ -393,11 +438,169 @@ def parse_generic_xy(path: str) -> tuple[pd.DataFrame, dict]:
     }
     return df, meta
 
+def _read_table_flexible(path: str) -> tuple[pd.DataFrame, str, str | None]:
+    text, enc = _read_text_with_fallbacks(path)
+    decimal = "," if len(re.findall(r"\d+,\d", text[:2000])) > len(re.findall(r"\d+\.\d", text[:2000])) else "."
+    for sep in [";", "\t", ",", " ", None]:
+        try:
+            df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python")
+            if df.shape[1] >= 2:
+                return df, enc, sep
+        except Exception:
+            continue
+    raise ValueError("Could not read table with flexible settings.")
+
+def _canonicalize_xy(df: pd.DataFrame, prefer: list[str]) -> tuple[str, str]:
+    cols = {c.lower(): c for c in df.columns}
+    for cand in prefer:
+        low = cand.lower()
+        for key, col in cols.items():
+            if low in key:
+                for other_key, other_col in cols.items():
+                    if other_col == col:
+                        continue
+                    if any(y in other_key for y in ["intensity","counts","absorb","a.u","signal","heat flow","dsc","tg","dtg"]):
+                        return col, other_col
+    # fallback: first two
+    return df.columns[0], df.columns[1]
+
+def parse_raman(path: str) -> tuple[pd.DataFrame, dict]:
+    df, enc, sep = _read_table_flexible(path)
+    df = df.dropna(how="all").dropna(how="all", axis=1)
+    if df.columns.size < 2:
+        raise ValueError("Raman parser needs at least two columns.")
+
+    # detect header row as text if first row non-numeric
+    first_row = df.iloc[0]
+    if not pd.to_numeric(first_row, errors="coerce").notna().all():
+        df.columns = first_row
+        df = df.iloc[1:]
+    df.columns = [str(c).strip() for c in df.columns]
+    shift_col, intensity_col = None, None
+    for col in df.columns:
+        low = col.lower()
+        if shift_col is None and ("raman" in low or "shift" in low or "cm" in low):
+            shift_col = col
+        elif intensity_col is None and re.search(r"intensity|counts|a\.u", low):
+            intensity_col = col
+    if shift_col is None or intensity_col is None:
+        shift_col, intensity_col = df.columns[0], df.columns[1]
+
+    canonical = {
+        "shift_cm^-1": shift_col,
+        "intensity": intensity_col,
+        "X": shift_col,
+        "Y": intensity_col,
+    }
+    meta = {
+        "parser": "raman_xy",
+        "used_encoding": enc,
+        "sep": sep,
+        "canonical_map": canonical,
+        "path": os.path.abspath(path),
+    }
+    return df.reset_index(drop=True), meta
+
+def parse_xrd(path: str) -> tuple[pd.DataFrame, dict]:
+    df, enc, sep = _read_table_flexible(path)
+    df = df.dropna(how="all").dropna(how="all", axis=1)
+    if df.columns.size < 2:
+        raise ValueError("XRD parser needs at least two columns.")
+
+    first_row = df.iloc[0]
+    if not pd.to_numeric(first_row, errors="coerce").notna().all():
+        df.columns = first_row
+        df = df.iloc[1:]
+    df.columns = [str(c).strip() for c in df.columns]
+    two_theta, intensity = None, None
+    d_spacing = None
+    for col in df.columns:
+        low = col.lower()
+        if two_theta is None and re.search(r"2\s*theta|two\s*theta|2θ", low):
+            two_theta = col
+        elif intensity is None and re.search(r"intensity|counts", low):
+            intensity = col
+        elif d_spacing is None and re.search(r"\bd\b|spacing", low):
+            d_spacing = col
+    if two_theta is None or intensity is None:
+        two_theta, intensity = df.columns[0], df.columns[1]
+
+    canonical = {
+        "2theta_deg": two_theta,
+        "intensity": intensity,
+        "X": two_theta,
+        "Y": intensity,
+    }
+    if d_spacing:
+        canonical["d_A"] = d_spacing
+    meta = {
+        "parser": "xrd_xy",
+        "used_encoding": enc,
+        "sep": sep,
+        "canonical_map": canonical,
+        "path": os.path.abspath(path),
+    }
+    return df.reset_index(drop=True), meta
+
+def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
+    df, enc, sep = _read_table_flexible(path)
+    df = df.dropna(how="all").dropna(how="all", axis=1)
+    first_row = df.iloc[0]
+    if not pd.to_numeric(first_row, errors="coerce").notna().all():
+        df.columns = first_row
+        df = df.iloc[1:]
+    df.columns = [str(c).strip() for c in df.columns]
+
+    canonical = {}
+    for col in df.columns:
+        low = col.lower()
+        if re.search(r"temp|t\s*\(\s*°?c\s*\)|°c| c\b", low):
+            canonical.setdefault("T_C", col)
+        if re.search(r"time|min", low):
+            canonical.setdefault("time_min", col)
+        if "heat" in low or "flow" in low or "dsc" in low:
+            if "/" in low or "mw" in low:
+                canonical.setdefault("DSC_mW_mg", col)
+            else:
+                canonical.setdefault("HF_mW", col)
+        if re.search(r"tg|mass|weight", low) and "%" in low:
+            canonical.setdefault("TG_pct", col)
+        if re.search(r"dtg", low) or "%/min" in low:
+            canonical.setdefault("DTG_pct_min", col)
+
+    x_col, y_col = None, None
+    if "T_C" in canonical and ("HF_mW" in canonical or "DSC_mW_mg" in canonical):
+        x_col = canonical.get("T_C")
+        y_col = canonical.get("DSC_mW_mg", canonical.get("HF_mW"))
+    elif "time_min" in canonical and ("HF_mW" in canonical or "DSC_mW_mg" in canonical):
+        x_col = canonical.get("time_min")
+        y_col = canonical.get("DSC_mW_mg", canonical.get("HF_mW"))
+    elif "T_C" in canonical and "TG_pct" in canonical:
+        x_col = canonical.get("T_C")
+        y_col = canonical.get("TG_pct")
+    else:
+        x_col, y_col = _canonicalize_xy(df, list(canonical.values()) if canonical else [])
+
+    canonical["X"] = x_col
+    canonical["Y"] = y_col
+
+    meta = {
+        "parser": "dta_table",
+        "used_encoding": enc,
+        "sep": sep,
+        "canonical_map": canonical,
+        "path": os.path.abspath(path),
+    }
+    return df.reset_index(drop=True), meta
+
 # ==============================
 # Register parsers (priority)
 # ==============================
 register_parser(ParserSpec("ta_sdt", sniff_ta_sdt, parse_ta_sdt, priority=10))
 register_parser(ParserSpec("saxs_edf_ascii", sniff_saxs_edf_ascii, parse_saxs_edf_ascii, priority=20))
+register_parser(ParserSpec("dta_table", sniff_dta_table, parse_dta_table, priority=30))
+register_parser(ParserSpec("raman_xy", sniff_raman, parse_raman, priority=40))
+register_parser(ParserSpec("xrd_xy", sniff_xrd, parse_xrd, priority=50))
 register_parser(ParserSpec("generic_xy", sniff_generic_xy, parse_generic_xy, priority=90))
 
 # ==============================
