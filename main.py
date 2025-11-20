@@ -148,9 +148,14 @@ def _build_canonical_map_for_ta(df: pd.DataFrame) -> Dict[str, str]:
 
     return cmap
 
-def load_any(file_path: str, return_meta: bool = False):
-    """Adapter returning (df, meta) compatible with the rest of this file."""
-    df, meta = _io_load_any(file_path, return_meta=True)
+def load_any(file_path: str, return_meta: bool = False, *, prefer: str | None = None):
+    """Adapter returning (df, meta) compatible with the rest of this file.
+
+    The "prefer" keyword is forwarded to the universal loader so that callers
+    (e.g. the custom import dialog) can explicitly pick a parser when multiple
+    interpretations are possible.
+    """
+    df, meta = _io_load_any(file_path, return_meta=True, prefer=prefer)
     meta = (meta or {}).copy()
 
     # Older code expects canonical_map for TA datasets.
