@@ -1,0 +1,9 @@
+XRD scan - Cu Kalpha
+2Theta(deg)    Intensity(counts)
+remark: sample holder bump
+10.10   230
+text line interfering with export
+10.20   235
+10.30   240
+stitch break between ranges
+10.40   245
