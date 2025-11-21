@@ -1,0 +1,11 @@
+# Raman snippet with intermittent notes
+Raman shift (cm-1)    Intensity (a.u.)
+
+88.0   10.5
+note: cosmic ray removed
+88.5   11.1
+# short comment that should be ignored
+89.0   10.9
+drift correction pending
+89.5   11.4
+90.0   11.2

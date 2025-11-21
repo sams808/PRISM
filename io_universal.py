@@ -333,18 +333,19 @@ def parse_generic_xy(path: str) -> tuple[pd.DataFrame, dict]:
         else:
             data_candidates.append(("text", st, None))
 
-    # first streak of >= 5 consecutive numeric lines
-    start_idx, streak = None, 0
-    for i, (kind, st, toks) in enumerate(data_candidates):
-        if kind == "data":
-            streak += 1
-            if streak >= 5:
-                start_idx = i - streak + 1
-                break
-        else:
-            streak = 0
+    # first streak of >= 5 numeric lines allowing intermittent text
+    dense_window = 7
+    min_dense = 5
+    start_idx = None
+    for i in range(len(data_candidates)):
+        window = data_candidates[i:i+dense_window]
+        data_positions = [j for j,(k,_,_) in enumerate(window) if k == "data"]
+        if len(data_positions) >= min_dense:
+            start_idx = i + data_positions[0]
+            break
+
     if start_idx is None:
-        # fallback: accept if >= 2 data lines exist
+        # fallback: accept if >= 2 data lines exist anywhere
         numeric_total = sum(1 for k,_,_ in data_candidates if k == "data")
         if numeric_total < 2:
             raise ValueError("Generic XY: No numeric XY data detected in this file.")
@@ -353,7 +354,7 @@ def parse_generic_xy(path: str) -> tuple[pd.DataFrame, dict]:
                 start_idx = i; break
 
     header_row = None
-    if start_idx and start_idx > 0:
+    if start_idx is not None and start_idx > 0:
         prev_kind, prev_st, _ = data_candidates[start_idx-1]
         if prev_kind == "text":
             header_row = prev_st
