@@ -45,18 +45,35 @@ _NUM_LIKE   = re.compile(r"""^[\s]*
     (?:[eEdD][+-]?\d+)?   # exponent
     [\s]*$""", re.X)
 
-def _read_text_with_fallbacks(path: str, encodings=("utf-8-sig","utf-8","latin-1")) -> tuple[str,str]:
-    last_err = None
-    for enc in encodings:
+def _decode_text_autodetect(raw: bytes, extra_encodings: tuple[str, ...] = ()) -> tuple[str, str]:
+    """
+    Decode bytes with TA/Netzsch-friendly heuristics (mirrors EXAMPLES/plot_dta.py):
+    - Prefer UTF-16 when BOM or many NUL bytes are present.
+    - Fall back to UTF-8 variants, then latin-1, then UTF-8(ignore).
+    """
+    if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace"), "utf-16"
+
+    head = raw[:4000]
+    if head.count(b"\x00") > len(head) * 0.1:
         try:
-            with open(path, "r", encoding=enc, errors="strict") as f:
-                return f.read(), enc
-        except Exception as e:
-            last_err = e
-    # last resort: binary → utf-8 ignore
-    with open(path, "rb") as f:
-        raw = f.read()
+            return raw.decode("utf-16", errors="replace"), "utf-16"
+        except Exception:
+            pass
+
+    for enc in ("utf-8-sig", "utf-8", "latin-1", *extra_encodings):
+        try:
+            return raw.decode(enc, errors="strict"), enc
+        except Exception:
+            continue
+
     return raw.decode("utf-8", errors="ignore"), "binary->utf-8(ignore)"
+
+
+def _read_text_with_fallbacks(path: str, encodings=("utf-8-sig","utf-8","latin-1")) -> tuple[str,str]:
+    raw = Path(path).read_bytes()
+    return _decode_text_autodetect(raw, extra_encodings=tuple(encodings))
+
 
 def _normalize_num_token(tok: str) -> str | None:
     s = tok.strip()
@@ -136,23 +153,7 @@ def _read_text_autodetect(path: Path) -> str:
     Auto-detect UTF-16 BOM / UTF-8-ish encodings used by TA/Netzsch exports.
     Mirrors the standalone EXAMPLES/plot_dta.py helper for consistency.
     """
-    b = path.read_bytes()
-
-    if b.startswith(b"\xff\xfe") or b.startswith(b"\xfe\xff"):
-        return b.decode("utf-16", errors="replace")
-
-    head = b[:4000]
-    if head.count(b"\x00") > len(head) * 0.1:
-        try:
-            return b.decode("utf-16", errors="replace")
-        except Exception:
-            pass
-
-    try:
-        return b.decode("utf-8-sig", errors="replace")
-    except Exception:
-        return b.decode("latin-1", errors="replace")
-
+    return _decode_text_autodetect(path.read_bytes())[0]
 
 def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFrame]:
     """
