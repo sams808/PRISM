@@ -59,6 +59,12 @@ DEFAULT_RULES = {
         (("time_min", "dT_C"), "Time vs dT(°C)"),
         (("T_C", "m_mg"), "Temperature vs Mass"),
     ],
+    "dta_table": [
+        (("T_C", "HF_mW"), "Temperature vs Heat Flow"),
+        (("T_C", "DSC_mW_mg"), "Temperature vs DSC"),
+        (("time_min", "DSC_mW_mg"), "Time vs DSC"),
+        (("T_C", "TG_pct"), "Temperature vs TG%"),
+    ],
     # SAXS EDF: prefer q vs I
     "saxs_edf_ascii": [
         (("q_A^-1", "I"), "q vs I(q)"),
@@ -183,6 +189,8 @@ def _friendly_kind(meta: Dict) -> str:
     name = (meta or {}).get("selected_parser") or ""
     if name == "ta_sdt":
         return "TA SDT (DSC/TGA/DTA)"
+    if name == "dta_table":
+        return "DTA / STA table"
     if name == "saxs_edf_ascii":
         return "SAXS (EDF ASCII)"
     return "XY (generic)"
@@ -211,7 +219,7 @@ def _auto_pick_xy(df: pd.DataFrame, meta: Dict) -> Tuple[str, str, str, bool]:
             return cx, cy, f"{_friendly_kind(meta)} — {reason}", True
 
     # 2) Heuristics if canonical_map incomplete (e.g. alternative labels)
-    if parser == "ta_sdt":
+    if parser in ("ta_sdt", "dta_table"):
         cx = _guess_col(columns, patterns=("temp",)) or _guess_col(columns, patterns=("temperature",))
         cy = _guess_col(columns, patterns=("heat", "flow")) or _guess_col(columns, patterns=("dsc",))
         if cx and cy:
@@ -280,7 +288,7 @@ def _show_xy_selector_dialog(parent, df: pd.DataFrame, meta: Dict,
     kind_var = tk.StringVar(value=detected_kind)
     ttk.Label(frm, text="Data type:").grid(row=0, column=0, sticky="w")
     kind_cb = ttk.Combobox(frm, textvariable=kind_var, state="readonly", width=24,
-                           values=("ta_sdt", "saxs_edf_ascii", "generic_xy"))
+                           values=("ta_sdt", "dta_table", "saxs_edf_ascii", "generic_xy"))
     kind_cb.grid(row=0, column=1, sticky="we", padx=(8,0))
     if force_type:
         kind_var.set(force_type)
@@ -356,7 +364,7 @@ def load_file_as_xy(file_path: str, parent=None, *, force_popup: bool = False) -
     x_col, y_col, reason, confident = _auto_pick_xy(df, meta)
 
     # If not confident or user wants control → popup
-    if force_popup or not confident:
+    if force_popup or not confident or meta.get("autodetect_failed"):
         picked = _show_xy_selector_dialog(parent, df, meta, suggested=(x_col, y_col))
         if picked is None:
             raise RuntimeError("User canceled column selection.")
@@ -400,7 +408,7 @@ def load_file_as_xy_noprompt(file_path: str, *, require_confident: bool = False)
 
     # Auto-pick (accepte même si 'not confident')
     x_col, y_col, _reason, confident = _auto_pick_xy(df, meta)
-    if require_confident and not confident:
+    if require_confident and (not confident or meta.get("autodetect_failed")):
         raise RuntimeError("Ambiguous data type/columns; user selection required.")
 
     # Fallback s'il n'y a vraiment pas 2 colonnes
@@ -427,6 +435,8 @@ def _map_parser_to_simple_kind(parser_name: str) -> str:
     """Mappe les noms de parseur vers les tags attendus par ui_simple_plot."""
     if parser_name == "ta_sdt":
         return "TA_SDT"
+    if parser_name == "dta_table":
+        return "DTA"
     # tout le reste → XY
     return "XY"
 
