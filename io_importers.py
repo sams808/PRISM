@@ -4,6 +4,7 @@ import re, os, io
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from io_universal import parse_ta_sdt_txt
 
 # --------------------------- utils ---------------------------
 
@@ -24,35 +25,6 @@ def _read_head(path, n=80, encodings=("utf-8-sig","latin-1","cp1252")):
     except Exception:
         text = raw.decode("latin-1", "ignore")
     return text.splitlines()[:n], "utf-8"
-
-def _guess_decimal_and_sep(lines):
-    """Very robust: looks for ; , \t, and decimal comma usage."""
-    sample = "\n".join(lines[:40])
-    dec_comma_hits = len(re.findall(r"\d+,\d", sample))
-    dec_dot_hits   = len(re.findall(r"\d+\.\d", sample))
-    decimal = "," if dec_comma_hits > dec_dot_hits else "."
-    # Prioritize ; then , then \t for TA/Netzsch
-    if ";" in sample:
-        sep = ";"
-    elif "\t" in sample:
-        sep = "\t"
-    elif "," in sample and decimal == ".":
-        sep = ","
-    else:
-        # Let pandas guess later
-        sep = None
-    return decimal, sep
-
-def _first_numeric_row(lines, min_nums=2):
-    for idx, ln in enumerate(lines):
-        # remove obvious header junk
-        if ln.strip().startswith("#"): 
-            continue
-        toks = re.split(r"[;,\t ]+", ln.strip())
-        nums = sum(1 for t in toks if _NUM.fullmatch(t.replace(",",".") ))
-        if nums >= min_nums:
-            return idx
-    return None
 
 def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     """Lowercase + strip + unify whitespaces."""
@@ -105,6 +77,25 @@ def _rename_to_canon(df: pd.DataFrame):
 
 # --------------------------- DTA detection & loading ---------------------------
 
+def _canonicalize_dta_columns(df: pd.DataFrame) -> dict:
+    canon: dict[str, str] = {}
+    for col in df.columns:
+        low = str(col).lower()
+        if "temp" in low:
+            canon.setdefault("T_C", col)
+        if "time" in low:
+            canon.setdefault("time_min", col)
+        if "heat flow" in low or "heatflow" in low or "dsc" in low:
+            canon.setdefault("DSC_mW_mg", col)
+            canon.setdefault("HF_mW", col)
+        if ("tg" in low or "mass" in low or "weight" in low) and "%" in low:
+            canon.setdefault("TG_pct", col)
+        if "dtg" in low or "%/min" in low:
+            canon.setdefault("DTG_pct_min", col)
+        if ("mass" in low or "weight" in low) and "%" not in low:
+            canon.setdefault("mass_mg", col)
+    return canon
+
 def _looks_like_dta(lines):
     head = "\n".join(lines[:25]).lower()
     if "netzsch" in head or "ta instruments" in head or "universal analysis" in head:
@@ -114,35 +105,16 @@ def _looks_like_dta(lines):
         return True
     return False
 
-def _read_table(path, header_row=None, sep=None, decimal="."):
-    if header_row is None:
-        # let pandas try to guess header, fallback to no header
-        try:
-            df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python")
-        except Exception:
-            df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python", header=None)
-    else:
-        df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python", header=header_row)
-    return _normalize_cols(df)
-
 def load_dta(path: str):
-    lines, enc = _read_head(path)
-    decimal, sep = _guess_decimal_and_sep(lines)
-    # find first numeric row to use as header if the row above looks like headers
-    header_row = None
-    numrow = _first_numeric_row(lines, min_nums=2)
-    if numrow is None:
-        # try blind read, user will choose later if needed
-        df = _read_table(path, header_row=None, sep=sep, decimal=decimal)
-    else:
-        # try to put header as the row just before numeric if that row is texty
-        if numrow > 0 and re.search(r"[A-Za-z]", lines[numrow-1]):
-            header_row = numrow - 1
-        df = _read_table(path, header_row=header_row, sep=sep, decimal=decimal)
+    header, colnames, df = parse_ta_sdt_txt(Path(path))
     df = df.dropna(how="all", axis=0).dropna(how="all", axis=1)
-    df = _rename_to_canon(df)
-
-    meta = {"source": "NETZSCH/TA (heuristic)", "encoding": enc, "decimal": decimal, "sep": sep}
+    canon = _canonicalize_dta_columns(df)
+    meta = {
+        "source": "TA/STA text",
+        "header": header,
+        "signals": colnames,
+        "canonical_map": canon,
+    }
     return {"kind": "TA", "df": df, "meta": meta}
 
 # --------------------------- Generic XY loading ---------------------------
