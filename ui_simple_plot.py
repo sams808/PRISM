@@ -176,6 +176,7 @@ class SimplePlotWindow(tk.Toplevel):
         self.var_dta_x = tk.StringVar()
         self.var_dta_y = tk.StringVar()
         self.var_dta_deriv = tk.StringVar(value="None")
+        self.var_dta_trace_mode = tk.StringVar(value="deriv_only")
         self.var_dta_time = tk.StringVar()
         self.var_dta_temp = tk.StringVar()
 
@@ -199,13 +200,24 @@ class SimplePlotWindow(tk.Toplevel):
         self.cb_dta_deriv.grid(row=2, column=1, sticky="w", padx=(0, 6), pady=2)
         self.cb_dta_deriv.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
 
-        ttk.Label(dta_frame, text="Time column").grid(row=3, column=0, sticky="e", padx=(6, 4), pady=2)
+        trace_mode_row = ttk.Frame(dta_frame)
+        trace_mode_row.grid(row=3, column=0, columnspan=2, sticky="w", padx=(4, 0), pady=(4, 2))
+        ttk.Label(trace_mode_row, text="Plot").pack(side="left", padx=(0, 6))
+        ttk.Radiobutton(trace_mode_row, text="Derivative only", value="deriv_only",
+                        variable=self.var_dta_trace_mode,
+                        command=self._on_dta_option_changed).pack(side="left")
+        ttk.Radiobutton(trace_mode_row, text="+ original", value="with_base",
+                        variable=self.var_dta_trace_mode,
+                        command=self._on_dta_option_changed).pack(side="left", padx=(8, 0))
+        self.trace_mode_row = trace_mode_row
+
+        ttk.Label(dta_frame, text="Time column").grid(row=4, column=0, sticky="e", padx=(6, 4), pady=2)
         self.cb_dta_time = ttk.Combobox(dta_frame, textvariable=self.var_dta_time, state="readonly", width=30)
-        self.cb_dta_time.grid(row=3, column=1, sticky="w", padx=(0, 6), pady=2)
+        self.cb_dta_time.grid(row=4, column=1, sticky="w", padx=(0, 6), pady=2)
         self.cb_dta_time.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
-        ttk.Label(dta_frame, text="Temp. column").grid(row=4, column=0, sticky="e", padx=(6, 4), pady=2)
+        ttk.Label(dta_frame, text="Temp. column").grid(row=5, column=0, sticky="e", padx=(6, 4), pady=2)
         self.cb_dta_temp = ttk.Combobox(dta_frame, textvariable=self.var_dta_temp, state="readonly", width=30)
-        self.cb_dta_temp.grid(row=4, column=1, sticky="w", padx=(0, 6), pady=2)
+        self.cb_dta_temp.grid(row=5, column=1, sticky="w", padx=(0, 6), pady=2)
         self.cb_dta_temp.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
         self.cb_dta_time.state(["disabled"])
         self.cb_dta_temp.state(["disabled"])
@@ -458,6 +470,7 @@ class SimplePlotWindow(tk.Toplevel):
             "x": x_col,
             "y": y_col,
             "deriv": "none",
+            "trace_mode": "deriv_only",
             "time_col": canonical.get("time_min") or self._find_best_column(cols, "time") or "",
             "temp_col": canonical.get("T_C") or self._find_best_column(cols, "temp") or "",
         }
@@ -486,9 +499,11 @@ class SimplePlotWindow(tk.Toplevel):
             deriv_mode = state.get("deriv", "none")
             mode_to_label = {"none": "None", "time": "dY/dt", "temp": "dY/dT"}
             self.var_dta_deriv.set(mode_to_label.get(deriv_mode, "None"))
+            self.var_dta_trace_mode.set(state.get("trace_mode", "deriv_only"))
             self.var_dta_time.set(state.get("time_col", ""))
             self.var_dta_temp.set(state.get("temp_col", ""))
             self._update_dta_basis_state(deriv_mode)
+            self._update_dta_trace_visibility(deriv_mode)
             self.dta_frame.grid()
             return
         self.dta_frame.grid_remove()
@@ -504,6 +519,14 @@ class SimplePlotWindow(tk.Toplevel):
             self.cb_dta_time.state(["disabled"])
             self.cb_dta_temp.state(["disabled"])
 
+    def _update_dta_trace_visibility(self, mode: str):
+        if mode == "none":
+            if self.trace_mode_row.winfo_ismapped():
+                self.trace_mode_row.grid_remove()
+        else:
+            if not self.trace_mode_row.winfo_ismapped():
+                self.trace_mode_row.grid()
+
     def _on_dta_option_changed(self):
         if not self._dta_active_path or self._dta_active_path not in self._dta_state:
             return
@@ -513,9 +536,14 @@ class SimplePlotWindow(tk.Toplevel):
         label_to_mode = {"None": "none", "dY/dt": "time", "dY/dT": "temp"}
         deriv_mode = label_to_mode.get(self.var_dta_deriv.get(), "none")
         state["deriv"] = deriv_mode
+        if deriv_mode != "none":
+            state["trace_mode"] = self.var_dta_trace_mode.get() or state.get("trace_mode", "deriv_only")
+        else:
+            self.var_dta_trace_mode.set(state.get("trace_mode", "deriv_only"))
         state["time_col"] = self.var_dta_time.get() or state.get("time_col", "")
         state["temp_col"] = self.var_dta_temp.get() or state.get("temp_col", "")
         self._update_dta_basis_state(deriv_mode)
+        self._update_dta_trace_visibility(deriv_mode)
         self.plot_selected_spectrum()
 
     def _compute_derivative(self, y: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -526,12 +554,19 @@ class SimplePlotWindow(tk.Toplevel):
         out[mask] = np.gradient(y[mask], x[mask])
         return out
 
-    def _resolve_payload_xy(self, path: str, payload: Dict[str, Any], fallback_label: str) -> Tuple[np.ndarray, np.ndarray, str]:
+    def _resolve_payload_traces(
+        self,
+        path: str,
+        payload: Dict[str, Any],
+        fallback_label: str,
+        *,
+        include_dta_base: bool = False,
+    ) -> List[Tuple[np.ndarray, np.ndarray, str]]:
         kind = payload.get("kind")
         if kind in {"DTA", "TA_SDT"}:
             df = payload.get("df")
             if df is None:
-                return np.array([]), np.array([]), fallback_label
+                return [(np.array([]), np.array([]), fallback_label)]
             state = self._ensure_dta_defaults(path, payload)
             cols = list(df.columns)
             x_col = state.get("x") or (cols[0] if cols else "")
@@ -544,6 +579,7 @@ class SimplePlotWindow(tk.Toplevel):
             y_base = pd.to_numeric(df[y_col], errors="coerce").to_numpy(dtype=float)
             label = f"{y_col} vs {x_col}"
 
+            traces: List[Tuple[np.ndarray, np.ndarray, str]] = []
             if deriv_mode == "time":
                 base_col = time_col or x_col
                 base = pd.to_numeric(df[base_col], errors="coerce").to_numpy(dtype=float)
@@ -560,16 +596,19 @@ class SimplePlotWindow(tk.Toplevel):
                 y = y_base
             state["x"] = x_col
             state["y"] = y_col
-            return x, y, label
+            traces.append((x, y, label))
+            if deriv_mode != "none" and include_dta_base and state.get("trace_mode", "deriv_only") == "with_base":
+                traces.append((x, y_base, f"{y_col} vs {x_col} (orig)"))
+            return traces
 
         if kind == "XY":
-            return payload.get("x", np.array([])), payload.get("y", np.array([])), fallback_label
+            return [(payload.get("x", np.array([])), payload.get("y", np.array([])), fallback_label)]
 
         df = payload.get("df")
         if df is not None:
             x_arr, y_arr, info = self._pick_ta_xy(df)
-            return x_arr, y_arr, info.get("label", fallback_label)
-        return payload.get("x", np.array([])), payload.get("y", np.array([])), fallback_label
+            return [(x_arr, y_arr, info.get("label", fallback_label))]
+        return [(payload.get("x", np.array([])), payload.get("y", np.array([])), fallback_label)]
 
     # ------------------------------- CIF UI -------------------------------
 
@@ -1054,7 +1093,12 @@ class SimplePlotWindow(tk.Toplevel):
             ref_title = self.var_diff_ref.get()
             ref_idx = self.file_titles.index(ref_title)
             payload_ref = self._load_any(self.file_paths[ref_idx])
-            x_ref, y_ref, _ = self._resolve_payload_xy(self.file_paths[ref_idx], payload_ref, ref_title)
+            ref_traces = self._resolve_payload_traces(
+                self.file_paths[ref_idx], payload_ref, ref_title, include_dta_base=False
+            )
+            if not ref_traces:
+                return
+            x_ref, y_ref, _ = ref_traces[0]
             # normalise ref on selected X-range
             try:
                 norm_xmin = float(self.xmin.get()) if self.xmin.get() else None
@@ -1085,36 +1129,38 @@ class SimplePlotWindow(tk.Toplevel):
             if use_diff and title == ref_title:
                 continue
             payload = self._load_any(self.file_paths[idx])
-            x, y, title_used = self._resolve_payload_xy(self.file_paths[idx], payload, title)
-            title = title_used
+            traces = self._resolve_payload_traces(
+                self.file_paths[idx], payload, title, include_dta_base=True
+            )
 
-            # normalisation
-            if self.var_norm.get() or use_diff:
-                mask = np.ones_like(x, dtype=bool)
-                if norm_xmin is not None:
-                    mask &= (x >= norm_xmin)
-                if norm_xmax is not None:
-                    mask &= (x <= norm_xmax)
-                finite_mask = mask & np.isfinite(x) & np.isfinite(y)
-                x_for_norm = x[finite_mask]
-                y_for_norm = y[finite_mask]
-                if len(x_for_norm) > 1:
-                    area = np.trapz(y_for_norm, x_for_norm)
-                else:
-                    finite_full = np.isfinite(x) & np.isfinite(y)
-                    area = np.trapz(y[finite_full], x[finite_full]) if finite_full.sum() > 1 else 0.0
-                if abs(area) > 1e-12:
-                    y = y / area * 100
+            for x, y, title_used in traces:
+                # normalisation
+                if self.var_norm.get() or use_diff:
+                    mask = np.ones_like(x, dtype=bool)
+                    if norm_xmin is not None:
+                        mask &= (x >= norm_xmin)
+                    if norm_xmax is not None:
+                        mask &= (x <= norm_xmax)
+                    finite_mask = mask & np.isfinite(x) & np.isfinite(y)
+                    x_for_norm = x[finite_mask]
+                    y_for_norm = y[finite_mask]
+                    if len(x_for_norm) > 1:
+                        area = np.trapz(y_for_norm, x_for_norm)
+                    else:
+                        finite_full = np.isfinite(x) & np.isfinite(y)
+                        area = np.trapz(y[finite_full], x[finite_full]) if finite_full.sum() > 1 else 0.0
+                    if abs(area) > 1e-12:
+                        y = y / area * 100
 
-            # difference
-            if use_diff and x_ref is not None:
-                ref_mask = np.isfinite(x_ref) & np.isfinite(y_ref)
-                if ref_mask.sum() >= 2:
-                    y = y - np.interp(x, x_ref[ref_mask], y_ref[ref_mask])
+                # difference
+                if use_diff and x_ref is not None:
+                    ref_mask = np.isfinite(x_ref) & np.isfinite(y_ref)
+                    if ref_mask.sum() >= 2:
+                        y = y - np.interp(x, x_ref[ref_mask], y_ref[ref_mask])
 
-            y = self._apply_smoothing(x, y)
-            spectra.append((x, y))
-            labels.append(title)
+                y = self._apply_smoothing(x, y)
+                spectra.append((x, y))
+                labels.append(title_used)
 
         self.current_data = spectra
 
