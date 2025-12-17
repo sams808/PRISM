@@ -176,6 +176,7 @@ class SimplePlotWindow(tk.Toplevel):
         self.var_dta_x = tk.StringVar()
         self.var_dta_y = tk.StringVar()
         self.var_dta_deriv = tk.StringVar(value="None")
+        self.var_dta_scale = tk.StringVar(value="1.0")
         self.var_dta_trace_mode = tk.StringVar(value="deriv_only")
         self.var_dta_time = tk.StringVar()
         self.var_dta_temp = tk.StringVar()
@@ -193,12 +194,18 @@ class SimplePlotWindow(tk.Toplevel):
         self.cb_dta_y.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
 
         ttk.Label(dta_frame, text="Y transform").grid(row=2, column=0, sticky="e", padx=(6, 4), pady=2)
+        deriv_row = ttk.Frame(dta_frame)
+        deriv_row.grid(row=2, column=1, sticky="w", padx=(0, 6), pady=2)
         self.cb_dta_deriv = ttk.Combobox(
-            dta_frame, textvariable=self.var_dta_deriv, state="readonly", width=15,
+            deriv_row, textvariable=self.var_dta_deriv, state="readonly", width=12,
             values=["None", "dY/dt", "dY/dT"]
         )
-        self.cb_dta_deriv.grid(row=2, column=1, sticky="w", padx=(0, 6), pady=2)
+        self.cb_dta_deriv.pack(side="left")
+        ttk.Label(deriv_row, text="×").pack(side="left", padx=(6, 4))
+        self.ent_dta_scale = ttk.Entry(deriv_row, textvariable=self.var_dta_scale, width=6)
+        self.ent_dta_scale.pack(side="left")
         self.cb_dta_deriv.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
+        self.ent_dta_scale.bind("<KeyRelease>", lambda e: self._on_dta_option_changed())
 
         trace_mode_row = ttk.Frame(dta_frame)
         trace_mode_row.grid(row=3, column=0, columnspan=2, sticky="w", padx=(4, 0), pady=(4, 2))
@@ -455,7 +462,10 @@ class SimplePlotWindow(tk.Toplevel):
 
     def _ensure_dta_defaults(self, path: str, payload: Dict[str, Any]) -> Dict[str, str]:
         if path in self._dta_state:
-            return self._dta_state[path]
+            state = self._dta_state[path]
+            if "scale" not in state:
+                state["scale"] = 1.0
+            return state
         df = payload.get("df")
         meta = payload.get("meta") or {}
         cols = list(df.columns) if df is not None else []
@@ -473,6 +483,7 @@ class SimplePlotWindow(tk.Toplevel):
             "trace_mode": "deriv_only",
             "time_col": canonical.get("time_min") or self._find_best_column(cols, "time") or "",
             "temp_col": canonical.get("T_C") or self._find_best_column(cols, "temp") or "",
+            "scale": 1.0,
         }
         self._dta_state[path] = state
         return state
@@ -502,6 +513,7 @@ class SimplePlotWindow(tk.Toplevel):
             self.var_dta_trace_mode.set(state.get("trace_mode", "deriv_only"))
             self.var_dta_time.set(state.get("time_col", ""))
             self.var_dta_temp.set(state.get("temp_col", ""))
+            self.var_dta_scale.set(str(state.get("scale", 1.0)))
             self._update_dta_basis_state(deriv_mode)
             self._update_dta_trace_visibility(deriv_mode)
             self.dta_frame.grid()
@@ -527,6 +539,39 @@ class SimplePlotWindow(tk.Toplevel):
             if not self.trace_mode_row.winfo_ismapped():
                 self.trace_mode_row.grid()
 
+    def _propagate_dta_state(self, source_state: Dict[str, str | float]):
+        idxs = self.listbox.curselection()
+        for idx in idxs:
+            path = self.file_paths[idx]
+            try:
+                payload = self._load_any(path)
+            except Exception:
+                continue
+            if payload.get("kind") not in {"DTA", "TA_SDT"}:
+                continue
+            df = payload.get("df")
+            if df is None:
+                continue
+            state = self._ensure_dta_defaults(path, payload)
+            cols = list(df.columns)
+            if source_state.get("x") in cols:
+                state["x"] = source_state.get("x", state.get("x", ""))
+            if source_state.get("y") in cols:
+                state["y"] = source_state.get("y", state.get("y", ""))
+            state["deriv"] = source_state.get("deriv", state.get("deriv", "none"))
+            if source_state.get("trace_mode"):
+                state["trace_mode"] = source_state.get("trace_mode", state.get("trace_mode", "deriv_only"))
+            time_col = source_state.get("time_col")
+            temp_col = source_state.get("temp_col")
+            if time_col in cols:
+                state["time_col"] = time_col
+            if temp_col in cols:
+                state["temp_col"] = temp_col
+            try:
+                state["scale"] = float(source_state.get("scale", 1.0))
+            except Exception:
+                state["scale"] = 1.0
+
     def _on_dta_option_changed(self):
         if not self._dta_active_path or self._dta_active_path not in self._dta_state:
             return
@@ -542,8 +587,13 @@ class SimplePlotWindow(tk.Toplevel):
             self.var_dta_trace_mode.set(state.get("trace_mode", "deriv_only"))
         state["time_col"] = self.var_dta_time.get() or state.get("time_col", "")
         state["temp_col"] = self.var_dta_temp.get() or state.get("temp_col", "")
+        try:
+            state["scale"] = float(self.var_dta_scale.get())
+        except Exception:
+            pass
         self._update_dta_basis_state(deriv_mode)
         self._update_dta_trace_visibility(deriv_mode)
+        self._propagate_dta_state(state)
         self.plot_selected_spectrum()
 
     def _compute_derivative(self, y: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -574,6 +624,10 @@ class SimplePlotWindow(tk.Toplevel):
             deriv_mode = state.get("deriv", "none")
             time_col = state.get("time_col") or self._find_best_column(cols, "time")
             temp_col = state.get("temp_col") or self._find_best_column(cols, "temp")
+            try:
+                scale = float(state.get("scale", 1.0))
+            except Exception:
+                scale = 1.0
 
             x = pd.to_numeric(df[x_col], errors="coerce").to_numpy(dtype=float)
             y_base = pd.to_numeric(df[y_col], errors="coerce").to_numpy(dtype=float)
@@ -596,9 +650,11 @@ class SimplePlotWindow(tk.Toplevel):
                 y = y_base
             state["x"] = x_col
             state["y"] = y_col
+            state["scale"] = scale
+            y = y * scale
             traces.append((x, y, label))
             if deriv_mode != "none" and include_dta_base and state.get("trace_mode", "deriv_only") == "with_base":
-                traces.append((x, y_base, f"{y_col} vs {x_col} (orig)"))
+                traces.append((x, y_base * scale, f"{y_col} vs {x_col} (orig)"))
             return traces
 
         if kind == "XY":
