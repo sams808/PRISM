@@ -80,6 +80,8 @@ class SimplePlotWindow(tk.Toplevel):
         self.current_data: List[Tuple[np.ndarray, np.ndarray]] = []
         self._lines = []              # Line2D on current figure
         self._debouncers = {}         # tk.after debounce
+        self._dta_state: Dict[str, Dict[str, str]] = {}
+        self._dta_active_path: str | None = None
 
         # ------------------- CIF state -------------------
         self._cif_bragg_series = []   # dicts: {"path","label","plot_label","peaks","visible","color","pad"}
@@ -169,6 +171,45 @@ class SimplePlotWindow(tk.Toplevel):
                                       values=["None", "SG", "MA(5)"])
         self.cb_smooth.pack(side="left", padx=(4, 6))
         self.cb_smooth.bind("<<ComboboxSelected>>", lambda e: self.plot_selected_spectrum())
+
+        # DTA-specific controls (shown only when a DTA/STA trace is selected)
+        self.var_dta_x = tk.StringVar()
+        self.var_dta_y = tk.StringVar()
+        self.var_dta_deriv = tk.StringVar(value="None")
+        self.var_dta_time = tk.StringVar()
+        self.var_dta_temp = tk.StringVar()
+
+        dta_frame = ttk.LabelFrame(frame_left, text="DTA / STA")
+        self.dta_frame = dta_frame
+        dta_frame.grid(row=9, column=0, sticky="ew", pady=(10, 0))
+        ttk.Label(dta_frame, text="X").grid(row=0, column=0, sticky="e", padx=(6, 4), pady=2)
+        ttk.Label(dta_frame, text="Y").grid(row=1, column=0, sticky="e", padx=(6, 4), pady=2)
+        self.cb_dta_x = ttk.Combobox(dta_frame, textvariable=self.var_dta_x, state="readonly", width=30)
+        self.cb_dta_y = ttk.Combobox(dta_frame, textvariable=self.var_dta_y, state="readonly", width=30)
+        self.cb_dta_x.grid(row=0, column=1, sticky="w", padx=(0, 6), pady=2)
+        self.cb_dta_y.grid(row=1, column=1, sticky="w", padx=(0, 6), pady=2)
+        self.cb_dta_x.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
+        self.cb_dta_y.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
+
+        ttk.Label(dta_frame, text="Y transform").grid(row=2, column=0, sticky="e", padx=(6, 4), pady=2)
+        self.cb_dta_deriv = ttk.Combobox(
+            dta_frame, textvariable=self.var_dta_deriv, state="readonly", width=15,
+            values=["None", "dY/dt", "dY/dT"]
+        )
+        self.cb_dta_deriv.grid(row=2, column=1, sticky="w", padx=(0, 6), pady=2)
+        self.cb_dta_deriv.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
+
+        ttk.Label(dta_frame, text="Time column").grid(row=3, column=0, sticky="e", padx=(6, 4), pady=2)
+        self.cb_dta_time = ttk.Combobox(dta_frame, textvariable=self.var_dta_time, state="readonly", width=30)
+        self.cb_dta_time.grid(row=3, column=1, sticky="w", padx=(0, 6), pady=2)
+        self.cb_dta_time.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
+        ttk.Label(dta_frame, text="Temp. column").grid(row=4, column=0, sticky="e", padx=(6, 4), pady=2)
+        self.cb_dta_temp = ttk.Combobox(dta_frame, textvariable=self.var_dta_temp, state="readonly", width=30)
+        self.cb_dta_temp.grid(row=4, column=1, sticky="w", padx=(0, 6), pady=2)
+        self.cb_dta_temp.bind("<<ComboboxSelected>>", lambda e: self._on_dta_option_changed())
+        self.cb_dta_time.state(["disabled"])
+        self.cb_dta_temp.state(["disabled"])
+        self.dta_frame.grid_remove()
 
         # right panel
         right = ttk.Frame(main)
@@ -391,6 +432,144 @@ class SimplePlotWindow(tk.Toplevel):
         if xmax_in is not None:
             return xmin_ax, xmax_in
         return xmin_ax, xmax_ax
+
+    # ------------------------------- DTA helpers -------------------------------
+
+    def _find_best_column(self, columns: List[str], keyword: str) -> str | None:
+        for col in columns:
+            if keyword.lower() in col.lower():
+                return col
+        return None
+
+    def _ensure_dta_defaults(self, path: str, payload: Dict[str, Any]) -> Dict[str, str]:
+        if path in self._dta_state:
+            return self._dta_state[path]
+        df = payload.get("df")
+        meta = payload.get("meta") or {}
+        cols = list(df.columns) if df is not None else []
+        canonical = meta.get("canonical_map", {}) or {}
+
+        x_col = canonical.get("T_C") or canonical.get("time_min") or self._find_best_column(cols, "temp") \
+            or self._find_best_column(cols, "time") or (cols[0] if cols else "")
+        y_col = (canonical.get("DSC_mW_mg") or canonical.get("HF_mW") or canonical.get("TG_pct")
+                 or canonical.get("DTG_pct_min") or (cols[1] if len(cols) > 1 else (cols[0] if cols else "")))
+
+        state = {
+            "x": x_col,
+            "y": y_col,
+            "deriv": "none",
+            "time_col": canonical.get("time_min") or self._find_best_column(cols, "time") or "",
+            "temp_col": canonical.get("T_C") or self._find_best_column(cols, "temp") or "",
+        }
+        self._dta_state[path] = state
+        return state
+
+    def _refresh_dta_controls(self):
+        self._dta_active_path = None
+        idxs = self.listbox.curselection()
+        for idx in idxs:
+            path = self.file_paths[idx]
+            try:
+                payload = self._load_any(path)
+            except Exception:
+                continue
+            if payload.get("kind") not in {"DTA", "TA_SDT"}:
+                continue
+            df = payload.get("df")
+            cols = list(df.columns) if df is not None else []
+            state = self._ensure_dta_defaults(path, payload)
+            self._dta_active_path = path
+            for cb in (self.cb_dta_x, self.cb_dta_y, self.cb_dta_time, self.cb_dta_temp):
+                cb["values"] = cols
+            self.var_dta_x.set(state.get("x", ""))
+            self.var_dta_y.set(state.get("y", ""))
+            deriv_mode = state.get("deriv", "none")
+            mode_to_label = {"none": "None", "time": "dY/dt", "temp": "dY/dT"}
+            self.var_dta_deriv.set(mode_to_label.get(deriv_mode, "None"))
+            self.var_dta_time.set(state.get("time_col", ""))
+            self.var_dta_temp.set(state.get("temp_col", ""))
+            self._update_dta_basis_state(deriv_mode)
+            self.dta_frame.grid()
+            return
+        self.dta_frame.grid_remove()
+
+    def _update_dta_basis_state(self, mode: str):
+        if mode == "time":
+            self.cb_dta_time.state(["!disabled"])
+            self.cb_dta_temp.state(["disabled"])
+        elif mode == "temp":
+            self.cb_dta_time.state(["disabled"])
+            self.cb_dta_temp.state(["!disabled"])
+        else:
+            self.cb_dta_time.state(["disabled"])
+            self.cb_dta_temp.state(["disabled"])
+
+    def _on_dta_option_changed(self):
+        if not self._dta_active_path or self._dta_active_path not in self._dta_state:
+            return
+        state = self._dta_state[self._dta_active_path]
+        state["x"] = self.var_dta_x.get() or state.get("x", "")
+        state["y"] = self.var_dta_y.get() or state.get("y", "")
+        label_to_mode = {"None": "none", "dY/dt": "time", "dY/dT": "temp"}
+        deriv_mode = label_to_mode.get(self.var_dta_deriv.get(), "none")
+        state["deriv"] = deriv_mode
+        state["time_col"] = self.var_dta_time.get() or state.get("time_col", "")
+        state["temp_col"] = self.var_dta_temp.get() or state.get("temp_col", "")
+        self._update_dta_basis_state(deriv_mode)
+        self.plot_selected_spectrum()
+
+    def _compute_derivative(self, y: np.ndarray, x: np.ndarray) -> np.ndarray:
+        mask = np.isfinite(x) & np.isfinite(y)
+        if mask.sum() < 3:
+            return np.full_like(y, np.nan, dtype=float)
+        out = np.full_like(y, np.nan, dtype=float)
+        out[mask] = np.gradient(y[mask], x[mask])
+        return out
+
+    def _resolve_payload_xy(self, path: str, payload: Dict[str, Any], fallback_label: str) -> Tuple[np.ndarray, np.ndarray, str]:
+        kind = payload.get("kind")
+        if kind in {"DTA", "TA_SDT"}:
+            df = payload.get("df")
+            if df is None:
+                return np.array([]), np.array([]), fallback_label
+            state = self._ensure_dta_defaults(path, payload)
+            cols = list(df.columns)
+            x_col = state.get("x") or (cols[0] if cols else "")
+            y_col = state.get("y") or ((cols[1] if len(cols) > 1 else cols[0]) if cols else "")
+            deriv_mode = state.get("deriv", "none")
+            time_col = state.get("time_col") or self._find_best_column(cols, "time")
+            temp_col = state.get("temp_col") or self._find_best_column(cols, "temp")
+
+            x = pd.to_numeric(df[x_col], errors="coerce").to_numpy(dtype=float)
+            y_base = pd.to_numeric(df[y_col], errors="coerce").to_numpy(dtype=float)
+            label = f"{y_col} vs {x_col}"
+
+            if deriv_mode == "time":
+                base_col = time_col or x_col
+                base = pd.to_numeric(df[base_col], errors="coerce").to_numpy(dtype=float)
+                y = self._compute_derivative(y_base, base)
+                label = f"d({y_col})/d({base_col})"
+                state["time_col"] = base_col
+            elif deriv_mode == "temp":
+                base_col = temp_col or x_col
+                base = pd.to_numeric(df[base_col], errors="coerce").to_numpy(dtype=float)
+                y = self._compute_derivative(y_base, base)
+                label = f"d({y_col})/d({base_col})"
+                state["temp_col"] = base_col
+            else:
+                y = y_base
+            state["x"] = x_col
+            state["y"] = y_col
+            return x, y, label
+
+        if kind == "XY":
+            return payload.get("x", np.array([])), payload.get("y", np.array([])), fallback_label
+
+        df = payload.get("df")
+        if df is not None:
+            x_arr, y_arr, info = self._pick_ta_xy(df)
+            return x_arr, y_arr, info.get("label", fallback_label)
+        return payload.get("x", np.array([])), payload.get("y", np.array([])), fallback_label
 
     # ------------------------------- CIF UI -------------------------------
 
@@ -720,6 +899,7 @@ class SimplePlotWindow(tk.Toplevel):
                 self.combo_diff_ref["values"] = ref_titles
                 if self.var_diff_ref.get() not in ref_titles:
                     self.var_diff_ref.set(ref_titles[0])
+        self._refresh_dta_controls()
         self.plot_selected_spectrum()
 
     def on_toggle_spectral_diff(self):
@@ -874,11 +1054,7 @@ class SimplePlotWindow(tk.Toplevel):
             ref_title = self.var_diff_ref.get()
             ref_idx = self.file_titles.index(ref_title)
             payload_ref = self._load_any(self.file_paths[ref_idx])
-            if payload_ref["kind"] == "XY":
-                x_ref, y_ref = payload_ref["x"], payload_ref["y"]
-            else:  # TA
-                df = payload_ref["df"]
-                x_ref, y_ref, _ = self._pick_ta_xy(df)
+            x_ref, y_ref, _ = self._resolve_payload_xy(self.file_paths[ref_idx], payload_ref, ref_title)
             # normalise ref on selected X-range
             try:
                 norm_xmin = float(self.xmin.get()) if self.xmin.get() else None
@@ -890,9 +1066,11 @@ class SimplePlotWindow(tk.Toplevel):
                 mask &= (x_ref >= norm_xmin)
             if norm_xmax is not None:
                 mask &= (x_ref <= norm_xmax)
-            area_ref = np.trapz(y_ref[mask], x_ref[mask]) if np.any(mask) else np.trapz(y_ref, x_ref)
-            if abs(area_ref) > 1e-12:
-                y_ref = y_ref / area_ref * 100
+            finite_mask = mask & np.isfinite(x_ref) & np.isfinite(y_ref)
+            if finite_mask.sum() >= 2:
+                area_ref = np.trapz(y_ref[finite_mask], x_ref[finite_mask])
+                if abs(area_ref) > 1e-12:
+                    y_ref = y_ref / area_ref * 100
 
         # load & prep each selected spectrum
         spectra, labels = [], []
@@ -907,12 +1085,8 @@ class SimplePlotWindow(tk.Toplevel):
             if use_diff and title == ref_title:
                 continue
             payload = self._load_any(self.file_paths[idx])
-            if payload["kind"] == "XY":
-                x, y = payload["x"], payload["y"]
-            else:
-                df = payload["df"]
-                x, y, info = self._pick_ta_xy(df)
-                title = info.get("label", title)
+            x, y, title_used = self._resolve_payload_xy(self.file_paths[idx], payload, title)
+            title = title_used
 
             # normalisation
             if self.var_norm.get() or use_diff:
@@ -921,15 +1095,22 @@ class SimplePlotWindow(tk.Toplevel):
                     mask &= (x >= norm_xmin)
                 if norm_xmax is not None:
                     mask &= (x <= norm_xmax)
-                x_for_norm = x[mask]
-                y_for_norm = y[mask]
-                area = np.trapz(y_for_norm, x_for_norm) if len(x_for_norm) > 1 else np.trapz(y, x)
+                finite_mask = mask & np.isfinite(x) & np.isfinite(y)
+                x_for_norm = x[finite_mask]
+                y_for_norm = y[finite_mask]
+                if len(x_for_norm) > 1:
+                    area = np.trapz(y_for_norm, x_for_norm)
+                else:
+                    finite_full = np.isfinite(x) & np.isfinite(y)
+                    area = np.trapz(y[finite_full], x[finite_full]) if finite_full.sum() > 1 else 0.0
                 if abs(area) > 1e-12:
                     y = y / area * 100
 
             # difference
             if use_diff and x_ref is not None:
-                y = y - np.interp(x, x_ref, y_ref)
+                ref_mask = np.isfinite(x_ref) & np.isfinite(y_ref)
+                if ref_mask.sum() >= 2:
+                    y = y - np.interp(x, x_ref[ref_mask], y_ref[ref_mask])
 
             y = self._apply_smoothing(x, y)
             spectra.append((x, y))
