@@ -431,6 +431,40 @@ def load_file_as_xy_noprompt(file_path: str, *, require_confident: bool = False)
         source_path=str(file_path)
     )
 
+
+def load_dta_file_as_xy(file_path: str, parent=None) -> LoadedXY:
+    """Specialized import for DTA/TA SDT text exports.
+
+    Forces the newer DTA-aware loaders and rejects non-DTA content so the
+    regular XY import path stays focused on Raman/XRD data.
+    """
+    df, meta = load_any(file_path, return_meta=True)
+    parser = (meta or {}).get("selected_parser", "")
+
+    if parser not in ("ta_sdt", "dta_table"):
+        raise RuntimeError("Not recognized as DTA/TA SDT data. Use the XY import instead.")
+
+    x_col, y_col, _reason, confident = _auto_pick_xy(df, meta)
+    if not confident or meta.get("autodetect_failed"):
+        picked = _show_xy_selector_dialog(
+            parent, df, meta, suggested=(x_col, y_col), force_type=parser
+        )
+        if picked is None:
+            raise RuntimeError("User canceled column selection.")
+        _kind, x_col, y_col = picked
+
+    x = df[x_col].astype(float).to_numpy()
+    y = df[y_col].astype(float).to_numpy()
+    order = np.argsort(x, kind="mergesort")
+    x, y = x[order], y[order]
+
+    return LoadedXY(
+        x=x, y=y, df=df,
+        x_col=x_col, y_col=y_col,
+        kind=parser, meta=meta,
+        source_path=str(file_path)
+    )
+
 def _map_parser_to_simple_kind(parser_name: str) -> str:
     """Mappe les noms de parseur vers les tags attendus par ui_simple_plot."""
     if parser_name == "ta_sdt":
@@ -601,6 +635,23 @@ class RamanApp:
         self._setup_layout()
         self.update_file_listbox()
 
+    def _remember_payload(self, path: str, payload: LoadedXY):
+        """Persist imported data and keep state in sync for the UI."""
+        simple_kind = _map_parser_to_simple_kind((payload.meta or {}).get("selected_parser", "generic_xy"))
+        self.xy_by_path[path] = {
+            "kind": simple_kind,
+            "x": payload.x,
+            "y": payload.y,
+            "df": payload.df,
+            "meta": payload.meta,
+            "x_col": payload.x_col,
+            "y_col": payload.y_col,
+        }
+
+        self.file_paths.append(path)
+        self.file_titles.append(Path(path).stem)
+        self.file_statuses.append("imported")
+
     def _setup_layout(self):
         style = ttk.Style(self.root)
 
@@ -622,8 +673,8 @@ class RamanApp:
         frame_left.grid(row=0, column=0, sticky="ns")
         frame_left.grid_propagate(False)
         ttk.Label(frame_left, text="Parameters", font=("Arial", 12, "bold")).pack(pady=(0,12))
-        ttk.Button(frame_left, text="Quick import", width=18, command=self.import_files_quick).pack(pady=4)
-        ttk.Button(frame_left, text="Custom import", width=18, command=self.import_files_custom).pack(pady=3)
+        ttk.Button(frame_left, text="Import XY (Raman/XRD)", width=18, command=self.import_xy_files).pack(pady=4)
+        ttk.Button(frame_left, text="Import DTA", width=18, command=self.import_dta_files).pack(pady=3)
         ttk.Button(frame_left, text="Rename", width=18, command=self.rename).pack(pady=3)
         ttk.Button(frame_left, text="Reorder", width=18, command=self.reorder).pack(pady=3)
         ttk.Button(frame_left, text="Clear imports", width=18, command=self.clear_imports).pack(pady=3)
@@ -665,69 +716,22 @@ class RamanApp:
 
     # ========== File Import/Management ==========
 
-    def import_files_quick(self):
-        """Batch import silencieux : auto-détection type + X/Y ; popup si ambigu."""
-        paths = filedialog.askopenfilenames(title="Select files")
+    def import_xy_files(self):
+        """Import Raman/XRD (and other XY) data through the regular parser flow."""
+        paths = filedialog.askopenfilenames(title="Select XY files (Raman/XRD)")
         if not paths:
             return
-        if not hasattr(self, "xy_by_path"):
-            self.xy_by_path = {}
+
         added = False
+        allowed_parsers = {"raman_xy", "xrd_xy", "generic_xy", "saxs_edf_ascii"}
+
         for path in paths:
             if path in self.file_paths:
                 continue
+
             try:
-                payload = load_file_as_xy_noprompt(path, require_confident=True)  # <<< no prompt unless ambiguous
-            except RuntimeError:
-                # Ambiguous → fallback to interactive popup
-                try:
-                    payload = load_file_as_xy(path, parent=self.root, force_popup=True)
-                except RuntimeError as e:
-                    if "User canceled" in str(e):
-                        continue
-                    messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
-                    continue
-            except Exception as e:
-                messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
-                continue
-
-            # Mémorise un enregistrement normalisé que toutes les fenêtres peuvent relire
-            simple_kind = _map_parser_to_simple_kind((payload.meta or {}).get("selected_parser", "generic_xy"))
-            self.xy_by_path[path] = {
-                "kind": simple_kind,
-                "x": payload.x,
-                "y": payload.y,
-                "df": payload.df,
-                "meta": payload.meta,
-                "x_col": payload.x_col,
-                "y_col": payload.y_col,
-            }
-
-            self.file_paths.append(path)
-            self.file_titles.append(Path(path).stem)
-            self.file_statuses.append("imported")
-            added = True
-
-        if added:
-            self.update_file_listbox()
-        else:
-            messagebox.showinfo("Import", "No new files were added.", parent=self.root)
-
-    def import_files_custom(self):
-        """Import wizard : on laisse l’utilisateur choisir type et colonnes (quand il le souhaite)."""
-        paths = filedialog.askopenfilenames(title="Select files")
-        if not paths:
-            return
-        if not hasattr(self, "xy_by_path"):
-            self.xy_by_path = {}
-        added = False
-        for path in paths:
-            if path in self.file_paths:
-                continue
-            try:
-                payload = load_file_as_xy(path, parent=self.root, force_popup=True)
+                payload = load_file_as_xy(path, parent=self.root)
             except RuntimeError as e:
-                # User canceled the selector dialog → silently skip
                 if "User canceled" in str(e):
                     continue
                 messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
@@ -736,20 +740,47 @@ class RamanApp:
                 messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
                 continue
 
-            simple_kind = _map_parser_to_simple_kind((payload.meta or {}).get("selected_parser", "generic_xy"))
-            self.xy_by_path[path] = {
-                "kind": simple_kind,
-                "x": payload.x,
-                "y": payload.y,
-                "df": payload.df,
-                "meta": payload.meta,
-                "x_col": payload.x_col,
-                "y_col": payload.y_col,
-            }
+            parser = (payload.meta or {}).get("selected_parser", "generic_xy")
+            if parser not in allowed_parsers:
+                nice = _friendly_kind(payload.meta)
+                messagebox.showerror(
+                    "Import error",
+                    f"{os.path.basename(path)} looks like {nice} data. Use 'Import DTA' for TA/STA files.",
+                    parent=self.root,
+                )
+                continue
 
-            self.file_paths.append(path)
-            self.file_titles.append(Path(path).stem)
-            self.file_statuses.append("imported")
+            self._remember_payload(path, payload)
+            added = True
+
+        if added:
+            self.update_file_listbox()
+        else:
+            messagebox.showinfo("Import", "No new files were added.", parent=self.root)
+
+    def import_dta_files(self):
+        """Import path dedicated to DTA/TA SDT datasets using the new text-aware logic."""
+        paths = filedialog.askopenfilenames(title="Select DTA files (TA SDT / STA)")
+        if not paths:
+            return
+
+        added = False
+        for path in paths:
+            if path in self.file_paths:
+                continue
+
+            try:
+                payload = load_dta_file_as_xy(path, parent=self.root)
+            except RuntimeError as e:
+                if "User canceled" in str(e):
+                    continue
+                messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
+                continue
+            except Exception as e:
+                messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
+                continue
+
+            self._remember_payload(path, payload)
             added = True
 
         if added:
@@ -2426,8 +2457,8 @@ def main():
     # Menu: File -> Simple plot / Exit
     menubar = tk.Menu(root)
     filemenu = tk.Menu(menubar, tearoff=0)
-    filemenu.add_command(label="Quick import", command=app.import_files_quick)
-    filemenu.add_command(label="Custom import", command=app.import_files_custom)
+    filemenu.add_command(label="Import XY (Raman/XRD)", command=app.import_xy_files)
+    filemenu.add_command(label="Import DTA", command=app.import_dta_files)
     filemenu.add_separator()
     filemenu.add_command(label="Simple plot\tCtrl+P", command=app.simple_plot)
     filemenu.add_separator()
@@ -2435,9 +2466,10 @@ def main():
     menubar.add_cascade(label="File", menu=filemenu)
     root.config(menu=menubar)
 
-    # Raccourcis clavier (patched: Ctrl+O -> Custom import)
+    # Raccourcis clavier (patched: Ctrl+O -> XY import, Ctrl+D -> DTA import)
     root.bind("<Control-p>", lambda e: app.simple_plot())
-    root.bind("<Control-o>", lambda e: app.import_files_custom())
+    root.bind("<Control-o>", lambda e: app.import_xy_files())
+    root.bind("<Control-d>", lambda e: app.import_dta_files())
     root.bind("<Control-q>", lambda e: app.exit_app())
 
     # Quit propre si on ferme la croix
