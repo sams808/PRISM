@@ -640,21 +640,23 @@ class SimplePlotWindow(tk.Toplevel):
                 y = self._compute_derivative(y_base, base)
                 label = f"d({y_col})/d({base_col})"
                 state["time_col"] = base_col
+                traces.append((x, y * scale, label))
+                if include_dta_base and state.get("trace_mode", "deriv_only") == "with_base":
+                    traces.append((x, y_base, f"{y_col} vs {x_col} (orig)"))
             elif deriv_mode == "temp":
                 base_col = temp_col or x_col
                 base = pd.to_numeric(df[base_col], errors="coerce").to_numpy(dtype=float)
                 y = self._compute_derivative(y_base, base)
                 label = f"d({y_col})/d({base_col})"
                 state["temp_col"] = base_col
+                traces.append((x, y * scale, label))
+                if include_dta_base and state.get("trace_mode", "deriv_only") == "with_base":
+                    traces.append((x, y_base, f"{y_col} vs {x_col} (orig)"))
             else:
-                y = y_base
+                traces.append((x, y_base, label))
             state["x"] = x_col
             state["y"] = y_col
             state["scale"] = scale
-            y = y * scale
-            traces.append((x, y, label))
-            if deriv_mode != "none" and include_dta_base and state.get("trace_mode", "deriv_only") == "with_base":
-                traces.append((x, y_base * scale, f"{y_col} vs {x_col} (orig)"))
             return traces
 
         if kind == "XY":
