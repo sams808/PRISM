@@ -134,8 +134,10 @@ def _deduplicate_xy(x: np.ndarray, y: np.ndarray, how: str, dec: int) -> tuple[n
 def _read_text_autodetect(path: Path) -> str:
     """
     Auto-detect UTF-16 BOM / UTF-8-ish encodings used by TA/Netzsch exports.
+    Mirrors the standalone EXAMPLES/plot_dta.py helper for consistency.
     """
     b = path.read_bytes()
+
     if b.startswith(b"\xff\xfe") or b.startswith(b"\xfe\xff"):
         return b.decode("utf-16", errors="replace")
 
@@ -145,6 +147,7 @@ def _read_text_autodetect(path: Path) -> str:
             return b.decode("utf-16", errors="replace")
         except Exception:
             pass
+
     try:
         return b.decode("utf-8-sig", errors="replace")
     except Exception:
@@ -153,8 +156,10 @@ def _read_text_autodetect(path: Path) -> str:
 
 def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFrame]:
     """
-    Parse TA Instruments SDT/Q600-style text export with 'StartOfData' marker.
-    Returns (header_dict, colnames, dataframe).
+    Parse TA Instruments SDT/Q600-style text export:
+    - Header ends at a line containing 'StartOfData' (case-insensitive)
+    - Column names are pulled from 'SigN\tName' lines when available
+    Returns: (header_dict, column_names, dataframe)
     """
     text = _read_text_autodetect(path)
     lines = text.splitlines()
@@ -165,6 +170,7 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
         if "startofdata" in norm:
             start_idx = i
             break
+
     if start_idx is None:
         for i, line in enumerate(lines):
             s = line.strip()
@@ -173,6 +179,7 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
             if s[0].isdigit() or s[0] in "+-.":
                 start_idx = i - 1
                 break
+
     if start_idx is None:
         raise ValueError("Could not find data start (no StartOfData marker and no numeric data rows).")
 
@@ -212,6 +219,7 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
             continue
         if s[0].isdigit() or s[0] in "+-.":
             numeric_rows.append(s)
+
     if not numeric_rows:
         raise ValueError("No numeric data rows found after header.")
 
@@ -221,11 +229,47 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
         engine="python",
         names=colnames,
     )
+
     for c in df.columns:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.dropna(how="all").reset_index(drop=True)
 
     return header, colnames, df
+
+
+def _build_dta_canonical(df: pd.DataFrame) -> dict[str, str]:
+    """Infer canonical keys (T_C, time_min, HF_mW, etc.) from DTA-style columns."""
+    canon: dict[str, str] = {}
+    for col in df.columns:
+        low = str(col).lower()
+        if "temp" in low:
+            canon.setdefault("T_C", col)
+        if "time" in low:
+            canon.setdefault("time_min", col)
+        if "heat flow" in low or "heatflow" in low or "dsc" in low:
+            canon.setdefault("DSC_mW_mg", col)
+            canon.setdefault("HF_mW", col)
+        if ("tg" in low or "mass" in low or "weight" in low) and "%" in low:
+            canon.setdefault("TG_pct", col)
+        if "dtg" in low or "%/min" in low:
+            canon.setdefault("DTG_pct_min", col)
+        if ("mass" in low or "weight" in low) and "%" not in low:
+            canon.setdefault("mass_mg", col)
+    return canon
+
+
+def _pick_dta_xy(df: pd.DataFrame, canon: dict[str, str]) -> tuple[str, str]:
+    if df.shape[1] < 2:
+        raise ValueError("DTA table must contain at least two columns.")
+    if "T_C" in canon and ("DSC_mW_mg" in canon or "HF_mW" in canon):
+        return canon.get("T_C"), canon.get("DSC_mW_mg") or canon.get("HF_mW")
+    if "time_min" in canon and ("DSC_mW_mg" in canon or "HF_mW" in canon):
+        return canon.get("time_min"), canon.get("DSC_mW_mg") or canon.get("HF_mW")
+    if "T_C" in canon and "TG_pct" in canon:
+        return canon.get("T_C"), canon.get("TG_pct")
+    if "T_C" in canon and "mass_mg" in canon:
+        return canon.get("T_C"), canon.get("mass_mg")
+    return df.columns[0], df.columns[1]
 
 # ==============================
 # Parser registry
@@ -251,9 +295,7 @@ def _head_text(path: str, n_lines: int = 160) -> str:
 # Sniffers
 # ==============================
 def sniff_ta_sdt(path: str, head: str) -> bool:
-    if "StartOfData" in head and re.search(r"^Sig\d+\s+", head, re.M) and re.search(r"^Nsig\s+\d+", head, re.M):
-        return True
-    if "StartOfData" in head and "Exotherm" in head and re.search(r"^Sig\d+\s+", head, re.M):
+    if re.search(r"startofdata", head, re.I) and re.search(r"^Sig\d+\s+", head, re.M | re.I):
         return True
     return False
 
@@ -313,75 +355,16 @@ def sniff_dta_table(path: str, head: str) -> bool:
 # Parsers
 # ==============================
 def parse_ta_sdt(path: str) -> tuple[pd.DataFrame, dict]:
-    text, used_enc = _read_text_with_fallbacks(path)
-    lines = text.splitlines()
-
-    header_lines, data_lines, in_data = [], [], False
-    for ln in lines:
-        if not in_data:
-            header_lines.append(ln)
-            if ln.strip().lower().startswith("startofdata"):
-                in_data = True
-            continue
-        s = ln.strip()
-        if s:
-            data_lines.append(s)
-
-    header = "\n".join(header_lines)
-
-    # SigN → column names
-    sig_map: dict[int,str] = {}
-    for m in re.finditer(r"^Sig(\d+)\s+(.+)$", header, re.M):
-        sig_map[int(m.group(1))] = m.group(2).strip()
-
-    cleaned_rows = []
-    for raw in data_lines:
-        parts = _MULTI_SEP.split(raw.strip())
-        norm, ok = [], True
-        for p in parts:
-            p2 = _normalize_num_token(p)
-            if p2 is None:
-                ok = False; break
-            norm.append(p2)
-        if ok and len(norm) >= 2:
-            cleaned_rows.append(" ".join(norm))
-    if not cleaned_rows:
-        raise ValueError("TA SDT: no numeric rows after StartOfData.")
-
-    df = pd.read_csv(io.StringIO("\n".join(cleaned_rows)), sep=r"\s+", engine="python", header=None)
-    # assign names
-    ncol = df.shape[1]
-    colnames = [sig_map.get(i, f"Sig{i}") for i in range(1, ncol+1)]
-    df.columns = colnames
-
-    # canonical map
-    canonical = {}
-    for col in df.columns:
-        key = col.lower()
-        if "time" in key and "(min" in key:
-            canonical["t_min"] = col
-        elif "temperature" in key and "difference" in key and "µv" in key:
-            canonical["dT_uV"] = col
-        elif "temperature" in key and "difference" in key:
-            canonical["dT_C"] = col
-        elif key.startswith("temperature"):
-            canonical["T_C"] = col
-        elif "weight" in key or "mass" in key:
-            canonical["m_mg"] = col
-        elif "heat flow" in key or "heatflow" in key:
-            canonical["HF_mW"] = col
-        elif "purge" in key and ("flow" in key or "ml/min" in key):
-            canonical["flow_mL_min"] = col
-
-    x_col = canonical.get("T_C") or canonical.get("t_min") or df.columns[0]
-    y_col = canonical.get("HF_mW") or canonical.get("dT_C") or canonical.get("dT_uV") or canonical.get("m_mg") or df.columns[1]
-    canonical["X"] = x_col
-    canonical["Y"] = y_col
+    header, signals, df = parse_ta_sdt_txt(Path(path))
+    canonical = _build_dta_canonical(df)
+    x_col, y_col = _pick_dta_xy(df, canonical)
+    canonical.setdefault("X", x_col)
+    canonical.setdefault("Y", y_col)
 
     meta = {
         "parser": "ta_sdt",
-        "used_encoding": used_enc,
-        "signals": list(df.columns),
+        "used_encoding": "auto",
+        "signals": signals,
         "canonical_map": canonical,
         "raw_header": header,
         "path": os.path.abspath(path),
@@ -645,39 +628,11 @@ def parse_xrd(path: str) -> tuple[pd.DataFrame, dict]:
     return df.reset_index(drop=True), meta
 
 def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
-    header, _colnames, df = parse_ta_sdt_txt(Path(path))
-    df = df.reset_index(drop=True)
-
-    canonical: dict[str, str] = {}
-    for col in df.columns:
-        low = col.lower()
-        if "temp" in low:
-            canonical.setdefault("T_C", col)
-        if "time" in low:
-            canonical.setdefault("time_min", col)
-        if "heat flow" in low or "heatflow" in low or "dsc" in low:
-            canonical.setdefault("DSC_mW_mg", col)
-            canonical.setdefault("HF_mW", col)
-        if ("tg" in low or "mass" in low or "weight" in low) and "%" in low:
-            canonical.setdefault("TG_pct", col)
-        if "dtg" in low or "%/min" in low:
-            canonical.setdefault("DTG_pct_min", col)
-
-    x_col, y_col = None, None
-    if "T_C" in canonical and ("DSC_mW_mg" in canonical):
-        x_col = canonical["T_C"]
-        y_col = canonical["DSC_mW_mg"]
-    elif "time_min" in canonical and ("DSC_mW_mg" in canonical):
-        x_col = canonical["time_min"]
-        y_col = canonical["DSC_mW_mg"]
-    elif "T_C" in canonical and "TG_pct" in canonical:
-        x_col = canonical["T_C"]
-        y_col = canonical["TG_pct"]
-    else:
-        x_col, y_col = _canonicalize_xy(df, list(canonical.values()) if canonical else [])
-
-    canonical["X"] = x_col
-    canonical["Y"] = y_col
+    header, signals, df = parse_ta_sdt_txt(Path(path))
+    canonical = _build_dta_canonical(df)
+    x_col, y_col = _pick_dta_xy(df, canonical)
+    canonical.setdefault("X", x_col)
+    canonical.setdefault("Y", y_col)
 
     meta = {
         "parser": "dta_table",
@@ -685,6 +640,7 @@ def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
         "canonical_map": canonical,
         "path": os.path.abspath(path),
         "raw_header": header,
+        "signals": signals,
     }
     return df, meta
 
