@@ -67,6 +67,12 @@ class SimplePlotWindow(tk.Toplevel):
         super().__init__(master)
         self.title("Simple plot")
         self.geometry("1350x750")
+        friendly_bg = "#f7f5ff"
+        try:
+            self.configure(bg=friendly_bg)
+            ttk.Style(self).configure("TFrame", background=friendly_bg)
+        except Exception:
+            pass
 
         # ------------------- injected data access -------------------
         self._load_any = load_any_func
@@ -274,7 +280,7 @@ class SimplePlotWindow(tk.Toplevel):
                                       values=["Matplotlib cycle", "Distinct", "Hash by name", "Monochrome"])
         self.cb_colors.pack(side="left", padx=(3, 4))
         self.cb_colors.bind("<<ComboboxSelected>>", lambda e: self.plot_selected_spectrum())
-        self.base_color = "#1f77b4"
+        self.base_color = "#3b82f6"
 
         right_modes = ttk.Frame(frame_modes)
         right_modes.grid(row=0, column=1, sticky="e")
@@ -631,29 +637,29 @@ class SimplePlotWindow(tk.Toplevel):
 
             x = pd.to_numeric(df[x_col], errors="coerce").to_numpy(dtype=float)
             y_base = pd.to_numeric(df[y_col], errors="coerce").to_numpy(dtype=float)
-            label = f"{y_col} vs {x_col}"
+            base_label = fallback_label
 
             traces: List[Tuple[np.ndarray, np.ndarray, str]] = []
             if deriv_mode == "time":
                 base_col = time_col or x_col
                 base = pd.to_numeric(df[base_col], errors="coerce").to_numpy(dtype=float)
                 y = self._compute_derivative(y_base, base)
-                label = f"d({y_col})/d({base_col})"
+                label = f"{fallback_label} · d({y_col})/d({base_col})"
                 state["time_col"] = base_col
                 traces.append((x, y * scale, label))
                 if include_dta_base and state.get("trace_mode", "deriv_only") == "with_base":
-                    traces.append((x, y_base, f"{y_col} vs {x_col} (orig)"))
+                    traces.append((x, y_base, f"{base_label} (orig {y_col})"))
             elif deriv_mode == "temp":
                 base_col = temp_col or x_col
                 base = pd.to_numeric(df[base_col], errors="coerce").to_numpy(dtype=float)
                 y = self._compute_derivative(y_base, base)
-                label = f"d({y_col})/d({base_col})"
+                label = f"{fallback_label} · d({y_col})/d({base_col})"
                 state["temp_col"] = base_col
                 traces.append((x, y * scale, label))
                 if include_dta_base and state.get("trace_mode", "deriv_only") == "with_base":
-                    traces.append((x, y_base, f"{y_col} vs {x_col} (orig)"))
+                    traces.append((x, y_base, f"{base_label} (orig {y_col})"))
             else:
-                traces.append((x, y_base, label))
+                traces.append((x, y_base, base_label))
             state["x"] = x_col
             state["y"] = y_col
             state["scale"] = scale

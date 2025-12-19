@@ -626,6 +626,10 @@ class RamanApp:
         self.root = root
         self.root.title("Raman processing v1")
         self.root.geometry("650x380")
+        try:
+            self.root.configure(bg="#f7f5ff")
+        except Exception:
+            pass
         self.file_paths = []
         self.file_titles = []
         self.file_statuses = []
@@ -656,12 +660,19 @@ class RamanApp:
 
     def _setup_layout(self):
         style = ttk.Style(self.root)
+        FRIENDLY_BG = "#f4f5ff"
+        # Soften default widgets a little
+        style.configure("TFrame", background=FRIENDLY_BG)
+        style.configure("TLabelframe", background=FRIENDLY_BG)
+        style.configure("TLabelframe.Label", background=FRIENDLY_BG, foreground="#1f2a44")
+        style.configure("TLabel", background=FRIENDLY_BG, foreground="#1f2a44")
+        style.configure("TButton", padding=6)
 
         # Frame centrale fond doux
-        CENTER_BG = "#f4f2fa"
+        CENTER_BG = "#eef1ff"
         style.configure('Center.TFrame', background=CENTER_BG)
         # Text widget, police, et fond
-        TEXT_BG = "#f4f2fa"
+        TEXT_BG = "#eef1ff"
         TEXT_FG = "#222"
 
         """Initialises all UI frames and buttons."""
