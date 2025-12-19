@@ -696,7 +696,7 @@ class RamanApp:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Raman Studio — Light Futuristic Workspace")
+        self.root.title("Universal Spectrum Processing Tool")
         self.root.geometry("1200x780")
         self.root.minsize(1080, 720)
         self.palette = _apply_futuristic_style(self.root)
@@ -745,8 +745,8 @@ class RamanApp:
         hero = ttk.Frame(container, style="Hero.TFrame", padding=(14, 12))
         hero.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         hero.columnconfigure(1, weight=1)
-        ttk.Label(hero, text="Raman Studio", style="Hero.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(hero, text="Curate, process, and fit spectra with a crisp, light interface.", style="HeroMuted.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Label(hero, text="Universal Spectrum Processing Tool", style="Hero.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(hero, text="Curate, process, and fit spectra, by Sami SOUDANI.", style="HeroMuted.TLabel").grid(row=1, column=0, sticky="w")
         self.lbl_hero_badge = ttk.Label(hero, text="0 imports", style="HeroBadge.TLabel")
         self.lbl_hero_badge.grid(row=0, column=2, rowspan=2, sticky="e")
 
