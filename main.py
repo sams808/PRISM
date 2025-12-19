@@ -47,6 +47,68 @@ warnings.filterwarnings("ignore", message=".*The figure layout has changed to ti
 MODEL_DIR = "param_models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
+# ---------------------------------------------------------------------------
+# Shared futuristic / color-rich style configuration for all Tk windows
+# ---------------------------------------------------------------------------
+
+def _apply_futuristic_style(widget):
+    """
+    Configure a consistent, modern ttk style with sober backgrounds and colorful accents.
+    Returns the palette used so that callers can color custom tk widgets.
+    """
+    palette = {
+        "bg": "#0c1427",
+        "card": "#111d33",
+        "card_alt": "#12243f",
+        "text": "#e8edf7",
+        "muted": "#9db2ce",
+        "accent": "#64e7ff",
+        "accent_alt": "#7cf29c",
+        "accent_warn": "#f4c361",
+        "accent_pink": "#d08bff",
+    }
+
+    style = ttk.Style(widget)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+
+    style.configure(".", background=palette["bg"], foreground=palette["text"], fieldbackground=palette["card"])
+    style.configure("Card.TFrame", background=palette["card"])
+    style.configure("CardAlt.TFrame", background=palette["card_alt"])
+    style.configure("Card.TLabelframe", background=palette["card"], relief="flat", borderwidth=1)
+    style.configure("Card.TLabelframe.Label", background=palette["card"], foreground=palette["text"])
+    style.configure("Section.TLabel", background=palette["bg"], foreground=palette["text"], font=("Segoe UI", 12, "bold"))
+    style.configure("Muted.TLabel", background=palette["bg"], foreground=palette["muted"])
+    style.configure("Card.TLabel", background=palette["card"], foreground=palette["text"])
+
+    def _button_style(name, base, fg="#0c1427"):
+        style.configure(name, background=base, foreground=fg, padding=(10, 8), borderwidth=0, focusthickness=0)
+        style.map(
+            name,
+            background=[("pressed", base), ("active", base)],
+            foreground=[("disabled", "#7a8699")]
+        )
+
+    _button_style("Primary.TButton", palette["accent"])
+    _button_style("Success.TButton", palette["accent_alt"])
+    _button_style("Warn.TButton", palette["accent_warn"])
+    _button_style("Pink.TButton", palette["accent_pink"])
+    _button_style("Ghost.TButton", palette["card"], fg=palette["text"])
+
+    style.configure("Accent.TCheckbutton", background=palette["card"], foreground=palette["text"])
+    style.map("Accent.TCheckbutton", foreground=[("disabled", palette["muted"])])
+    style.configure("TNotebook", background=palette["bg"], borderwidth=0)
+    style.configure("TNotebook.Tab", background=palette["card"], foreground=palette["text"])
+    style.map("TNotebook.Tab", background=[("selected", palette["card_alt"])])
+    try:
+        widget.configure(bg=palette["bg"])
+    except Exception:
+        pass
+
+    return palette
+
 # ---------------------------------------------------------------------
 # Heuristics for default X/Y by parser (used before we show a popup)
 # We only keep column names; we do NOT persist instrument parameters.
@@ -626,10 +688,7 @@ class RamanApp:
         self.root = root
         self.root.title("Raman processing v1")
         self.root.geometry("650x380")
-        try:
-            self.root.configure(bg="#f7f5ff")
-        except Exception:
-            pass
+        self.palette = _apply_futuristic_style(self.root)
         self.file_paths = []
         self.file_titles = []
         self.file_statuses = []
@@ -659,21 +718,8 @@ class RamanApp:
         self.file_statuses.append("imported")
 
     def _setup_layout(self):
-        style = ttk.Style(self.root)
-        FRIENDLY_BG = "#f4f5ff"
-        # Soften default widgets a little
-        style.configure("TFrame", background=FRIENDLY_BG)
-        style.configure("TLabelframe", background=FRIENDLY_BG)
-        style.configure("TLabelframe.Label", background=FRIENDLY_BG, foreground="#1f2a44")
-        style.configure("TLabel", background=FRIENDLY_BG, foreground="#1f2a44")
-        style.configure("TButton", padding=6)
-
-        # Frame centrale fond doux
-        CENTER_BG = "#eef1ff"
-        style.configure('Center.TFrame', background=CENTER_BG)
-        # Text widget, police, et fond
-        TEXT_BG = "#eef1ff"
-        TEXT_FG = "#222"
+        TEXT_BG = self.palette["card"]
+        TEXT_FG = self.palette["text"]
 
         """Initialises all UI frames and buttons."""
         self.root.columnconfigure(0, weight=1)
@@ -681,25 +727,36 @@ class RamanApp:
         self.root.columnconfigure(2, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        # Left frame: general parameter and file ops
-        frame_left = ttk.Frame(self.root, padding=12)
-        frame_left.grid(row=0, column=0, sticky="ns")
+        # Left frame: imports and management
+        frame_left = ttk.Frame(self.root, padding=12, style="Card.TFrame")
+        frame_left.grid(row=0, column=0, sticky="nswe")
         frame_left.grid_propagate(False)
-        ttk.Label(frame_left, text="Parameters", font=("Arial", 12, "bold")).pack(pady=(0,12))
-        ttk.Button(frame_left, text="Import XY (Raman/XRD)", width=18, command=self.import_xy_files).pack(pady=4)
-        ttk.Button(frame_left, text="Import DTA", width=18, command=self.import_dta_files).pack(pady=3)
-        ttk.Button(frame_left, text="Rename", width=18, command=self.rename).pack(pady=3)
-        ttk.Button(frame_left, text="Reorder", width=18, command=self.reorder).pack(pady=3)
-        ttk.Button(frame_left, text="Clear imports", width=18, command=self.clear_imports).pack(pady=3)
-        ttk.Button(frame_left, text="Baseline param.", width=18, command=self.baseline_param).pack(pady=3)
-        ttk.Button(frame_left, text="Fit param.", width=18, command=self.fit_param).pack(pady=3)
-        ttk.Button(frame_left, text="Exit", width=18, command=self.exit_app).pack(side="bottom", pady=(15,3))
+        ttk.Label(frame_left, text="Data hub", style="Section.TLabel").pack(pady=(0,10), anchor="w")
+
+        imports = ttk.LabelFrame(frame_left, text="Imports", padding=8, style="Card.TLabelframe", labelanchor="n")
+        imports.pack(fill="x", pady=(0, 10))
+        ttk.Button(imports, text="Import XY (Raman/XRD)", width=20, command=self.import_xy_files, style="Primary.TButton").pack(pady=4, fill="x")
+        ttk.Button(imports, text="Import DTA", width=20, command=self.import_dta_files, style="Success.TButton").pack(pady=4, fill="x")
+
+        manage = ttk.LabelFrame(frame_left, text="Organize", padding=8, style="Card.TLabelframe", labelanchor="n")
+        manage.pack(fill="x", pady=(0, 10))
+        ttk.Button(manage, text="Rename", width=20, command=self.rename, style="Ghost.TButton").pack(pady=3, fill="x")
+        ttk.Button(manage, text="Reorder", width=20, command=self.reorder, style="Ghost.TButton").pack(pady=3, fill="x")
+        ttk.Button(manage, text="Clear imports", width=20, command=self.clear_imports, style="Warn.TButton").pack(pady=3, fill="x")
+
+        model = ttk.LabelFrame(frame_left, text="Models", padding=8, style="Card.TLabelframe", labelanchor="n")
+        model.pack(fill="x", pady=(0, 10))
+        ttk.Button(model, text="Baseline param.", width=20, command=self.baseline_param, style="Ghost.TButton").pack(pady=3, fill="x")
+        ttk.Button(model, text="Fit param.", width=20, command=self.fit_param, style="Pink.TButton").pack(pady=3, fill="x")
+
+        ttk.Button(frame_left, text="Exit", width=20, command=self.exit_app, style="Warn.TButton").pack(side="bottom", pady=(12,3), fill="x")
 
         # Center frame: imported files display
-        frame_center = ttk.Frame(self.root, padding=12, style='Center.TFrame')
+        frame_center = ttk.Frame(self.root, padding=12, style='CardAlt.TFrame')
         frame_center.grid(row=0, column=1, sticky="nsew")
         frame_center.grid_propagate(False)
-        ttk.Label(frame_center, text="Imported files list", font=("Arial", 12, "bold"), background=CENTER_BG).pack(pady=(0,8), anchor='w')
+        ttk.Label(frame_center, text="Imported files", style="Section.TLabel").pack(pady=(0,6), anchor='w')
+        ttk.Label(frame_center, text="Live status of every dataset in memory.", style="Muted.TLabel").pack(pady=(0,8), anchor="w")
         self.text_files = tk.Text(
             frame_center, width=45, height=15,
             state="disabled",
@@ -707,18 +764,19 @@ class RamanApp:
             bd=0, highlightthickness=0, font=("Consolas", 11)
         )
         self.text_files.pack(fill="both", expand=True, padx=2, pady=(0,2))
-        self.text_files.tag_configure("filename", foreground="#666", font=("Consolas", 10, "italic"))
-        self.text_files.tag_configure("title", foreground="#333", font=("Consolas", 11, "bold"))
+        self.text_files.tag_configure("filename", foreground=self.palette["muted"], font=("Consolas", 10, "italic"))
+        self.text_files.tag_configure("title", foreground=self.palette["text"], font=("Consolas", 11, "bold"))
 
         # Right frame: spectrum processing tools
-        frame_right = ttk.Frame(self.root, padding=12)
+        frame_right = ttk.Frame(self.root, padding=12, style="Card.TFrame")
         frame_right.grid(row=0, column=2, sticky="ns")
-        ttk.Label(frame_right, text="Processing", font=("Arial", 12, "bold")).pack(pady=(0,12))
-        ttk.Button(frame_right, text="Simple plot", width=16, command=self.simple_plot).pack(pady=4)
-        ttk.Button(frame_right, text="DTA processing", width=16, command=self.open_dta_processing).pack(pady=3)
-        ttk.Button(frame_right, text="Sum spectra", width=16, command=self.sum_spectra).pack(pady=3)
-        ttk.Button(frame_right, text="1 fit", width=16, command=self.one_fit).pack(pady=3)
-        ttk.Button(frame_right, text="Multi fit", width=16, command=self.multi_fit).pack(pady=3)
+        frame_right.grid_propagate(False)
+        ttk.Label(frame_right, text="Processing", style="Section.TLabel").pack(pady=(0,10), anchor="w")
+        ttk.Button(frame_right, text="Simple plot", width=18, command=self.simple_plot, style="Primary.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="DTA processing", width=18, command=self.open_dta_processing, style="Success.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="Sum spectra", width=18, command=self.sum_spectra, style="Pink.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="1 fit", width=18, command=self.one_fit, style="Ghost.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="Multi fit", width=18, command=self.multi_fit, style="Ghost.TButton").pack(pady=4, fill="x")
 
     # ========== App controls ==========
 
@@ -812,7 +870,7 @@ class RamanApp:
             self.update_file_listbox()
 
     def update_file_listbox(self):
-        self.text_files.config(state="normal", bg="#f4f2fa", fg="#222")
+        self.text_files.config(state="normal", bg=self.palette["card"], fg=self.palette["text"])
         self.text_files.delete("1.0", tk.END)
         for title, path, status in zip(self.file_titles, self.file_paths, self.file_statuses):
             tag = "title"
@@ -822,9 +880,9 @@ class RamanApp:
                 tag = "baseline"
             self.text_files.insert(tk.END, title, tag)
             self.text_files.insert(tk.END, f"  ({os.path.basename(path)})\n", "filename")
-        self.text_files.tag_configure("sum", foreground="#219150", font=("Consolas", 11, "bold"))
-        self.text_files.tag_configure("baseline", foreground="#b61b37", font=("Consolas", 11, "bold"))
-        self.text_files.tag_configure("title", foreground="#333", font=("Consolas", 11, "bold"))
+        self.text_files.tag_configure("sum", foreground=self.palette["accent_alt"], font=("Consolas", 11, "bold"))
+        self.text_files.tag_configure("baseline", foreground=self.palette["accent_pink"], font=("Consolas", 11, "bold"))
+        self.text_files.tag_configure("title", foreground=self.palette["text"], font=("Consolas", 11, "bold"))
         self.text_files.config(state="disabled")
 
     # ========== File Renaming/Reordering ==========
@@ -1023,6 +1081,7 @@ class SpectralSumWindow(tk.Toplevel):
         super().__init__(master)
         self.title("Spectral sum")
         self.geometry("1200x750")
+        self.palette = _apply_futuristic_style(self)
         self.file_paths = file_paths
         self.file_titles = file_titles
         self.callback = callback
@@ -1045,16 +1104,16 @@ class SpectralSumWindow(tk.Toplevel):
 
     def _build_left_panel(self):
         """Build the left panel for spectrum selection, baseline and normalization options."""
-        frame_left = ttk.Frame(self)
+        frame_left = ttk.Frame(self, style="Card.TFrame", padding=10)
         frame_left.grid(row=0, column=0, sticky="ns", padx=14, pady=10)
 
-        ttk.Label(frame_left, text="Spectra").grid(row=0, column=0, sticky="w")
-        ttk.Label(frame_left, text="s/n").grid(row=0, column=1, sticky="w")
+        ttk.Label(frame_left, text="Spectra", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame_left, text="s/n", style="Card.TLabel").grid(row=0, column=1, sticky="w")
 
         # Scrollable spectrum list with checkboxes
-        self.frame_list = ttk.Frame(frame_left)
+        self.frame_list = ttk.Frame(frame_left, style="CardAlt.TFrame")
         self.frame_list.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        canvas = tk.Canvas(self.frame_list, width=185, height=180)
+        canvas = tk.Canvas(self.frame_list, width=185, height=180, bg=self.palette["card"], highlightthickness=0, bd=0)
         scrollbar = ttk.Scrollbar(self.frame_list, orient="vertical", command=canvas.yview)
         self.listbox_frame = ttk.Frame(canvas)
         self.listbox_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -1076,7 +1135,7 @@ class SpectralSumWindow(tk.Toplevel):
             chk = ttk.Checkbutton(self.listbox_frame, text=title, variable=var, command=self.update)
             chk.grid(row=i, column=0, sticky="w")
             self.list_vars.append(var)
-            sn = ttk.Label(self.listbox_frame, text="", background="#a68aff", width=7, anchor="center", relief="ridge")
+            sn = ttk.Label(self.listbox_frame, text="", background=self.palette["accent_pink"], width=7, anchor="center", relief="flat", foreground="#0c1427")
             sn.grid(row=i, column=1, sticky="e", padx=(10,2))
             self.sn_labels.append(sn)
 
@@ -1089,22 +1148,22 @@ class SpectralSumWindow(tk.Toplevel):
         ttk.Checkbutton(frame_left, text="Norm.", variable=self.var_norm, command=self.update).grid(row=5, column=0, sticky="w", pady=(5,0))
 
         # Baseline param and reset
-        btns_row = ttk.Frame(frame_left)
+        btns_row = ttk.Frame(frame_left, style="Card.TFrame")
         btns_row.grid(row=4, column=0, columnspan=2, sticky="w")
-        ttk.Button(btns_row, text="Baseline param.", command=self.set_baseline_param).pack(side="left")
-        ttk.Button(btns_row, text="Reset ROI", command=self.reset_baseline_params).pack(side="left", padx=8)
+        ttk.Button(btns_row, text="Baseline param.", command=self.set_baseline_param, style="Ghost.TButton").pack(side="left")
+        ttk.Button(btns_row, text="Reset ROI", command=self.reset_baseline_params, style="Warn.TButton").pack(side="left", padx=8)
 
     def _build_right_panel(self):
         """Build the right panel with S/N for sum, plot, and export button."""
-        frame_right = ttk.Frame(self)
+        frame_right = ttk.Frame(self, style="CardAlt.TFrame", padding=10)
         frame_right.grid(row=0, column=1, padx=8, pady=8, sticky="nsew")
-        self.sn_sum_label = ttk.Label(frame_right, text="Summed S/N: ---", background="#a68aff", width=18, anchor="center", relief="ridge")
+        self.sn_sum_label = ttk.Label(frame_right, text="Summed S/N: ---", background=self.palette["accent"], width=18, anchor="center", relief="flat", foreground="#0c1427")
         self.sn_sum_label.grid(row=0, column=0, sticky="w", padx=(0,12))
         self.fig = plt.Figure(figsize=(5.2,3.7))
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=frame_right)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", pady=3)
-        ttk.Button(frame_right, text="Export as txt", command=self.export_sum).grid(row=2, column=0, sticky="e", pady=(5,0))
+        ttk.Button(frame_right, text="Export as txt", command=self.export_sum, style="Primary.TButton").grid(row=2, column=0, sticky="e", pady=(5,0))
 
         self.last_sum_x = None
         self.last_sum_y = None
@@ -1274,7 +1333,7 @@ class SpectralSumWindow(tk.Toplevel):
             # ----------------------------------------------
 
             sn_sum = self.compute_sn(y_sum, x=x_ref)
-            self.sn_sum_label.config(text=f"Summed S/N: {'' if np.isnan(sn_sum) else f'{sn_sum:.1f}'}", background="#a68aff")
+            self.sn_sum_label.config(text=f"Summed S/N: {'' if np.isnan(sn_sum) else f'{sn_sum:.1f}'}", background=self.palette["accent"])
             self.ax.clear()
             self.ax.plot(x_ref, y_sum, color="navy")
             self.ax.set_title("Summed spectrum")
@@ -1286,7 +1345,7 @@ class SpectralSumWindow(tk.Toplevel):
             self.last_sum_x = x_ref
             self.last_sum_y = y_sum
         else:
-            self.sn_sum_label.config(text=f"Summed S/N: ---", background="#a68aff")
+            self.sn_sum_label.config(text=f"Summed S/N: ---", background=self.palette["accent"])
             self.ax.clear()
             self.ax.set_title("Summed spectrum")
             self.fig.tight_layout()
@@ -1348,6 +1407,7 @@ class BaselineParamWindow(tk.Toplevel):
         self.spec_states = {}
         self.title("Baseline parameters")
         self.resizable(False, False)
+        self.palette = _apply_futuristic_style(self)
         self.spectra_titles = spectra_titles
         self.spectra_xy_list = spectra_xy_list
         self.callback = callback
@@ -1361,9 +1421,9 @@ class BaselineParamWindow(tk.Toplevel):
         self.current_index = current_index
 
         # Top combobox to select spectrum
-        top = ttk.Frame(self)
+        top = ttk.Frame(self, padding=6, style="Card.TFrame")
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
-        ttk.Label(top, text="Select spectrum:").pack(side="left")
+        ttk.Label(top, text="Select spectrum:", style="Card.TLabel").pack(side="left")
         self.combo = ttk.Combobox(top, values=self.spectra_titles, textvariable=self.spec_var, state="readonly", width=32)
         self.combo.pack(side="left", padx=6)
         self.combo.bind("<<ComboboxSelected>>", self.on_spectrum_changed)
@@ -1446,10 +1506,10 @@ class BaselineParamWindow(tk.Toplevel):
 
     def _build_left_panel(self):
         """Build left control panel: ROI, method, actions."""
-        left = ttk.Frame(self)
+        left = ttk.Frame(self, padding=8, style="Card.TFrame")
         left.grid(row=1, column=0, padx=10, pady=8, sticky="ns")
 
-        ttk.Label(left, text="Baseline parameters", font=("Arial",13)).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(left, text="Baseline parameters", style="Section.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(left, text="Number of ROI").grid(row=1, column=0, sticky="w", pady=(8,0))
         self.var_nroi = tk.IntVar(value=self.state['roi_n'])
         sp = ttk.Spinbox(left, from_=1, to=8, textvariable=self.var_nroi, width=4, command=self.update_roi_entries)
@@ -1489,22 +1549,22 @@ class BaselineParamWindow(tk.Toplevel):
         # Action buttons (export/save only in full mode)
         btn_row = crop_row_num + 2
         if not self.simple_mode:
-            ttk.Button(left, text="Save as new spectrum", command=self.save_new_spectrum).grid(row=btn_row, column=0, columnspan=2, pady=8)
+            ttk.Button(left, text="Save as new spectrum", command=self.save_new_spectrum, style="Primary.TButton").grid(row=btn_row, column=0, columnspan=2, pady=8)
             self.var_export_header = tk.BooleanVar(value=True)
             ttk.Checkbutton(left, text="Include header (for baseline)", variable=self.var_export_header).grid(row=btn_row+1, column=0, columnspan=2, sticky="w")
-            ttk.Button(left, text="Save baseline as txt", command=self.save_baseline_as_txt).grid(row=btn_row+2, column=0, columnspan=2, pady=4)
+            ttk.Button(left, text="Save baseline as txt", command=self.save_baseline_as_txt, style="Ghost.TButton").grid(row=btn_row+2, column=0, columnspan=2, pady=4)
             btn_row += 3
 
         # Save/Cancel/Reset
-        footer = ttk.Frame(left)
+        footer = ttk.Frame(left, style="Card.TFrame")
         footer.grid(row=btn_row, column=0, columnspan=2, pady=(7,3))
-        ttk.Button(footer, text="Save", command=self.save_and_close).pack(side="left", padx=(0,10))
-        ttk.Button(footer, text="Cancel", command=self.destroy).pack(side="left")
-        ttk.Button(footer, text="Reset ROI", command=self.reset_rois).pack(side="left", padx=(12,0))
+        ttk.Button(footer, text="Save", command=self.save_and_close, style="Success.TButton").pack(side="left", padx=(0,10))
+        ttk.Button(footer, text="Cancel", command=self.destroy, style="Ghost.TButton").pack(side="left")
+        ttk.Button(footer, text="Reset ROI", command=self.reset_rois, style="Warn.TButton").pack(side="left", padx=(12,0))
 
     def _build_right_panel(self):
         """Right: plot preview panel."""
-        right = ttk.Frame(self)
+        right = ttk.Frame(self, padding=8, style="CardAlt.TFrame")
         right.grid(row=1, column=1, padx=10, pady=8)
         self.fig, self.ax = plt.subplots(figsize=(4.3,3.3), dpi=110)
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
@@ -1786,6 +1846,7 @@ class SingleFitWindow(tk.Toplevel):
         super().__init__(master)
         self.title("Single fit")
         self.geometry("1200x750")
+        self.palette = _apply_futuristic_style(self)
 
         # Data & parameter stores
         self.file_paths = file_paths
@@ -1802,10 +1863,10 @@ class SingleFitWindow(tk.Toplevel):
         self._current_y = None
 
         # ===== Left panel =====
-        frame_left = ttk.Frame(self, padding=10)
+        frame_left = ttk.Frame(self, padding=10, style="Card.TFrame")
         frame_left.grid(row=0, column=0, sticky="nsw")
 
-        ttk.Label(frame_left, text="Select from imported").pack(anchor="w")
+        ttk.Label(frame_left, text="Select from imported", style="Section.TLabel").pack(anchor="w")
         self.spec_var = tk.StringVar(value=file_titles[0])
         self.combo = ttk.Combobox(frame_left, textvariable=self.spec_var,
                                   values=file_titles, state="readonly", width=25)
@@ -1828,12 +1889,12 @@ class SingleFitWindow(tk.Toplevel):
 
         # Parameters & Fit buttons
         ttk.Button(frame_left, text="Fit param.", command=self.open_param_window).pack(anchor="w", pady=(10, 4))
-        ttk.Button(frame_left, text="Fit !", command=self.run_fit).pack(anchor="w", pady=(4, 8))
-        ttk.Button(frame_left, text="Reset params to snapshot", command=self.reset_params_to_snapshot)\
-           .pack(anchor="w", pady=(0, 8))
+        ttk.Button(frame_left, text="Fit !", command=self.run_fit, style="Primary.TButton").pack(anchor="w", pady=(4, 8), fill="x")
+        ttk.Button(frame_left, text="Reset params to snapshot", command=self.reset_params_to_snapshot, style="Ghost.TButton")\
+           .pack(anchor="w", pady=(0, 8), fill="x")
 
         # Fit mode selector
-        frm_mode = ttk.Frame(frame_left); frm_mode.pack(anchor="w", pady=(2, 2))
+        frm_mode = ttk.Frame(frame_left, style="Card.TFrame"); frm_mode.pack(anchor="w", pady=(2, 2))
         ttk.Label(frm_mode, text="Fit mode:").pack(side="left")
         self.fit_mode = tk.StringVar(value="classic")  # "classic" | "origin"
         ttk.Radiobutton(frm_mode, text="Classic (one-shot LM)", variable=self.fit_mode, value="classic",
@@ -1842,7 +1903,7 @@ class SingleFitWindow(tk.Toplevel):
                         command=self._toggle_origin_controls).pack(side="left", padx=(6, 0))
 
         # Origin-like panel (hidden by default)
-        self.frm_origin = ttk.Frame(frame_left)
+        self.frm_origin = ttk.Frame(frame_left, style="CardAlt.TFrame", padding=6)
 
         row1 = ttk.Frame(self.frm_origin); row1.pack(anchor="w", pady=(6, 2))
         ttk.Label(row1, text="Δχ² tol:").pack(side="left")
@@ -1867,7 +1928,7 @@ class SingleFitWindow(tk.Toplevel):
         self.frm_origin.pack_forget()  # hidden initially
 
         # ===== Main plot panel =====
-        frame_main = ttk.Frame(self, padding=4)
+        frame_main = ttk.Frame(self, padding=4, style="CardAlt.TFrame")
         frame_main.grid(row=0, column=1, sticky="nsew")
         frame_main.columnconfigure(0, weight=1)
         frame_main.rowconfigure(1, weight=1)
@@ -1889,15 +1950,15 @@ class SingleFitWindow(tk.Toplevel):
         self.y_title.trace_add("write", lambda *_: self.update_plot())
 
         # Chi-square + Report + Export
-        frm_chi2 = ttk.Frame(frame_main); frm_chi2.grid(row=3, column=0, pady=(6, 2), sticky="w")
+        frm_chi2 = ttk.Frame(frame_main, style="Card.TFrame"); frm_chi2.grid(row=3, column=0, pady=(6, 2), sticky="w")
         ttk.Label(frm_chi2, text="Chi²:", font=("Arial", 11, "bold")).pack(side="left")
         self.chi2_label = tk.Label(frm_chi2, text=" -- ", font=("Consolas", 11, "bold"),
-                                   bg="#662c91", fg="white", width=8, anchor="center")
+                                   bg=self.palette["accent_pink"], fg="#0c1427", width=8, anchor="center")
         self.chi2_label.pack(side="left", padx=6)
         ttk.Button(frm_chi2, text="Generate report", command=self.generate_report)\
            .pack(side="left", padx=(15, 8))
 
-        export_bar = ttk.Frame(frm_chi2)
+        export_bar = ttk.Frame(frm_chi2, style="Card.TFrame")
         export_bar.pack(side="left", padx=(10, 0))
         ttk.Label(export_bar, text="|").pack(side="left", padx=(0, 6))
         self.var_export_png = tk.BooleanVar(value=True)
@@ -1910,10 +1971,10 @@ class SingleFitWindow(tk.Toplevel):
 
         # ===== Global log panel =====
         self.rowconfigure(1, weight=0)
-        frame_log = ttk.Frame(self, padding=(10, 4))
+        frame_log = ttk.Frame(self, padding=(10, 4), style="Card.TFrame")
         frame_log.grid(row=1, column=0, columnspan=2, sticky="nsew")
         ttk.Label(frame_log, text="Log").pack(anchor="w")
-        self.txt_global_log = tk.Text(frame_log, height=7)
+        self.txt_global_log = tk.Text(frame_log, height=7, bg=self.palette["card"], fg=self.palette["text"], bd=0, highlightthickness=0)
         self.txt_global_log.pack(fill="both", expand=True)
 
         # First draw

@@ -16,6 +16,38 @@ from tkinter import ttk, messagebox, simpledialog
 from typing import Dict, List, Optional
 
 
+def _apply_modern_style(widget):
+    """Apply a futuristic yet sober style to ttk widgets and return palette."""
+    palette = {
+        "bg": "#0c1427",
+        "card": "#111d33",
+        "accent": "#64e7ff",
+        "accent_alt": "#d08bff",
+        "muted": "#9db2ce",
+    }
+    style = ttk.Style(widget)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    style.configure(".", background=palette["bg"], foreground="#e8edf7", fieldbackground=palette["card"])
+    style.configure("Card.TFrame", background=palette["card"])
+    style.configure("Section.TLabel", background=palette["bg"], foreground="#e8edf7", font=("Segoe UI", 11, "bold"))
+    style.configure("Card.TLabel", background=palette["card"], foreground="#e8edf7")
+
+    def _btn(name, color):
+        style.configure(name, background=color, foreground="#0c1427", padding=(10, 7), borderwidth=0)
+        style.map(name, background=[("active", color)])
+
+    _btn("Primary.TButton", palette["accent"])
+    _btn("Alt.TButton", palette["accent_alt"])
+    try:
+        widget.configure(bg=palette["bg"])
+    except Exception:
+        pass
+    return palette
+
+
 def _ensure_dir(path: str) -> None:
     try:
         os.makedirs(path, exist_ok=True)
@@ -93,6 +125,7 @@ class FitParamWindow(tk.Toplevel):
     ):
         super().__init__(master)
         self.title("Fit parameters")
+        self.palette = _apply_modern_style(self)
         self.spectra_names = list(spectra_names)
         self.memory = fit_param_memory
         self.current_spectrum = current_spectrum
@@ -118,9 +151,9 @@ class FitParamWindow(tk.Toplevel):
             pass
 
         # ===== Top bar: spectrum chooser + add/remove component =====
-        bar = ttk.Frame(self, padding=4)
+        bar = ttk.Frame(self, padding=6, style="Card.TFrame")
         bar.pack(fill="x")
-        ttk.Label(bar, text="Spectrum:").pack(side="left")
+        ttk.Label(bar, text="Spectrum:", style="Card.TLabel").pack(side="left")
         self.spec_var = tk.StringVar(value=self.current_spectrum)
         spec_cb = ttk.Combobox(
             bar, textvariable=self.spec_var, values=self.spectra_names,
@@ -129,24 +162,24 @@ class FitParamWindow(tk.Toplevel):
         spec_cb.pack(side="left", padx=6)
         spec_cb.bind("<<ComboboxSelected>>", self.on_spectrum_changed)
 
-        ttk.Button(bar, text="+", width=2, command=self.add_component).pack(side="right", padx=(3, 0))
-        ttk.Button(bar, text="–", width=2, command=self.remove_component).pack(side="right", padx=(3, 0))
+        ttk.Button(bar, text="+", width=2, command=self.add_component, style="Alt.TButton").pack(side="right", padx=(3, 0))
+        ttk.Button(bar, text="–", width=2, command=self.remove_component, style="Alt.TButton").pack(side="right", padx=(3, 0))
 
         # Main area
-        self.main_frame = ttk.Frame(self, padding=8)
+        self.main_frame = ttk.Frame(self, padding=8, style="Card.TFrame")
         self.main_frame.pack(fill="both", expand=True)
 
         self.n_components = self.get_initial_ncomp()
         self.redraw_table()
 
         # Accept button (write back into memory and notify parent)
-        ttk.Button(self, text="Accept", command=self.accept).pack(side="bottom", pady=8)
+        ttk.Button(self, text="Accept", command=self.accept, style="Primary.TButton").pack(side="bottom", pady=8, fill="x", padx=10)
 
         # ===== Model save/load bar =====
-        model_frame = ttk.Frame(self)
+        model_frame = ttk.Frame(self, padding=6, style="Card.TFrame")
         model_frame.pack(pady=8)
-        ttk.Button(model_frame, text="Save as model", command=self.save_model).pack(side="left", padx=4)
-        ttk.Button(model_frame, text="Load model", command=self.load_model).pack(side="left", padx=4)
+        ttk.Button(model_frame, text="Save as model", command=self.save_model, style="Alt.TButton").pack(side="left", padx=4)
+        ttk.Button(model_frame, text="Load model", command=self.load_model, style="Alt.TButton").pack(side="left", padx=4)
 
         # Close on ESC
         self.bind("<Escape>", lambda e: self.destroy())
