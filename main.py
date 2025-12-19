@@ -767,7 +767,7 @@ class RamanApp:
 
         imports = ttk.LabelFrame(frame_left, text="Imports", padding=10, style="Card.TLabelframe", labelanchor="n")
         imports.pack(fill="x", pady=(0, 10))
-        ttk.Button(imports, text="Import XY (Raman/XRD)", command=self.import_xy_files, style="Primary.TButton").pack(pady=4, fill="x")
+        ttk.Button(imports, text="Import XY", command=self.import_xy_files, style="Primary.TButton").pack(pady=4, fill="x")
         ttk.Button(imports, text="Import DTA", command=self.import_dta_files, style="Success.TButton").pack(pady=4, fill="x")
 
         manage = ttk.LabelFrame(frame_left, text="Organize", padding=10, style="Card.TLabelframe", labelanchor="n")
@@ -2603,10 +2603,10 @@ def main():
     # Menu: File -> Simple plot / Exit
     menubar = tk.Menu(root)
     filemenu = tk.Menu(menubar, tearoff=0)
-    filemenu.add_command(label="Import XY (Raman/XRD)", command=app.import_xy_files)
+    filemenu.add_command(label="Import XY", command=app.import_xy_files)
     filemenu.add_command(label="Import DTA", command=app.import_dta_files)
     filemenu.add_separator()
-    filemenu.add_command(label="Simple plot\tCtrl+P", command=app.simple_plot)
+    filemenu.add_command(label="Simple plot \tCtrl+P", command=app.simple_plot)
     filemenu.add_separator()
     filemenu.add_command(label="Exit", command=app.exit_app)
     menubar.add_cascade(label="File", menu=filemenu)
