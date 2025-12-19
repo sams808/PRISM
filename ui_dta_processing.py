@@ -768,15 +768,28 @@ class TgGuiApp:
         self._overlay_artists: List[Any] = []
         self._calc_artists: List[Any] = []
 
-        outer = ttk.Frame(root, padding=8)
+        friendly_bg = "#f7f5ff"
+        style = ttk.Style(root)
+        try:
+            root.configure(background=friendly_bg)
+            style.configure("Friendly.TFrame", background=friendly_bg)
+            style.configure("Friendly.TLabelframe", background=friendly_bg)
+            style.configure("Friendly.TLabelframe.Label", background=friendly_bg, foreground="#1f2a44")
+            style.configure("Friendly.TLabel", background=friendly_bg, foreground="#1f2a44")
+            style.configure("TLabelframe", background=friendly_bg)
+            style.configure("TLabelframe.Label", background=friendly_bg, foreground="#1f2a44")
+        except Exception:
+            pass
+
+        outer = ttk.Frame(root, padding=10, style="Friendly.TFrame")
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=0)
         outer.columnconfigure(1, weight=1)
         outer.rowconfigure(0, weight=1)
 
-        self.left = ttk.Frame(outer, width=450)
+        self.left = ttk.Frame(outer, width=450, style="Friendly.TFrame")
         self.left.grid(row=0, column=0, sticky="nsw", padx=(0, 10))
-        self.right = ttk.Frame(outer)
+        self.right = ttk.Frame(outer, style="Friendly.TFrame")
         self.right.grid(row=0, column=1, sticky="nsew")
 
         self.nb = ttk.Notebook(self.left)
@@ -1440,13 +1453,16 @@ class TgGuiApp:
             pass
 
         if is_alt:
-            # Keep the right spine on the plot edge; draw ticks/labels inside in red
+            # Keep the right spine slightly offset so ticks/labels stay outside the data
+            try:
+                offset = 1.10 if getattr(self, "ax2", None) else 1.04
+                ax2.spines["right"].set_position(("axes", offset))
+            except Exception:
+                pass
             try:
                 ax2.spines["right"].set_color("red")
                 ax2.yaxis.label.set_color("red")
-                ax2.tick_params(axis="y", colors="red")
-                # Put tick labels inside the plot (right side)
-                ax2.tick_params(axis="y", labelright=True, pad=-22, direction="in")
+                ax2.tick_params(axis="y", colors="red", labelright=True, pad=8, direction="out")
             except Exception:
                 pass
             try:
@@ -1454,8 +1470,8 @@ class TgGuiApp:
             except Exception:
                 pass
             try:
-                # place label inside the plot on the right
-                ax2.yaxis.set_label_coords(0.97, 0.5)
+                # place label just outside the plot on the right
+                ax2.yaxis.set_label_coords(1.08, 0.5)
             except Exception:
                 pass
 

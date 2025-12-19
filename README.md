@@ -2,7 +2,8 @@
 
 A desktop GUI for quickly inspecting and processing Raman/Thermal spectra.  It is built
 on Tkinter and Matplotlib and wraps a universal loader capable of handling simple
-XY text files as well as richer exports such as TA SDT ASCII and SAXS EDF files.
+XY text files as well as richer exports such as TA SDT ASCII, SAXS EDF files, and
+thermo-analysis traces used by the DTA/DSC/TGA tooling.
 
 ## Features
 - **Quick import** – batch-select files and let the app auto-detect the parser and
@@ -11,6 +12,9 @@ XY text files as well as richer exports such as TA SDT ASCII and SAXS EDF files.
   override the detected parser or choose different columns.
 - **Processing tools** – rename/reorder imports, baseline subtraction, fitting
   helpers, multi-spectrum sums and a "Simple plot" workspace with CIF overlays.
+- **Thermal analysis (DTA/DSC/TGA) tools** – pick temperature/time/Y channels, derive
+  dY/dt or dY/dT on the fly, compute Tg using multiple methods, run min/max/integration
+  "Calculs" with dual Y-axes, and batch-process many text exports.
 - **Format-aware defaults** – TA files expose canonical column names so the UI can
   offer temperature vs heat-flow, TG curves, etc.
 
@@ -37,6 +41,18 @@ On launch you can use **Quick import** to rapidly load a batch of spectra or
 **Custom import** when you need to select parser/columns manually.  Imported files
 appear in the central list and become available to the processing/plotting tools
 on the right-hand side.
+
+### Using the DTA processing tool
+1. Import one or more TA text exports (Quick or Custom import).
+2. Open **DTA processing** from the right-hand toolbox. The file name becomes the plot title.
+3. Pick **X** (time or temperature), **Y** (DSC/TGA/TGA derivative), and optional
+   **dY source** columns. Toggle **dY overlay** to see derivatives on a secondary axis.
+4. Adjust Tg method (Double, Parallel, or |dY| max). Use the shaded window to focus
+   on a region; the view lock keeps zoom/pan stable while you tweak parameters.
+5. Under **Calculs**, choose the Y column (or its derivative) to integrate, find min/max,
+   or calculate an average over a custom X-range. Alternate-Y calculations are plotted on
+   a distinct right axis so they do not hide the main trace.
+6. Use **Batch run** for multiple files; optional PNG snapshots help validate results.
 
 ## Repository layout
 - `main.py` – core Tkinter application and import workflow
