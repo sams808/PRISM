@@ -57,18 +57,18 @@ def _apply_futuristic_style(widget):
     Returns the palette used so that callers can color custom tk widgets.
     """
     palette = {
-        "bg": "#f5f7fb",
+        "bg": "#f8f4ea",          # bone white
         "card": "#ffffff",
-        "card_alt": "#eef2fb",
-        "hero": "#e7f2ff",
-        "text": "#0f1b3f",
-        "muted": "#5d6b85",
-        "ink": "#0b1a34",
-        "accent": "#4aa8ff",
-        "accent_alt": "#71d6a5",
-        "accent_warn": "#f4b321",
-        "accent_pink": "#e5b1ff",
-        "stroke": "#d8e2f3",
+        "card_alt": "#f2ede3",
+        "hero": "#f5efe6",
+        "text": "#243240",
+        "muted": "#657080",
+        "ink": "#1c2733",
+        "accent": "#a9cff5",      # light blue for most buttons
+        "accent_alt": "#c6e8cb",  # pastel green (import DTA)
+        "accent_warn": "#f4c7c7", # soft red for Exit
+        "accent_pink": "#a9cff5", # harmonised with primary
+        "stroke": "#d7d1c8",
     }
 
     style = ttk.Style(widget)
@@ -77,12 +77,19 @@ def _apply_futuristic_style(widget):
     except Exception:
         pass
 
-    style.configure(".", background=palette["bg"], foreground=palette["text"], fieldbackground=palette["card"], bordercolor=palette["stroke"])
+    style.configure(
+        ".",
+        background=palette["bg"],
+        foreground=palette["text"],
+        fieldbackground=palette["card"],
+        bordercolor=palette["stroke"]
+    )
     style.configure("Card.TFrame", background=palette["card"], borderwidth=1, relief="flat")
     style.configure("CardAlt.TFrame", background=palette["card_alt"], borderwidth=1, relief="flat")
     style.configure("Card.TLabelframe", background=palette["card"], relief="flat", borderwidth=1, bordercolor=palette["stroke"])
     style.configure("Card.TLabelframe.Label", background=palette["card"], foreground=palette["text"], padding=(6, 2))
-    style.configure("Section.TLabel", background=palette["card"], foreground=palette["ink"], font=("Segoe UI", 12, "bold"))
+    style.configure("Section.TLabel", background=palette["bg"], foreground=palette["ink"], font=("Segoe UI", 13, "bold"))
+    style.configure("SectionNote.TLabel", background=palette["bg"], foreground=palette["muted"], font=("Segoe UI", 10, "italic"))
     style.configure("Muted.TLabel", background=palette["card"], foreground=palette["muted"], font=("Segoe UI", 10))
     style.configure("Card.TLabel", background=palette["card"], foreground=palette["text"], font=("Segoe UI", 10))
     style.configure("Hero.TFrame", background=palette["hero"], relief="flat")
@@ -90,28 +97,66 @@ def _apply_futuristic_style(widget):
     style.configure("HeroMuted.TLabel", background=palette["hero"], foreground=palette["muted"], font=("Segoe UI", 10))
     style.configure("HeroBadge.TLabel", background=palette["card"], foreground=palette["ink"], padding=(12, 6), font=("Segoe UI", 10, "bold"), borderwidth=1, relief="solid", bordercolor=palette["stroke"])
     style.configure("Panel.TFrame", background=palette["bg"])
+    style.configure("TSeparator", background=palette["stroke"])
+    style.configure(
+        "TCombobox",
+        fieldbackground=palette["card"],
+        background=palette["card"],
+        foreground=palette["ink"],
+        arrowcolor=palette["ink"],
+        borderwidth=1,
+    )
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", palette["card"])],
+        foreground=[("!disabled", palette["ink"])],
+    )
 
     def _button_style(name, base, fg=None):
         fg = fg or palette["ink"]
-        style.configure(name, background=base, foreground=fg, padding=(12, 9), borderwidth=0, focusthickness=0)
+        style.configure(
+            name,
+            background=base,
+            foreground=fg,
+            padding=(12, 9),
+            borderwidth=1,
+            relief="solid",
+            focusthickness=1
+        )
         style.map(
             name,
             background=[("pressed", base), ("active", base)],
-            foreground=[("disabled", palette["muted"])]
+            foreground=[("disabled", palette["muted"])],
+            bordercolor=[("focus", palette["stroke"])]
         )
 
     _button_style("Primary.TButton", palette["accent"])
-    _button_style("Success.TButton", palette["accent_alt"])
-    _button_style("Warn.TButton", palette["accent_warn"])
-    _button_style("Pink.TButton", palette["accent_pink"])
-    _button_style("Ghost.TButton", palette["card"], fg=palette["ink"])
+    _button_style("Success.TButton", palette["accent"])  # harmonise most buttons to light blue
+    _button_style("Warn.TButton", palette["accent"])
+    _button_style("Pink.TButton", palette["accent"])
+    _button_style("Ghost.TButton", palette["accent"])
+    _button_style("ImportXY.TButton", "#b7d8ff")
+    _button_style("ImportDTA.TButton", palette["accent_alt"])
+    _button_style("Exit.TButton", palette["accent_warn"])
+    style.configure(
+        "TButton",
+        background=palette["accent"],
+        foreground=palette["ink"],
+        padding=(10, 8),
+        borderwidth=1,
+        relief="solid"
+    )
+    style.map(
+        "TButton",
+        background=[("active", palette["accent"]), ("pressed", palette["accent"])],
+        bordercolor=[("focus", palette["stroke"])]
+    )
 
     style.configure("Accent.TCheckbutton", background=palette["card"], foreground=palette["ink"], focuscolor=palette["stroke"])
     style.map("Accent.TCheckbutton", foreground=[("disabled", palette["muted"])])
     style.configure("TNotebook", background=palette["bg"], borderwidth=0)
     style.configure("TNotebook.Tab", background=palette["card"], foreground=palette["ink"], padding=(10, 6))
     style.map("TNotebook.Tab", background=[("selected", palette["card_alt"])])
-    style.configure("TSeparator", background=palette["stroke"])
     try:
         widget.configure(bg=palette["bg"])
     except Exception:
@@ -762,13 +807,13 @@ class RamanApp:
         frame_left.grid(row=0, column=0, sticky="nswe", padx=(0, 12))
         frame_left.grid_propagate(False)
         ttk.Label(frame_left, text="Data hub", style="Section.TLabel").pack(pady=(0,8), anchor="w")
-        ttk.Label(frame_left, text="Bring data in, organise, and prep parameters.", style="Muted.TLabel").pack(pady=(0,8), anchor="w")
+        ttk.Label(frame_left, text="Bring data in, organise, and prep parameters.", style="SectionNote.TLabel").pack(pady=(0,8), anchor="w")
         ttk.Separator(frame_left, orient="horizontal").pack(fill="x", pady=(4,10))
 
         imports = ttk.LabelFrame(frame_left, text="Imports", padding=10, style="Card.TLabelframe", labelanchor="n")
         imports.pack(fill="x", pady=(0, 10))
-        ttk.Button(imports, text="Import XY", command=self.import_xy_files, style="Primary.TButton").pack(pady=4, fill="x")
-        ttk.Button(imports, text="Import DTA", command=self.import_dta_files, style="Success.TButton").pack(pady=4, fill="x")
+        ttk.Button(imports, text="Import XY", command=self.import_xy_files, style="ImportXY.TButton").pack(pady=4, fill="x")
+        ttk.Button(imports, text="Import DTA", command=self.import_dta_files, style="ImportDTA.TButton").pack(pady=4, fill="x")
 
         manage = ttk.LabelFrame(frame_left, text="Organize", padding=10, style="Card.TLabelframe", labelanchor="n")
         manage.pack(fill="x", pady=(0, 10))
@@ -782,14 +827,14 @@ class RamanApp:
         ttk.Button(model, text="Fit param.", command=self.fit_param, style="Pink.TButton").pack(pady=3, fill="x")
 
         ttk.Separator(frame_left, orient="horizontal").pack(fill="x", pady=(6,8))
-        ttk.Button(frame_left, text="Exit", command=self.exit_app, style="Warn.TButton").pack(side="bottom", pady=(6,0), fill="x")
+        ttk.Button(frame_left, text="Exit", command=self.exit_app, style="Exit.TButton").pack(side="bottom", pady=(6,0), fill="x")
 
         # Center frame: imported files display
         frame_center = ttk.Frame(body, padding=12, style='CardAlt.TFrame')
         frame_center.grid(row=0, column=1, sticky="nsew")
         frame_center.grid_propagate(False)
         ttk.Label(frame_center, text="Imported files", style="Section.TLabel").pack(pady=(0,4), anchor='w')
-        ttk.Label(frame_center, text="Live status for every dataset currently loaded.", style="Muted.TLabel").pack(pady=(0,8), anchor="w")
+        ttk.Label(frame_center, text="Live status for every dataset currently loaded.", style="SectionNote.TLabel").pack(pady=(0,8), anchor="w")
         self.text_files = tk.Text(
             frame_center, width=56, height=20,
             state="disabled",
@@ -805,12 +850,12 @@ class RamanApp:
         frame_right.grid(row=0, column=2, sticky="ns")
         frame_right.grid_propagate(False)
         ttk.Label(frame_right, text="Processing", style="Section.TLabel").pack(pady=(0,8), anchor="w")
-        ttk.Label(frame_right, text="Launch dedicated tooling per task.", style="Muted.TLabel").pack(pady=(0,8), anchor="w")
+        ttk.Label(frame_right, text="Launch dedicated tooling per task.", style="SectionNote.TLabel").pack(pady=(0,8), anchor="w")
         ttk.Button(frame_right, text="Simple plot", command=self.simple_plot, style="Primary.TButton").pack(pady=4, fill="x")
-        ttk.Button(frame_right, text="DTA processing", command=self.open_dta_processing, style="Success.TButton").pack(pady=4, fill="x")
-        ttk.Button(frame_right, text="Sum spectra", command=self.sum_spectra, style="Pink.TButton").pack(pady=4, fill="x")
-        ttk.Button(frame_right, text="1 fit", command=self.one_fit, style="Ghost.TButton").pack(pady=4, fill="x")
-        ttk.Button(frame_right, text="Multi fit", command=self.multi_fit, style="Ghost.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="DTA processing", command=self.open_dta_processing, style="Primary.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="Sum spectra", command=self.sum_spectra, style="Primary.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="1 fit", command=self.one_fit, style="Primary.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="Multi fit", command=self.multi_fit, style="Primary.TButton").pack(pady=4, fill="x")
 
     # ========== App controls ==========
 

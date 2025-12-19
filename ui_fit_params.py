@@ -19,28 +19,54 @@ from typing import Dict, List, Optional
 def _apply_modern_style(widget):
     """Apply a futuristic yet sober style to ttk widgets and return palette."""
     palette = {
-        "bg": "#0c1427",
-        "card": "#111d33",
-        "accent": "#64e7ff",
-        "accent_alt": "#d08bff",
-        "muted": "#9db2ce",
+        "bg": "#f8f4ea",          # bone white
+        "card": "#ffffff",
+        "accent": "#a9cff5",      # light blue for buttons
+        "accent_alt": "#a9cff5",
+        "muted": "#657080",
     }
     style = ttk.Style(widget)
     try:
         style.theme_use("clam")
     except Exception:
         pass
-    style.configure(".", background=palette["bg"], foreground="#e8edf7", fieldbackground=palette["card"])
-    style.configure("Card.TFrame", background=palette["card"])
-    style.configure("Section.TLabel", background=palette["bg"], foreground="#e8edf7", font=("Segoe UI", 11, "bold"))
-    style.configure("Card.TLabel", background=palette["card"], foreground="#e8edf7")
+    style.configure(".", background=palette["bg"], foreground="#1c2733", fieldbackground=palette["card"])
+    style.configure("Card.TFrame", background=palette["card"], borderwidth=1, relief="flat")
+    style.configure("Section.TLabel", background=palette["bg"], foreground="#1c2733", font=("Segoe UI", 13, "bold"))
+    style.configure("Card.TLabel", background=palette["card"], foreground="#1c2733")
+    style.configure(
+        "TCombobox",
+        fieldbackground=palette["card"],
+        background=palette["card"],
+        foreground="#1c2733",
+        arrowcolor="#1c2733",
+        borderwidth=1,
+    )
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", palette["card"])],
+        foreground=[("!disabled", "#1c2733")],
+    )
 
     def _btn(name, color):
-        style.configure(name, background=color, foreground="#0c1427", padding=(10, 7), borderwidth=0)
-        style.map(name, background=[("active", color)])
+        style.configure(name, background=color, foreground="#1c2733", padding=(10, 7), borderwidth=1, relief="solid")
+        style.map(name, background=[("active", color)], bordercolor=[("focus", "#d7d1c8")])
 
     _btn("Primary.TButton", palette["accent"])
     _btn("Alt.TButton", palette["accent_alt"])
+    style.configure(
+        "TButton",
+        background=palette["accent"],
+        foreground="#1c2733",
+        padding=(10, 7),
+        borderwidth=1,
+        relief="solid",
+    )
+    style.map(
+        "TButton",
+        background=[("active", palette["accent"]), ("pressed", palette["accent"])],
+        bordercolor=[("focus", "#d7d1c8")],
+    )
     try:
         widget.configure(bg=palette["bg"])
     except Exception:

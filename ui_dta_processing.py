@@ -48,36 +48,65 @@ import matplotlib.pyplot as plt
 
 def _apply_modern_style(widget):
     palette = {
-        "bg": "#0c1427",
-        "card": "#111d33",
-        "card_alt": "#12243f",
-        "accent": "#64e7ff",
-        "accent_alt": "#d08bff",
-        "accent_warn": "#f4c361",
-        "muted": "#9db2ce",
-        "success": "#7cf29c",
+        "bg": "#f8f4ea",          # bone white
+        "card": "#ffffff",
+        "card_alt": "#f2ede3",
+        "accent": "#a9cff5",      # light blue for buttons
+        "accent_alt": "#a9cff5",
+        "accent_warn": "#a9cff5",
+        "muted": "#657080",
+        "success": "#a9cff5",
     }
     style = None
     try:
         from tkinter import ttk as _ttk
         style = _ttk.Style(widget)
         style.theme_use("clam")
-        style.configure(".", background=palette["bg"], foreground="#e8edf7", fieldbackground=palette["card"])
-        style.configure("Card.TFrame", background=palette["card"])
-        style.configure("CardAlt.TFrame", background=palette["card_alt"])
+        style.configure(".", background=palette["bg"], foreground="#1c2733", fieldbackground=palette["card"])
+        style.configure("Card.TFrame", background=palette["card"], borderwidth=1, relief="flat")
+        style.configure("CardAlt.TFrame", background=palette["card_alt"], borderwidth=1, relief="flat")
         style.configure("Card.TLabelframe", background=palette["card"], relief="flat", borderwidth=1)
-        style.configure("Card.TLabelframe.Label", background=palette["card"], foreground="#e8edf7")
-        style.configure("Section.TLabel", background=palette["bg"], foreground="#e8edf7", font=("Segoe UI", 11, "bold"))
+        style.configure("Card.TLabelframe.Label", background=palette["card"], foreground="#1c2733")
+        style.configure("Section.TLabel", background=palette["bg"], foreground="#1c2733", font=("Segoe UI", 13, "bold"))
         style.configure("Muted.TLabel", background=palette["bg"], foreground=palette["muted"])
+        style.configure(
+            "TCombobox",
+            fieldbackground=palette["card"],
+            background=palette["card"],
+            foreground="#1c2733",
+            arrowcolor="#1c2733",
+            borderwidth=1,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", palette["card"])],
+            foreground=[("!disabled", "#1c2733")],
+        )
 
         def _btn(name, color):
-            style.configure(name, background=color, foreground="#0c1427", padding=(10, 7), borderwidth=0)
-            style.map(name, background=[("active", color)])
+            style.configure(name, background=color, foreground="#1c2733", padding=(10, 7), borderwidth=1, relief="solid")
+            style.map(name, background=[("active", color)], bordercolor=[("focus", "#d7d1c8")])
 
         _btn("Primary.TButton", palette["accent"])
-        _btn("Alt.TButton", palette["accent_alt"])
-        _btn("Warn.TButton", palette["accent_warn"])
+        _btn("Alt.TButton", palette["accent"])
+        _btn("Warn.TButton", palette["accent"])
         _btn("Success.TButton", palette["success"])
+        style.configure(
+            "TButton",
+            background=palette["accent"],
+            foreground="#1c2733",
+            padding=(10, 7),
+            borderwidth=1,
+            relief="solid",
+        )
+        style.map(
+            "TButton",
+            background=[("active", palette["accent"]), ("pressed", palette["accent"])],
+            bordercolor=[("focus", "#d7d1c8")],
+        )
+        style.configure("TNotebook", background=palette["bg"], borderwidth=0)
+        style.configure("TNotebook.Tab", background=palette["card"], foreground="#1c2733", padding=(10, 6))
+        style.map("TNotebook.Tab", background=[("selected", palette["card_alt"])])
     except Exception:
         pass
 
@@ -695,7 +724,7 @@ def compute_tg_derivative(
 # 5) GUI (Tkinter + Matplotlib)
 # =============================================================================
 
-def _make_scrollable_frame_class(tk, ttk):
+def _make_scrollable_frame_class(tk, ttk, *, background="#f8f4ea"):
     """
     ttk.Frame that provides a vertical scrollbar via a Canvas.
     Intended for dense left-panel controls.
@@ -704,7 +733,7 @@ def _make_scrollable_frame_class(tk, ttk):
         def __init__(self, master, **kwargs):
             super().__init__(master, **kwargs)
 
-            self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
+            self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, background=background)
             self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
             self.canvas.configure(yscrollcommand=self.vsb.set)
 
@@ -767,7 +796,7 @@ class TgGuiApp:
 
         self.palette = _apply_modern_style(root)
 
-        ScrollableFrame = _make_scrollable_frame_class(tk, ttk)
+        ScrollableFrame = _make_scrollable_frame_class(tk, ttk, background=self.palette["bg"])
 
         # Imported records (from main app)
         self.records: List[Dict[str, Any]] = records or []
@@ -1181,7 +1210,7 @@ class TgGuiApp:
         plot_frame = ttk.Frame(self.right, style="CardAlt.TFrame")
         plot_frame.pack(side="top", fill="both", expand=True)
 
-        self.fig = Figure(figsize=(8.6, 6.2), dpi=100)
+        self.fig = Figure(figsize=(7.8, 5.6), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.ax2 = None
 
