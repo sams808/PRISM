@@ -48,14 +48,14 @@ import matplotlib.pyplot as plt
 
 def _apply_modern_style(widget):
     palette = {
-        "bg": "#f8f4ea",          # bone white
-        "card": "#ffffff",
-        "card_alt": "#f2ede3",
-        "accent": "#a9cff5",      # light blue for buttons
-        "accent_alt": "#a9cff5",
-        "accent_warn": "#a9cff5",
+        "bg": "#f4f4f4",
+        "card": "#f4f4f4",
+        "card_alt": "#f4f4f4",
+        "accent": "#e0e0e0",      # light grey for buttons
+        "accent_alt": "#e0e0e0",
+        "accent_warn": "#e0e0e0",
         "muted": "#657080",
-        "success": "#a9cff5",
+        "success": "#e0e0e0",
     }
     style = None
     try:
@@ -66,8 +66,8 @@ def _apply_modern_style(widget):
         style.configure("Card.TFrame", background=palette["card"], borderwidth=1, relief="flat")
         style.configure("CardAlt.TFrame", background=palette["card_alt"], borderwidth=1, relief="flat")
         style.configure("Card.TLabelframe", background=palette["card"], relief="flat", borderwidth=1)
-        style.configure("Card.TLabelframe.Label", background=palette["card"], foreground="#1c2733")
-        style.configure("Section.TLabel", background=palette["bg"], foreground="#1c2733", font=("Segoe UI", 13, "bold"))
+        style.configure("Card.TLabelframe.Label", background=palette["card"], foreground="#1c2733", font=("Segoe UI", 11, "underline"))
+        style.configure("Section.TLabel", background=palette["bg"], foreground="#1c2733", font=("Segoe UI", 13, "bold", "underline"))
         style.configure("Muted.TLabel", background=palette["bg"], foreground=palette["muted"])
         style.configure(
             "TCombobox",

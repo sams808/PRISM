@@ -19,10 +19,10 @@ from typing import Dict, List, Optional
 def _apply_modern_style(widget):
     """Apply a futuristic yet sober style to ttk widgets and return palette."""
     palette = {
-        "bg": "#f8f4ea",          # bone white
-        "card": "#ffffff",
-        "accent": "#a9cff5",      # light blue for buttons
-        "accent_alt": "#a9cff5",
+        "bg": "#f4f4f4",
+        "card": "#f4f4f4",
+        "accent": "#e0e0e0",      # light grey for buttons
+        "accent_alt": "#e0e0e0",
         "muted": "#657080",
     }
     style = ttk.Style(widget)
@@ -32,7 +32,7 @@ def _apply_modern_style(widget):
         pass
     style.configure(".", background=palette["bg"], foreground="#1c2733", fieldbackground=palette["card"])
     style.configure("Card.TFrame", background=palette["card"], borderwidth=1, relief="flat")
-    style.configure("Section.TLabel", background=palette["bg"], foreground="#1c2733", font=("Segoe UI", 13, "bold"))
+    style.configure("Section.TLabel", background=palette["bg"], foreground="#1c2733", font=("Segoe UI", 13, "bold", "underline"))
     style.configure("Card.TLabel", background=palette["card"], foreground="#1c2733")
     style.configure(
         "TCombobox",

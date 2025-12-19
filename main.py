@@ -57,18 +57,18 @@ def _apply_futuristic_style(widget):
     Returns the palette used so that callers can color custom tk widgets.
     """
     palette = {
-        "bg": "#f8f4ea",          # bone white
-        "card": "#ffffff",
-        "card_alt": "#f2ede3",
-        "hero": "#f5efe6",
+        "bg": "#f4f4f4",
+        "card": "#f4f4f4",
+        "card_alt": "#f4f4f4",
+        "hero": "#f4f4f4",
         "text": "#243240",
         "muted": "#657080",
         "ink": "#1c2733",
-        "accent": "#a9cff5",      # light blue for most buttons
+        "accent": "#e0e0e0",      # very light grey for most buttons
         "accent_alt": "#c6e8cb",  # pastel green (import DTA)
         "accent_warn": "#f4c7c7", # soft red for Exit
-        "accent_pink": "#a9cff5", # harmonised with primary
-        "stroke": "#d7d1c8",
+        "accent_pink": "#e0e0e0", # harmonised with primary in grey
+        "stroke": "#cfcfcf",
     }
 
     style = ttk.Style(widget)
@@ -87,8 +87,14 @@ def _apply_futuristic_style(widget):
     style.configure("Card.TFrame", background=palette["card"], borderwidth=1, relief="flat")
     style.configure("CardAlt.TFrame", background=palette["card_alt"], borderwidth=1, relief="flat")
     style.configure("Card.TLabelframe", background=palette["card"], relief="flat", borderwidth=1, bordercolor=palette["stroke"])
-    style.configure("Card.TLabelframe.Label", background=palette["card"], foreground=palette["text"], padding=(6, 2))
-    style.configure("Section.TLabel", background=palette["bg"], foreground=palette["ink"], font=("Segoe UI", 13, "bold"))
+    style.configure(
+        "Card.TLabelframe.Label",
+        background=palette["card"],
+        foreground=palette["text"],
+        padding=(6, 2),
+        font=("Segoe UI", 11, "underline"),
+    )
+    style.configure("Section.TLabel", background=palette["bg"], foreground=palette["ink"], font=("Segoe UI", 13, "bold", "underline"))
     style.configure("SectionNote.TLabel", background=palette["bg"], foreground=palette["muted"], font=("Segoe UI", 10, "italic"))
     style.configure("Muted.TLabel", background=palette["card"], foreground=palette["muted"], font=("Segoe UI", 10))
     style.configure("Card.TLabel", background=palette["card"], foreground=palette["text"], font=("Segoe UI", 10))
@@ -131,7 +137,7 @@ def _apply_futuristic_style(widget):
         )
 
     _button_style("Primary.TButton", palette["accent"])
-    _button_style("Success.TButton", palette["accent"])  # harmonise most buttons to light blue
+    _button_style("Success.TButton", palette["accent"])  # harmonise most buttons to very light grey
     _button_style("Warn.TButton", palette["accent"])
     _button_style("Pink.TButton", palette["accent"])
     _button_style("Ghost.TButton", palette["accent"])
@@ -957,11 +963,29 @@ class RamanApp:
                 tag = "sum"
             elif status == "baseline":
                 tag = "baseline"
+
+            indicator_tag = None
+            indicator_label = None
+            rec = getattr(self, "xy_by_path", {}).get(path)
+            if rec:
+                kind = rec.get("kind")
+                if kind in {"DTA", "TA_SDT"}:
+                    indicator_tag = "type_dta"
+                    indicator_label = "DTA "
+                else:
+                    indicator_tag = "type_xy"
+                    indicator_label = "XY  "
+
+            if indicator_label:
+                self.text_files.insert(tk.END, indicator_label, indicator_tag)
+
             self.text_files.insert(tk.END, title, tag)
             self.text_files.insert(tk.END, f"  ({os.path.basename(path)})\n", "filename")
         self.text_files.tag_configure("sum", foreground=self.palette["accent_alt"], font=("Consolas", 11, "bold"))
         self.text_files.tag_configure("baseline", foreground=self.palette["accent_pink"], font=("Consolas", 11, "bold"))
         self.text_files.tag_configure("title", foreground=self.palette["text"], font=("Consolas", 11, "bold"))
+        self.text_files.tag_configure("type_dta", foreground="#2e9e6f", font=("Consolas", 9, "bold"))
+        self.text_files.tag_configure("type_xy", foreground="#3b82f6", font=("Consolas", 9, "bold"))
         self.text_files.config(state="disabled")
         if hasattr(self, "lbl_hero_badge"):
             count = len(self.file_paths)
