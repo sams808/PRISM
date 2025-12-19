@@ -37,6 +37,7 @@ import colorsys
 from io_universal import load_any as _io_load_any
 from ui_fit_params import FitParamWindow
 from ui_simple_plot import SimplePlotWindow
+from ui_dta_processing import DtaProcessingWindow
 # cif_tools.py est importé par ui_simple_plot.py
 
 # Ignore matplotlib layout warnings (Tkinter UI redraw)
@@ -631,6 +632,7 @@ class RamanApp:
         self.fit_param_memory = {}
         # NEW: cache des mappings X/Y choisis (payloads LoadedXY)
         self.xy_by_path: Dict[str, LoadedXY] = {}
+        self.dta_windows: List[tk.Toplevel] = []
         # Layout
         self._setup_layout()
         self.update_file_listbox()
@@ -702,6 +704,7 @@ class RamanApp:
         frame_right.grid(row=0, column=2, sticky="ns")
         ttk.Label(frame_right, text="Processing", font=("Arial", 12, "bold")).pack(pady=(0,12))
         ttk.Button(frame_right, text="Simple plot", width=16, command=self.simple_plot).pack(pady=4)
+        ttk.Button(frame_right, text="DTA processing", width=16, command=self.open_dta_processing).pack(pady=3)
         ttk.Button(frame_right, text="Sum spectra", width=16, command=self.sum_spectra).pack(pady=3)
         ttk.Button(frame_right, text="1 fit", width=16, command=self.one_fit).pack(pady=3)
         ttk.Button(frame_right, text="Multi fit", width=16, command=self.multi_fit).pack(pady=3)
@@ -949,6 +952,39 @@ class RamanApp:
             load_any_func=simpleplot_unified_loader,
             pick_ta_xy_func=pick_default_xy_for_ta_sdt
         )
+
+    def open_dta_processing(self):
+        """Open the dedicated DTA processing window for imported DTA/TA datasets."""
+        records = []
+        for path, title in zip(self.file_paths, self.file_titles):
+            rec = getattr(self, "xy_by_path", {}).get(path)
+            if not rec:
+                continue
+            if rec.get("kind") not in {"DTA", "TA_SDT"}:
+                continue
+            records.append({
+                "title": title,
+                "path": path,
+                "df": rec.get("df"),
+                "meta": rec.get("meta"),
+            })
+
+        if not records:
+            messagebox.showinfo("Info", "No DTA/TA files imported.")
+            return
+
+        win = tk.Toplevel(self.root)
+        self.dta_windows.append(win)
+
+        def _cleanup():
+            try:
+                self.dta_windows.remove(win)
+            except ValueError:
+                pass
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _cleanup)
+        DtaProcessingWindow(win, records)
 
     def on_new_file_exported(self, path, status="sum"):
         """
