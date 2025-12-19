@@ -25,6 +25,42 @@ from cif_tools import (
     list_cif_files_case_insensitive,
 )
 
+def _apply_modern_style(widget):
+    palette = {
+        "bg": "#0c1427",
+        "card": "#111d33",
+        "card_alt": "#12243f",
+        "accent": "#64e7ff",
+        "accent_alt": "#d08bff",
+        "muted": "#9db2ce",
+        "success": "#7cf29c",
+    }
+    style = ttk.Style(widget)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    style.configure(".", background=palette["bg"], foreground="#e8edf7", fieldbackground=palette["card"])
+    style.configure("Card.TFrame", background=palette["card"])
+    style.configure("CardAlt.TFrame", background=palette["card_alt"])
+    style.configure("Card.TLabelframe", background=palette["card"], relief="flat", borderwidth=1)
+    style.configure("Card.TLabelframe.Label", background=palette["card"], foreground="#e8edf7")
+    style.configure("Section.TLabel", background=palette["bg"], foreground="#e8edf7", font=("Segoe UI", 11, "bold"))
+    style.configure("Muted.TLabel", background=palette["bg"], foreground=palette["muted"])
+
+    def _btn(name, color):
+        style.configure(name, background=color, foreground="#0c1427", padding=(10, 7), borderwidth=0)
+        style.map(name, background=[("active", color)])
+
+    _btn("Primary.TButton", palette["accent"])
+    _btn("Alt.TButton", palette["accent_alt"])
+    _btn("Success.TButton", palette["success"])
+    try:
+        widget.configure(bg=palette["bg"])
+    except Exception:
+        pass
+    return palette
+
 _APP_CFG_PATH = Path.home() / ".raman_app.json"
 
 
@@ -67,12 +103,7 @@ class SimplePlotWindow(tk.Toplevel):
         super().__init__(master)
         self.title("Simple plot")
         self.geometry("1350x750")
-        friendly_bg = "#f7f5ff"
-        try:
-            self.configure(bg=friendly_bg)
-            ttk.Style(self).configure("TFrame", background=friendly_bg)
-        except Exception:
-            pass
+        self.palette = _apply_modern_style(self)
 
         # ------------------- injected data access -------------------
         self._load_any = load_any_func
@@ -125,18 +156,20 @@ class SimplePlotWindow(tk.Toplevel):
         self._warned_sg = False
 
         # ------------------- layout -------------------
-        main = ttk.Frame(self)
+        main = ttk.Frame(self, style="CardAlt.TFrame")
         main.pack(fill="both", expand=True, padx=8, pady=8)
         main.columnconfigure(0, weight=0)
         main.columnconfigure(1, weight=1)
         main.rowconfigure(0, weight=1)
 
         # left panel: list + options
-        frame_left = ttk.Frame(main)
+        frame_left = ttk.Frame(main, style="Card.TFrame", padding=8)
         frame_left.grid(row=0, column=0, sticky="ns", padx=(0, 15))
-        ttk.Label(frame_left, text="Select from imported").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(frame_left, text="Select from imported", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
 
-        self.listbox = tk.Listbox(frame_left, height=10, selectmode="extended", exportselection=0)
+        self.listbox = tk.Listbox(frame_left, height=10, selectmode="extended", exportselection=0,
+                                  bg=self.palette["card"], fg="#e8edf7", bd=0, highlightthickness=0,
+                                  selectbackground=self.palette["accent"], selectforeground="#0c1427")
         for title in self.file_titles:
             self.listbox.insert(tk.END, title)
         self.listbox.grid(row=1, column=0, sticky="nsew")
@@ -187,7 +220,7 @@ class SimplePlotWindow(tk.Toplevel):
         self.var_dta_time = tk.StringVar()
         self.var_dta_temp = tk.StringVar()
 
-        dta_frame = ttk.LabelFrame(frame_left, text="DTA / STA")
+        dta_frame = ttk.LabelFrame(frame_left, text="DTA / STA", style="Card.TLabelframe")
         self.dta_frame = dta_frame
         dta_frame.grid(row=9, column=0, sticky="ew", pady=(10, 0))
         ttk.Label(dta_frame, text="X").grid(row=0, column=0, sticky="e", padx=(6, 4), pady=2)

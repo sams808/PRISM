@@ -46,6 +46,47 @@ import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 
+def _apply_modern_style(widget):
+    palette = {
+        "bg": "#0c1427",
+        "card": "#111d33",
+        "card_alt": "#12243f",
+        "accent": "#64e7ff",
+        "accent_alt": "#d08bff",
+        "accent_warn": "#f4c361",
+        "muted": "#9db2ce",
+        "success": "#7cf29c",
+    }
+    style = None
+    try:
+        from tkinter import ttk as _ttk
+        style = _ttk.Style(widget)
+        style.theme_use("clam")
+        style.configure(".", background=palette["bg"], foreground="#e8edf7", fieldbackground=palette["card"])
+        style.configure("Card.TFrame", background=palette["card"])
+        style.configure("CardAlt.TFrame", background=palette["card_alt"])
+        style.configure("Card.TLabelframe", background=palette["card"], relief="flat", borderwidth=1)
+        style.configure("Card.TLabelframe.Label", background=palette["card"], foreground="#e8edf7")
+        style.configure("Section.TLabel", background=palette["bg"], foreground="#e8edf7", font=("Segoe UI", 11, "bold"))
+        style.configure("Muted.TLabel", background=palette["bg"], foreground=palette["muted"])
+
+        def _btn(name, color):
+            style.configure(name, background=color, foreground="#0c1427", padding=(10, 7), borderwidth=0)
+            style.map(name, background=[("active", color)])
+
+        _btn("Primary.TButton", palette["accent"])
+        _btn("Alt.TButton", palette["accent_alt"])
+        _btn("Warn.TButton", palette["accent_warn"])
+        _btn("Success.TButton", palette["success"])
+    except Exception:
+        pass
+
+    try:
+        widget.configure(bg=palette["bg"])
+    except Exception:
+        pass
+    return palette
+
 
 # =============================================================================
 # 1) File I/O (robust TA-style export parsing)
@@ -724,11 +765,7 @@ class TgGuiApp:
         except Exception:
             pass
 
-        style = ttk.Style(root)
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
+        self.palette = _apply_modern_style(root)
 
         ScrollableFrame = _make_scrollable_frame_class(tk, ttk)
 
@@ -768,28 +805,15 @@ class TgGuiApp:
         self._overlay_artists: List[Any] = []
         self._calc_artists: List[Any] = []
 
-        friendly_bg = "#f7f5ff"
-        style = ttk.Style(root)
-        try:
-            root.configure(background=friendly_bg)
-            style.configure("Friendly.TFrame", background=friendly_bg)
-            style.configure("Friendly.TLabelframe", background=friendly_bg)
-            style.configure("Friendly.TLabelframe.Label", background=friendly_bg, foreground="#1f2a44")
-            style.configure("Friendly.TLabel", background=friendly_bg, foreground="#1f2a44")
-            style.configure("TLabelframe", background=friendly_bg)
-            style.configure("TLabelframe.Label", background=friendly_bg, foreground="#1f2a44")
-        except Exception:
-            pass
-
-        outer = ttk.Frame(root, padding=10, style="Friendly.TFrame")
+        outer = ttk.Frame(root, padding=10, style="CardAlt.TFrame")
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=0)
         outer.columnconfigure(1, weight=1)
         outer.rowconfigure(0, weight=1)
 
-        self.left = ttk.Frame(outer, width=450, style="Friendly.TFrame")
+        self.left = ttk.Frame(outer, width=450, style="Card.TFrame", padding=6)
         self.left.grid(row=0, column=0, sticky="nsw", padx=(0, 10))
-        self.right = ttk.Frame(outer, style="Friendly.TFrame")
+        self.right = ttk.Frame(outer, style="CardAlt.TFrame")
         self.right.grid(row=0, column=1, sticky="nsew")
 
         self.nb = ttk.Notebook(self.left)
@@ -842,17 +866,17 @@ class TgGuiApp:
         parent = self.tab_tg_body
 
         # --- Data ---
-        data_box = ttk.LabelFrame(parent, text="Data", padding=8)
+        data_box = ttk.LabelFrame(parent, text="Data", padding=8, style="Card.TLabelframe")
         data_box.pack(fill="x", pady=(0, 6))
 
-        self.file_label = ttk.Label(data_box, text="No file loaded", wraplength=430)
+        self.file_label = ttk.Label(data_box, text="No file loaded", wraplength=430, style="Card.TLabel")
         self.file_label.pack(fill="x", pady=(0, 4))
 
         # Imported record selector (if provided by host app)
         self.record_var = tk.StringVar(value="")
-        record_row = ttk.Frame(data_box)
+        record_row = ttk.Frame(data_box, style="Card.TFrame")
         record_row.pack(fill="x", pady=(0, 4))
-        ttk.Label(record_row, text="Imported").pack(side="left")
+        ttk.Label(record_row, text="Imported", style="Card.TLabel").pack(side="left")
         self.record_combo = ttk.Combobox(
             record_row,
             textvariable=self.record_var,
@@ -862,15 +886,15 @@ class TgGuiApp:
         )
         self.record_combo.pack(side="left", padx=(6, 6), fill="x", expand=True)
         self.record_combo.bind("<<ComboboxSelected>>", lambda _e=None: self._load_selected_record())
-        ttk.Button(record_row, text="Load", command=self._load_selected_record).pack(side="left")
+        ttk.Button(record_row, text="Load", command=self._load_selected_record, style="Primary.TButton").pack(side="left")
 
-        btns = ttk.Frame(data_box)
+        btns = ttk.Frame(data_box, style="Card.TFrame")
         btns.pack(fill="x")
-        ttk.Button(btns, text="Open…", command=self._on_open).pack(side="left")
-        ttk.Button(btns, text="Reload", command=self._on_reload).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Open…", command=self._on_open, style="Alt.TButton").pack(side="left")
+        ttk.Button(btns, text="Reload", command=self._on_reload, style="Ghost.TButton").pack(side="left", padx=(6, 0))
 
         # --- Plot selections ---
-        plot_box = ttk.LabelFrame(parent, text="Plot", padding=8)
+        plot_box = ttk.LabelFrame(parent, text="Plot", padding=8, style="Card.TLabelframe")
         plot_box.pack(fill="x", pady=(0, 6))
         plot_box.columnconfigure(1, weight=1)
 
@@ -929,7 +953,7 @@ class TgGuiApp:
         ttk.Radiobutton(sm, text="On", value="on", variable=self.smooth_var, command=self._refresh_plot).pack(side="left", padx=(6, 0))
 
         # --- Tg setup ---
-        tg_box = ttk.LabelFrame(parent, text="Tg", padding=8)
+        tg_box = ttk.LabelFrame(parent, text="Tg", padding=8, style="Card.TLabelframe")
         tg_box.pack(fill="x", pady=(0, 6))
         tg_box.columnconfigure(1, weight=1)
 
@@ -952,7 +976,7 @@ class TgGuiApp:
         ttk.Entry(wrow, textvariable=self.xmax_var, width=9).pack(side="left", padx=(4, 0))
 
         # Manual baselines (shared)
-        ranges = ttk.LabelFrame(tg_box, text="Manual ranges (shared)", padding=8)
+        ranges = ttk.LabelFrame(tg_box, text="Manual ranges (shared)", padding=8, style="Card.TLabelframe")
         ranges.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         ranges.columnconfigure(1, weight=1)
 
@@ -1022,7 +1046,7 @@ class TgGuiApp:
         )
 
         # SLOPE range (used by Double Tangent method only)
-        slope_fr = ttk.Frame(ranges)
+        slope_fr = ttk.Frame(ranges, style="Card.TFrame")
         slope_fr.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ttk.Label(slope_fr, text="SLOPE:").pack(side="left")
         self.slope_min_entry = ttk.Entry(slope_fr, textvariable=self.slope_min_var, width=9)
@@ -1037,7 +1061,7 @@ class TgGuiApp:
         _toggle_high_point()
 
         # Action buttons
-        brow = ttk.Frame(tg_box)
+        brow = ttk.Frame(tg_box, style="Card.TFrame")
         brow.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         # Auto/Manual compute toggle
         self.manual_compute_var = tk.BooleanVar(value=False)
@@ -1047,15 +1071,15 @@ class TgGuiApp:
             return
 
         ttk.Checkbutton(brow, text="Manual", variable=self.manual_compute_var, command=_on_manual_toggle).pack(side="left", padx=(0, 8))
-        self.compute_btn = ttk.Button(brow, text="Compute", command=self._compute)
+        self.compute_btn = ttk.Button(brow, text="Compute", command=self._compute, style="Primary.TButton")
         self.compute_btn.pack(side="left", fill="x", expand=True)
-        ttk.Button(brow, text="Clear", command=self._clear_results).pack(side="left", padx=(6, 0), fill="x", expand=True)
-        ttk.Button(brow, text="Redraw", command=self._refresh_plot).pack(side="left", padx=(6, 0), fill="x", expand=True)
+        ttk.Button(brow, text="Clear", command=self._clear_results, style="Warn.TButton").pack(side="left", padx=(6, 0), fill="x", expand=True)
+        ttk.Button(brow, text="Redraw", command=self._refresh_plot, style="Ghost.TButton").pack(side="left", padx=(6, 0), fill="x", expand=True)
 
-        self.result_label = ttk.Label(tg_box, text="Tg: —", font=("Segoe UI", 10, "bold"), wraplength=430, justify="left")
+        self.result_label = ttk.Label(tg_box, text="Tg: —", font=("Segoe UI", 10, "bold"), wraplength=430, justify="left", style="Card.TLabel")
         self.result_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
-        self.status = ttk.Label(parent, text="", wraplength=430, justify="left")
+        self.status = ttk.Label(parent, text="", wraplength=430, justify="left", style="Muted.TLabel")
         self.status.pack(fill="x", pady=(0, 0))
 
         self._set_status(
@@ -1070,7 +1094,7 @@ class TgGuiApp:
 
         parent = self.tab_calc_body
 
-        box = ttk.LabelFrame(parent, text="Calculs", padding=8)
+        box = ttk.LabelFrame(parent, text="Calculs", padding=8, style="Card.TLabelframe")
         box.pack(fill="x", pady=(0, 6))
         box.columnconfigure(1, weight=1)
 
@@ -1101,12 +1125,12 @@ class TgGuiApp:
         ttk.Label(row, text="Xmax").pack(side="left")
         ttk.Entry(row, textvariable=self.calc_xmax_var, width=10).pack(side="left", padx=(6, 0))
 
-        btnrow = ttk.Frame(box)
+        btnrow = ttk.Frame(box, style="Card.TFrame")
         btnrow.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        ttk.Button(btnrow, text="Integrate", command=self._calc_integrate).pack(side="left", fill="x", expand=True)
-        ttk.Button(btnrow, text="Find Max", command=self._calc_find_max).pack(side="left", padx=(6, 0), fill="x", expand=True)
-        ttk.Button(btnrow, text="Find Min", command=self._calc_find_min).pack(side="left", padx=(6, 0), fill="x", expand=True)
-        ttk.Button(btnrow, text="Clear", command=self._calc_clear).pack(side="left", padx=(6, 0), fill="x", expand=True)
+        ttk.Button(btnrow, text="Integrate", command=self._calc_integrate, style="Success.TButton").pack(side="left", fill="x", expand=True)
+        ttk.Button(btnrow, text="Find Max", command=self._calc_find_max, style="Primary.TButton").pack(side="left", padx=(6, 0), fill="x", expand=True)
+        ttk.Button(btnrow, text="Find Min", command=self._calc_find_min, style="Primary.TButton").pack(side="left", padx=(6, 0), fill="x", expand=True)
+        ttk.Button(btnrow, text="Clear", command=self._calc_clear, style="Warn.TButton").pack(side="left", padx=(6, 0), fill="x", expand=True)
 
         res = ttk.Label(box, textvariable=self.calc_result_var, wraplength=430, justify="left")
         res.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
@@ -1120,13 +1144,13 @@ class TgGuiApp:
 
         parent = self.tab_batch_body
 
-        export_box = ttk.LabelFrame(parent, text="Export current", padding=8)
+        export_box = ttk.LabelFrame(parent, text="Export current", padding=8, style="Card.TLabelframe")
         export_box.pack(fill="x", pady=(0, 6))
 
-        ttk.Button(export_box, text="Export result CSV…", command=self._export_current_csv).pack(fill="x", pady=(0, 4))
-        ttk.Button(export_box, text="Save figure PNG…", command=self._save_figure_png).pack(fill="x")
+        ttk.Button(export_box, text="Export result CSV…", command=self._export_current_csv, style="Primary.TButton").pack(fill="x", pady=(0, 4))
+        ttk.Button(export_box, text="Save figure PNG…", command=self._save_figure_png, style="Alt.TButton").pack(fill="x")
 
-        batch_box = ttk.LabelFrame(parent, text="Batch", padding=8)
+        batch_box = ttk.LabelFrame(parent, text="Batch", padding=8, style="Card.TLabelframe")
         batch_box.pack(fill="x")
 
         ttk.Label(
@@ -1151,10 +1175,10 @@ class TgGuiApp:
         from matplotlib.figure import Figure
         from tkinter import ttk
 
-        toolbar_frame = ttk.Frame(self.right)
+        toolbar_frame = ttk.Frame(self.right, style="Card.TFrame")
         toolbar_frame.pack(side="top", fill="x")
 
-        plot_frame = ttk.Frame(self.right)
+        plot_frame = ttk.Frame(self.right, style="CardAlt.TFrame")
         plot_frame.pack(side="top", fill="both", expand=True)
 
         self.fig = Figure(figsize=(8.6, 6.2), dpi=100)
