@@ -27,34 +27,60 @@ from cif_tools import (
 
 def _apply_modern_style(widget):
     palette = {
-        "bg": "#0c1427",
-        "card": "#111d33",
-        "card_alt": "#12243f",
-        "accent": "#64e7ff",
-        "accent_alt": "#d08bff",
-        "muted": "#9db2ce",
-        "success": "#7cf29c",
+        "bg": "#f8f4ea",          # bone white
+        "card": "#ffffff",
+        "card_alt": "#f2ede3",
+        "accent": "#a9cff5",      # light blue for buttons
+        "accent_alt": "#a9cff5",
+        "muted": "#657080",
+        "success": "#a9cff5",
     }
     style = ttk.Style(widget)
     try:
         style.theme_use("clam")
     except Exception:
         pass
-    style.configure(".", background=palette["bg"], foreground="#e8edf7", fieldbackground=palette["card"])
-    style.configure("Card.TFrame", background=palette["card"])
-    style.configure("CardAlt.TFrame", background=palette["card_alt"])
+    style.configure(".", background=palette["bg"], foreground="#1c2733", fieldbackground=palette["card"])
+    style.configure("Card.TFrame", background=palette["card"], borderwidth=1, relief="flat")
+    style.configure("CardAlt.TFrame", background=palette["card_alt"], borderwidth=1, relief="flat")
     style.configure("Card.TLabelframe", background=palette["card"], relief="flat", borderwidth=1)
-    style.configure("Card.TLabelframe.Label", background=palette["card"], foreground="#e8edf7")
-    style.configure("Section.TLabel", background=palette["bg"], foreground="#e8edf7", font=("Segoe UI", 11, "bold"))
+    style.configure("Card.TLabelframe.Label", background=palette["card"], foreground="#1c2733")
+    style.configure("Section.TLabel", background=palette["bg"], foreground="#1c2733", font=("Segoe UI", 13, "bold"))
     style.configure("Muted.TLabel", background=palette["bg"], foreground=palette["muted"])
+    style.configure(
+        "TCombobox",
+        fieldbackground=palette["card"],
+        background=palette["card"],
+        foreground="#1c2733",
+        arrowcolor="#1c2733",
+        borderwidth=1,
+    )
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", palette["card"])],
+        foreground=[("!disabled", "#1c2733")],
+    )
 
     def _btn(name, color):
-        style.configure(name, background=color, foreground="#0c1427", padding=(10, 7), borderwidth=0)
-        style.map(name, background=[("active", color)])
+        style.configure(name, background=color, foreground="#1c2733", padding=(10, 7), borderwidth=1, relief="solid")
+        style.map(name, background=[("active", color)], bordercolor=[("focus", "#d7d1c8")])
 
     _btn("Primary.TButton", palette["accent"])
     _btn("Alt.TButton", palette["accent_alt"])
     _btn("Success.TButton", palette["success"])
+    style.configure(
+        "TButton",
+        background=palette["accent"],
+        foreground="#1c2733",
+        padding=(10, 7),
+        borderwidth=1,
+        relief="solid",
+    )
+    style.map(
+        "TButton",
+        background=[("active", palette["accent"]), ("pressed", palette["accent"])],
+        bordercolor=[("focus", "#d7d1c8")],
+    )
     try:
         widget.configure(bg=palette["bg"])
     except Exception:
@@ -167,9 +193,18 @@ class SimplePlotWindow(tk.Toplevel):
         frame_left.grid(row=0, column=0, sticky="ns", padx=(0, 15))
         ttk.Label(frame_left, text="Select from imported", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
 
-        self.listbox = tk.Listbox(frame_left, height=10, selectmode="extended", exportselection=0,
-                                  bg=self.palette["card"], fg="#e8edf7", bd=0, highlightthickness=0,
-                                  selectbackground=self.palette["accent"], selectforeground="#0c1427")
+        self.listbox = tk.Listbox(
+            frame_left,
+            height=10,
+            selectmode="extended",
+            exportselection=0,
+            bg=self.palette["card"],
+            fg="#1c2733",
+            bd=0,
+            highlightthickness=0,
+            selectbackground=self.palette["accent"],
+            selectforeground="#1c2733"
+        )
         for title in self.file_titles:
             self.listbox.insert(tk.END, title)
         self.listbox.grid(row=1, column=0, sticky="nsew")
