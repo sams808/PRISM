@@ -1,0 +1,1139 @@
+"""
+easyxafs_generic.py
+
+Generic EasyXAFS / easyEXAFS processing utilities:
+- Parse EasyXAFS "bundle" folders or zips containing:
+    *_exd.csv, *_mcas.npz, metadata.json, scan_def.json
+- Smart extraction of:
+    Angle(deg), Energy(eV), ROI_CountsPerLive(C/s) (or ROI from NPZ)
+- Physics-based angle->energy axis using Bragg law from scan_def.json:
+    scan_def["crystal2d"] like "Si(8,8,0)" or "Ge(4,4,0)"
+    scan_def["theta_offset"] applied
+    auto-resolve theta vs 2theta by best match to Energy(eV)
+    optional linear calibration against Energy(eV)
+- I0 drift check & correction (I0_before vs I0_after):
+    Method 1: derivative cross-correlation on windows
+    Method 2: landmark-based affine alignment (two features/windows)
+    intensity drift: robust scale+offset (optional slope term)
+    interpolate I0 between before & after using alpha in [0..1]
+- I0 fitting option (Chebyshev) and using fit for mu
+- mu = ln(I0/It) or log10(I0/It)
+- Optional deglitch + smoothing
+- Plot helpers
+
+Dependencies: numpy, pandas (matplotlib optional).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+import io
+import json
+import re
+import zipfile
+
+import numpy as np
+import pandas as pd
+
+try:
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover
+    plt = None
+
+# -----------------------------
+# Constants / lattice params
+# -----------------------------
+
+HC_EV_ANG = 12398.4193  # eV * Å
+
+# Room-temperature-ish cubic lattice parameters (Å).
+# (You can override per-run if needed.)
+DEFAULT_LATTICE_A_ANG: Dict[str, float] = {
+    "si": 5.4310205,
+    "ge": 5.6575,
+}
+
+# -----------------------------
+# Data containers
+# -----------------------------
+
+@dataclass
+class Spectrum:
+    name: str
+    energy: np.ndarray
+    signal: np.ndarray
+    kind: str = "unknown"              # "I0", "It", "mu", ...
+    units: str = "a.u."
+    meta: dict = field(default_factory=dict)
+
+    def copy(self, name: Optional[str] = None) -> "Spectrum":
+        return Spectrum(
+            name=name or self.name,
+            energy=self.energy.copy(),
+            signal=self.signal.copy(),
+            kind=self.kind,
+            units=self.units,
+            meta=dict(self.meta),
+        )
+
+
+@dataclass
+class Bundle:
+    """Represents one EasyXAFS dataset bundle (folder or zip member set)."""
+    name: str
+    df: pd.DataFrame
+    scan_def: dict
+    metadata: dict
+    path: str
+    npz_bytes: Optional[bytes] = None  # optional raw NPZ bytes (zip case)
+
+
+# -----------------------------
+# Generic helpers
+# -----------------------------
+
+def _classify_kind_from_name(name: str) -> str:
+    low = name.lower()
+    if re.search(r"(^|[_\-\s])i0([_\-\s]|$)", low):
+        return "I0"
+    return "It"
+
+def _guess_col(columns: Iterable[str], patterns: List[str]) -> Optional[str]:
+    cols = list(columns)
+    for pat in patterns:
+        for c in cols:
+            if re.search(pat, str(c), flags=re.IGNORECASE):
+                return str(c)
+    return None
+
+def _interp_to_grid(x_src, y_src, x_new):
+    x_src = np.asarray(x_src, float)
+    y_src = np.asarray(y_src, float)
+    x_new = np.asarray(x_new, float)
+
+    m = np.isfinite(x_src) & np.isfinite(y_src)
+    x_src, y_src = x_src[m], y_src[m]
+    idx = np.argsort(x_src)
+    x_src, y_src = x_src[idx], y_src[idx]
+    return np.interp(x_new, x_src, y_src)
+
+def moving_average(y: Union[np.ndarray, List[float]], window: int = 9) -> np.ndarray:
+    y = np.asarray(y, float)
+    if window <= 1:
+        return y.copy()
+    w = int(window)
+    k = np.ones(w) / w
+    return np.convolve(y, k, mode="same")
+
+def deglitch_robust(
+    energy: Union[np.ndarray, List[float]],
+    y: Union[np.ndarray, List[float]],
+    *,
+    z_thresh: float = 6.0,
+    window: int = 21,
+    max_fraction_flagged: float = 0.20,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Deglitch by comparing to local median and using a robust z-score (MAD).
+    Replace flagged points by linear interpolation.
+    """
+    energy = np.asarray(energy, float)
+    y = np.asarray(y, float)
+    n = y.size
+    if n < window or window < 5:
+        return y.copy(), np.zeros_like(y, dtype=bool)
+
+    half = window // 2
+    med = np.empty_like(y)
+    mad = np.empty_like(y)
+
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        seg = y[lo:hi]
+        m0 = np.nanmedian(seg)
+        med[i] = m0
+        mad[i] = np.nanmedian(np.abs(seg - m0)) + 1e-12
+
+    robust_z = 0.6745 * (y - med) / mad
+    flagged = np.abs(robust_z) > float(z_thresh)
+
+    if flagged.mean() > max_fraction_flagged:
+        raise ValueError(
+            f"Deglitch flagged {flagged.mean():.1%} of points (>{max_fraction_flagged:.0%}). "
+            "Relax z_thresh/window or inspect data."
+        )
+
+    y_clean = y.copy()
+    if flagged.any():
+        good = ~flagged
+        y_clean[flagged] = np.interp(energy[flagged], energy[good], y[good])
+
+    return y_clean, flagged
+
+
+# -----------------------------
+# CSV signal extraction
+# -----------------------------
+
+def extract_energy_angle_signal(
+    df: pd.DataFrame,
+    *,
+    angle_col: Optional[str] = None,
+    energy_col: Optional[str] = None,
+    signal_col: Optional[str] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, str]]:
+    """
+    Extract Angle(deg), Energy(eV), and I0/It proxy (ROI_CountsPerLive(C/s) preferred).
+    """
+    if angle_col is None:
+        angle_col = _guess_col(df.columns, [r"angle.*deg", r"\bangle\b", r"bragg", r"\btheta\b"])
+    if energy_col is None:
+        energy_col = _guess_col(df.columns, [r"energy.*ev", r"\benergy\b"])
+
+    if signal_col is None:
+        # Prefer ROI_CountsPerLive(C/s)
+        signal_col = _guess_col(df.columns, [r"roi.*countsperlive", r"roi.*c/s", r"roi.*counts"])
+        if signal_col is None:
+            # fallback: count-like, avoid housekeeping
+            bad = ("time", "encoder", "dead", "real", "live", "trigger", "event", "angle", "energy")
+            numeric_cols = []
+            for c in df.columns:
+                x = pd.to_numeric(df[c], errors="coerce").to_numpy(float)
+                if np.isfinite(x).mean() > 0.8:
+                    numeric_cols.append(str(c))
+
+            def score(c: str) -> float:
+                cl = c.lower()
+                s = 0.0
+                if any(w in cl for w in bad):
+                    s -= 100
+                if "count" in cl:
+                    s += 20
+                if "roi" in cl:
+                    s += 50
+                return s
+
+            candidates = [c for c in numeric_cols if c.lower() != (energy_col or "").lower()]
+            if not candidates:
+                raise ValueError("Could not infer signal column.")
+            signal_col = max(candidates, key=score)
+
+    if angle_col is None or energy_col is None:
+        raise ValueError("Could not infer Angle(deg) and/or Energy(eV) columns.")
+
+    angle = pd.to_numeric(df[angle_col], errors="coerce").to_numpy(float)
+    energy = pd.to_numeric(df[energy_col], errors="coerce").to_numpy(float)
+    signal = pd.to_numeric(df[signal_col], errors="coerce").to_numpy(float)
+
+    # Clean NaNs consistently
+    m = np.isfinite(angle) & np.isfinite(energy) & np.isfinite(signal)
+    return angle[m], energy[m], signal[m], {
+        "angle_col": angle_col,
+        "energy_col": energy_col,
+        "signal_col": signal_col,
+    }
+
+
+# -----------------------------
+# Bundle reading (folder or zip)
+# -----------------------------
+
+def _safe_json_load_path(p: Path) -> dict:
+    return json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+
+def _safe_json_load_bytes(b: bytes) -> dict:
+    return json.loads(b.decode("utf-8", errors="ignore"))
+
+def read_bundle(path: Union[str, Path]) -> Bundle:
+    """
+    Read a bundle from a directory or a .zip containing a single bundle directory.
+    """
+    path = Path(path)
+
+    if path.is_dir():
+        csvs = sorted(path.glob("*_exd.csv"))
+        if not csvs:
+            raise FileNotFoundError(f"No '*_exd.csv' found in {path}")
+        npzs = sorted(path.glob("*_mcas.npz"))
+        meta_p = path / "metadata.json"
+        scan_p = path / "scan_def.json"
+
+        df = pd.read_csv(csvs[0])
+        metadata = _safe_json_load_path(meta_p) if meta_p.exists() else {}
+        scan_def = _safe_json_load_path(scan_p) if scan_p.exists() else {}
+
+        npz_bytes = None
+        if npzs:
+            npz_bytes = npzs[0].read_bytes()
+
+        return Bundle(
+            name=path.name,
+            df=df,
+            scan_def=scan_def,
+            metadata=metadata,
+            path=str(path),
+            npz_bytes=npz_bytes,
+        )
+
+    if path.is_file() and path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(path, "r") as z:
+            members = z.namelist()
+
+            def pick(pattern: str) -> Optional[str]:
+                hits = [m for m in members if re.search(pattern, m, flags=re.IGNORECASE)]
+                return hits[0] if hits else None
+
+            csv_m = pick(r"_exd\.csv$")
+            npz_m = pick(r"_mcas\.npz$")
+            meta_m = pick(r"(?:^|/)metadata\.json$")
+            scan_m = pick(r"(?:^|/)scan_def\.json$")
+
+            if not csv_m:
+                raise FileNotFoundError("Zip does not contain '*_exd.csv'")
+
+            df = pd.read_csv(io.BytesIO(z.read(csv_m)))
+            metadata = _safe_json_load_bytes(z.read(meta_m)) if meta_m else {}
+            scan_def = _safe_json_load_bytes(z.read(scan_m)) if scan_m else {}
+
+            npz_bytes = z.read(npz_m) if npz_m else None
+
+        return Bundle(
+            name=path.stem,
+            df=df,
+            scan_def=scan_def,
+            metadata=metadata,
+            path=str(path),
+            npz_bytes=npz_bytes,
+        )
+
+    raise ValueError("Path must be a bundle directory or a .zip bundle.")
+
+
+# -----------------------------
+# ROI from NPZ (optional)
+# -----------------------------
+
+def roi_counts_from_mcas(npz_bytes: bytes, roi_min: int, roi_max: int) -> np.ndarray:
+    npz = np.load(io.BytesIO(npz_bytes))
+    if "mcas" not in npz:
+        raise ValueError("NPZ does not contain 'mcas' key.")
+    mcas = np.asarray(npz["mcas"], float)  # (npoints, nch)
+    r0 = int(min(roi_min, roi_max))
+    r1 = int(max(roi_min, roi_max))
+    r0 = max(r0, 0)
+    r1 = min(r1, mcas.shape[1] - 1)
+    return mcas[:, r0 : r1 + 1].sum(axis=1)
+
+
+# -----------------------------
+# Angle -> Energy correction from scan_def.json
+# -----------------------------
+
+def parse_crystal2d(crystal2d: str) -> Tuple[str, int, int, int]:
+    """
+    "Si(8,8,0)" -> ("Si", 8, 8, 0)
+    "Ge(4,4,0)" -> ("Ge", 4, 4, 0)
+    """
+    m = re.search(
+        r"^\s*([A-Za-z]+)\s*\(\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*\)\s*$",
+        crystal2d,
+    )
+    if not m:
+        raise ValueError(f"Cannot parse crystal2d='{crystal2d}'")
+    mat = m.group(1)
+    h, k, l = int(m.group(2)), int(m.group(3)), int(m.group(4))
+    return mat, h, k, l
+
+def d_spacing_cubic(a_ang: float, h: int, k: int, l: int) -> float:
+    return float(a_ang) / float(np.sqrt(h*h + k*k + l*l))
+
+def energy_from_theta(theta_deg: np.ndarray, d_ang: float) -> np.ndarray:
+    th = np.deg2rad(np.asarray(theta_deg, float))
+    s = np.sin(th)
+    s = np.clip(s, 1e-12, 1.0)
+    return HC_EV_ANG / (2.0 * float(d_ang) * s)
+
+def corrected_energy_from_scan_def(
+    angle_deg: np.ndarray,
+    energy_ref_ev: np.ndarray,
+    scan_def: dict,
+    *,
+    lattice_a_overrides: Optional[Dict[str, float]] = None,
+    fit_linear_calibration: bool = True,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """
+    Compute energy axis from Angle(deg) using scan_def["crystal2d"] and scan_def["theta_offset"].
+
+    Auto-resolves whether Angle column represents theta or 2theta by whichever best matches Energy(eV).
+    Optionally applies linear calibration against Energy(eV) to absorb systematic scale/offset.
+    """
+    if "crystal2d" not in scan_def:
+        raise KeyError("scan_def.json missing 'crystal2d'")
+
+    mat, h, k, l = parse_crystal2d(scan_def["crystal2d"])
+    mat_key = mat.lower()
+
+    a_map = dict(DEFAULT_LATTICE_A_ANG)
+    if lattice_a_overrides:
+        for k0, v0 in lattice_a_overrides.items():
+            a_map[k0.lower()] = float(v0)
+
+    if mat_key not in a_map:
+        raise ValueError(f"No lattice parameter for material '{mat}'. Provide lattice_a_overrides.")
+
+    a_ang = a_map[mat_key]
+    d_ang = d_spacing_cubic(a_ang, h, k, l)
+
+    theta_offset = float(scan_def.get("theta_offset", 0.0))
+
+    ang = np.asarray(angle_deg, float)
+    e_ref = np.asarray(energy_ref_ev, float)
+
+    # Hypothesis A: Angle is theta
+    th1 = ang + theta_offset
+    E1 = energy_from_theta(th1, d_ang)
+
+    # Hypothesis B: Angle is 2theta
+    th2 = ang / 2.0 + theta_offset
+    E2 = energy_from_theta(th2, d_ang)
+
+    m = np.isfinite(e_ref) & np.isfinite(E1) & np.isfinite(E2)
+    if m.sum() < 20:
+        raise ValueError("Not enough valid points to infer theta vs 2theta.")
+
+    err1 = float(np.nanmedian(np.abs(E1[m] - e_ref[m])))
+    err2 = float(np.nanmedian(np.abs(E2[m] - e_ref[m])))
+
+    if err1 <= err2:
+        interp = "theta"
+        E_bragg = E1
+        base_err = err1
+    else:
+        interp = "2theta"
+        E_bragg = E2
+        base_err = err2
+
+    diag: Dict[str, Any] = {
+        "crystal2d": scan_def["crystal2d"],
+        "material": mat,
+        "hkl": [h, k, l],
+        "a_ang": float(a_ang),
+        "d_ang": float(d_ang),
+        "theta_offset_deg": theta_offset,
+        "angle_interpretation": interp,
+        "median_abs_err_ev_before_cal": float(base_err),
+        "calibration": None,
+    }
+
+    if not fit_linear_calibration:
+        return E_bragg, diag
+
+    mm = np.isfinite(e_ref) & np.isfinite(E_bragg)
+    A, B = np.polyfit(E_bragg[mm], e_ref[mm], 1)
+    E_corr = A * E_bragg + B
+
+    diag["calibration"] = {"A": float(A), "B": float(B)}
+    diag["median_abs_err_ev_after_cal"] = float(np.nanmedian(np.abs(E_corr[mm] - e_ref[mm])))
+
+    return E_corr, diag
+
+
+# -----------------------------
+# I0 fitting (Chebyshev)
+# -----------------------------
+
+def chebyshev_fit(energy: np.ndarray, y: np.ndarray, degree: int = 40) -> np.ndarray:
+    from numpy.polynomial import Chebyshev
+    e = np.asarray(energy, float)
+    yy = np.asarray(y, float)
+    model = Chebyshev.fit(e, yy, degree)
+    return np.asarray(model(e), float)
+
+
+# -----------------------------
+# mu computation
+# -----------------------------
+
+def transmission_to_mu(it: np.ndarray, i0: np.ndarray, *, log_base: str = "ln", eps: float = 1e-12) -> np.ndarray:
+    it = np.clip(np.asarray(it, float), eps, np.inf)
+    i0 = np.clip(np.asarray(i0, float), eps, np.inf)
+    ratio = i0 / it
+    if log_base.lower() == "log10":
+        return np.log10(ratio)
+    return np.log(ratio)
+
+
+# -----------------------------
+# I0 drift detection / correction
+# -----------------------------
+
+def estimate_energy_shift_via_derivative_xcorr(
+    e_ref: np.ndarray, y_ref: np.ndarray,
+    e_mov: np.ndarray, y_mov: np.ndarray,
+    *,
+    windows: Optional[List[Tuple[float, float]]] = None,
+    shift_range_ev: float = 5.0,
+    step_ev: float = 0.02,
+    smooth_window: int = 11,
+) -> Tuple[float, float]:
+    """
+    Estimate ΔE that best aligns y_mov to y_ref by maximizing correlation
+    of derivatives on selected windows (instrument features).
+
+    windows: list of (emin, emax). If None, uses full overlap.
+    """
+    e_ref = np.asarray(e_ref, float)
+    y_ref = np.asarray(y_ref, float)
+    e_mov = np.asarray(e_mov, float)
+    y_mov = np.asarray(y_mov, float)
+
+    # Build mask for windows on ref axis
+    if windows:
+        mask = np.zeros_like(e_ref, dtype=bool)
+        for lo, hi in windows:
+            mask |= (e_ref >= lo) & (e_ref <= hi)
+    else:
+        mask = np.ones_like(e_ref, dtype=bool)
+
+    # Interp mov on ref grid for derivative baseline
+    y_mov_i = _interp_to_grid(e_mov, y_mov, e_ref)
+
+    # Smooth
+    if smooth_window and smooth_window > 1:
+        k = np.ones(int(smooth_window)) / float(smooth_window)
+        y_ref_s = np.convolve(y_ref, k, mode="same")
+        y_mov_s = np.convolve(y_mov_i, k, mode="same")
+    else:
+        y_ref_s, y_mov_s = y_ref, y_mov_i
+
+    # Derivative on ref axis
+    dy_ref = np.gradient(y_ref_s, e_ref)
+
+    shifts = np.arange(-shift_range_ev, shift_range_ev + step_ev, step_ev)
+    best_shift = 0.0
+    best_score = -np.inf
+
+    r = dy_ref[mask]
+    r = r - np.nanmean(r)
+    r = r / (np.nanstd(r) + 1e-12)
+
+    for s in shifts:
+        y_shift = _interp_to_grid(e_mov, y_mov, e_ref + s)
+        if smooth_window and smooth_window > 1:
+            y_shift = np.convolve(y_shift, k, mode="same")
+        dy_shift = np.gradient(y_shift, e_ref)
+        m = dy_shift[mask]
+        m = m - np.nanmean(m)
+        m = m / (np.nanstd(m) + 1e-12)
+
+        score = float(np.nanmean(r * m))
+        if score > best_score:
+            best_score = score
+            best_shift = float(s)
+
+    return best_shift, best_score
+
+
+def _quadratic_peak_position(x: np.ndarray, y: np.ndarray, kind: str = "max") -> float:
+    """
+    Sub-grid estimate of extremum using quadratic fit around the best point.
+    kind: "max" or "min"
+    """
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    if x.size < 5:
+        return float(x[np.argmax(y)] if kind == "max" else x[np.argmin(y)])
+
+    i0 = int(np.argmax(y) if kind == "max" else np.argmin(y))
+    i0 = int(np.clip(i0, 2, x.size - 3))
+    xs = x[i0 - 2 : i0 + 3]
+    ys = y[i0 - 2 : i0 + 3]
+    # Fit y = ax^2 + bx + c
+    a, b, _c = np.polyfit(xs, ys, 2)
+    if abs(a) < 1e-18:
+        return float(x[i0])
+    x_vertex = -b / (2 * a)
+    return float(x_vertex)
+
+
+def estimate_affine_energy_map_from_landmarks(
+    e_ref: np.ndarray, y_ref: np.ndarray,
+    e_mov: np.ndarray, y_mov: np.ndarray,
+    *,
+    windows: List[Tuple[float, float]],
+    derivative: bool = True,
+    extremum_kinds: Optional[List[str]] = None,  # "max"/"min" per window (on derivative if derivative=True)
+    smooth_window: int = 11,
+) -> Tuple[float, float, Dict[str, Any]]:
+    """
+    Use two (or more) landmark windows to estimate an affine energy mapping:
+        E_ref ≈ alpha * E_mov + beta
+
+    Procedure:
+    - Interpolate mov to ref grid (or work in each window separately)
+    - Optionally use derivative signals to find extrema positions
+    - Find landmark positions in each window for ref and mov
+    - Solve least squares for alpha,beta mapping mov->ref
+
+    Returns alpha,beta plus diagnostics.
+    """
+    if len(windows) < 2:
+        raise ValueError("Need at least two landmark windows for affine mapping.")
+
+    e_ref = np.asarray(e_ref, float)
+    y_ref = np.asarray(y_ref, float)
+    e_mov = np.asarray(e_mov, float)
+    y_mov = np.asarray(y_mov, float)
+
+    # Smooth
+    if smooth_window and smooth_window > 1:
+        k = np.ones(int(smooth_window)) / float(smooth_window)
+        y_ref_s = np.convolve(y_ref, k, mode="same")
+        y_mov_i = _interp_to_grid(e_mov, y_mov, e_ref)
+        y_mov_s = np.convolve(y_mov_i, k, mode="same")
+    else:
+        y_ref_s = y_ref
+        y_mov_s = _interp_to_grid(e_mov, y_mov, e_ref)
+
+    if derivative:
+        sig_ref = np.gradient(y_ref_s, e_ref)
+        sig_mov = np.gradient(y_mov_s, e_ref)
+    else:
+        sig_ref = y_ref_s
+        sig_mov = y_mov_s
+
+    # For each window, determine landmark x position in ref-grid space.
+    ref_pos = []
+    mov_pos = []
+    diag_pts = []
+
+    if extremum_kinds is None:
+        extremum_kinds = ["max"] * len(windows)
+
+    for (lo, hi), knd in zip(windows, extremum_kinds):
+        m = (e_ref >= lo) & (e_ref <= hi)
+        if m.sum() < 7:
+            continue
+        xw = e_ref[m]
+        rw = sig_ref[m]
+        mw = sig_mov[m]
+        # landmark positions on ref grid
+        x_ref = _quadratic_peak_position(xw, rw, kind=knd)
+        x_mov = _quadratic_peak_position(xw, mw, kind=knd)
+        ref_pos.append(x_ref)
+        mov_pos.append(x_mov)
+        diag_pts.append({"window": [lo, hi], "ref": x_ref, "mov_on_refgrid": x_mov, "kind": knd})
+
+    if len(ref_pos) < 2:
+        raise ValueError("Could not extract enough landmark points for affine mapping.")
+
+    ref_pos = np.asarray(ref_pos, float)
+    mov_pos = np.asarray(mov_pos, float)
+
+    # Solve ref ≈ alpha*mov + beta
+    X = np.vstack([mov_pos, np.ones_like(mov_pos)]).T
+    alpha, beta = np.linalg.lstsq(X, ref_pos, rcond=None)[0]
+
+    diag = {
+        "points": diag_pts,
+        "alpha": float(alpha),
+        "beta": float(beta),
+        "derivative": bool(derivative),
+    }
+    return float(alpha), float(beta), diag
+
+
+def robust_scale_offset(
+    y_ref: np.ndarray,
+    y_mov: np.ndarray,
+    *,
+    trim_frac: float = 0.05,
+) -> Tuple[float, float]:
+    """
+    Fit y_ref ≈ a*y_mov + b using trimmed least squares.
+    """
+    y_ref = np.asarray(y_ref, float)
+    y_mov = np.asarray(y_mov, float)
+    m = np.isfinite(y_ref) & np.isfinite(y_mov)
+    y_ref, y_mov = y_ref[m], y_mov[m]
+    if y_ref.size < 20:
+        return 1.0, 0.0
+
+    r = y_ref - np.nanmedian(y_ref)
+    lo, hi = np.quantile(r, [trim_frac, 1 - trim_frac])
+    keep = (r >= lo) & (r <= hi)
+
+    X = np.vstack([y_mov[keep], np.ones(keep.sum())]).T
+    a, b = np.linalg.lstsq(X, y_ref[keep], rcond=None)[0]
+    return float(a), float(b)
+
+
+def robust_scale_offset_slope(
+    e: np.ndarray,
+    y_ref: np.ndarray,
+    y_mov: np.ndarray,
+    *,
+    trim_frac: float = 0.05,
+) -> Tuple[float, float, float]:
+    """
+    Fit y_ref ≈ a*y_mov + b + c*(e - median(e)) using trimmed least squares.
+    Use only if you see energy-dependent gain drift.
+    """
+    e = np.asarray(e, float)
+    y_ref = np.asarray(y_ref, float)
+    y_mov = np.asarray(y_mov, float)
+    m = np.isfinite(e) & np.isfinite(y_ref) & np.isfinite(y_mov)
+    e, y_ref, y_mov = e[m], y_ref[m], y_mov[m]
+    if y_ref.size < 30:
+        a, b = robust_scale_offset(y_ref, y_mov, trim_frac=trim_frac)
+        return a, b, 0.0
+
+    e0 = np.nanmedian(e)
+    r = y_ref - np.nanmedian(y_ref)
+    lo, hi = np.quantile(r, [trim_frac, 1 - trim_frac])
+    keep = (r >= lo) & (r <= hi)
+
+    X = np.vstack([y_mov[keep], np.ones(keep.sum()), (e[keep] - e0)]).T
+    a, b, c = np.linalg.lstsq(X, y_ref[keep], rcond=None)[0]
+    return float(a), float(b), float(c)
+
+
+@dataclass
+class I0DriftModel:
+    method: str                       # "xcorr" or "landmark_affine"
+    # Energy mapping to apply when comparing AFTER onto BEFORE grid:
+    # If method=="xcorr": shift_ev used (E_after evaluated at E_before + shift_ev)
+    shift_ev: float = 0.0
+    # If method=="landmark_affine": E_ref ≈ alpha*E_after + beta
+    alpha: float = 1.0
+    beta: float = 0.0
+    # Intensity mapping AFTER -> BEFORE:
+    scale_a: float = 1.0
+    offset_b: float = 0.0
+    slope_c: float = 0.0
+    # Diagnostics
+    score: float = np.nan
+    details: dict = field(default_factory=dict)
+
+
+def build_i0_drift_model(
+    i0_before: Spectrum,
+    i0_after: Spectrum,
+    *,
+    method: str = "xcorr_windows",  # "xcorr_windows" or "landmark_affine"
+    windows: Optional[List[Tuple[float, float]]] = None,
+    xcorr_shift_range_ev: float = 5.0,
+    xcorr_step_ev: float = 0.02,
+    smooth_window: int = 11,
+    intensity_model: str = "scale_offset",  # "scale_offset" or "scale_offset_slope"
+) -> I0DriftModel:
+    """
+    Build a drift model that maps i0_after to i0_before.
+    """
+    e0, y0 = i0_before.energy, i0_before.signal
+    e1, y1 = i0_after.energy, i0_after.signal
+
+    if windows is None:
+        # If scan_def had useful hints, you should pass windows explicitly.
+        # Default to full overlap if not provided.
+        windows = None
+
+    if method == "xcorr_windows":
+        dE, score = estimate_energy_shift_via_derivative_xcorr(
+            e0, y0, e1, y1,
+            windows=windows,
+            shift_range_ev=xcorr_shift_range_ev,
+            step_ev=xcorr_step_ev,
+            smooth_window=smooth_window,
+        )
+        y1_on_0 = _interp_to_grid(e1, y1, e0 + dE)
+
+        if intensity_model == "scale_offset_slope":
+            a, b, c = robust_scale_offset_slope(e0, y0, y1_on_0)
+        else:
+            a, b = robust_scale_offset(y0, y1_on_0)
+            c = 0.0
+
+        return I0DriftModel(
+            method="xcorr",
+            shift_ev=float(dE),
+            alpha=1.0,
+            beta=0.0,
+            scale_a=float(a),
+            offset_b=float(b),
+            slope_c=float(c),
+            score=float(score),
+            details={"windows": windows},
+        )
+
+    if method == "landmark_affine":
+        if not windows or len(windows) < 2:
+            raise ValueError("landmark_affine needs at least two windows (feature regions).")
+
+        # Estimate affine map using derivative extrema in the windows
+        alpha, beta, diag = estimate_affine_energy_map_from_landmarks(
+            e_ref=e0, y_ref=y0,
+            e_mov=e1, y_mov=y1,
+            windows=windows,
+            derivative=True,
+            smooth_window=smooth_window,
+        )
+
+        # Map AFTER onto BEFORE grid: find y1 at energies corresponding to BEFORE.
+        # We have E_ref = alpha*E_after + beta => E_after = (E_ref - beta)/alpha
+        e_after_needed = (e0 - beta) / alpha
+        y1_on_0 = _interp_to_grid(e1, y1, e_after_needed)
+
+        if intensity_model == "scale_offset_slope":
+            a, b, c = robust_scale_offset_slope(e0, y0, y1_on_0)
+        else:
+            a, b = robust_scale_offset(y0, y1_on_0)
+            c = 0.0
+
+        # Use correlation score as a rough post-check on windows
+        # (optional; not mandatory)
+        return I0DriftModel(
+            method="landmark_affine",
+            shift_ev=0.0,
+            alpha=float(alpha),
+            beta=float(beta),
+            scale_a=float(a),
+            offset_b=float(b),
+            slope_c=float(c),
+            score=np.nan,
+            details={"landmarks": diag, "windows": windows},
+        )
+
+    raise ValueError(f"Unknown drift method: {method}")
+
+
+def apply_i0_drift_to_after_on_before_grid(
+    i0_before: Spectrum,
+    i0_after: Spectrum,
+    model: I0DriftModel,
+) -> np.ndarray:
+    """
+    Return I0_after mapped onto i0_before.energy grid, with energy + intensity correction.
+    """
+    e0 = i0_before.energy
+    e1 = i0_after.energy
+    y1 = i0_after.signal
+
+    if model.method == "xcorr":
+        y = _interp_to_grid(e1, y1, e0 + model.shift_ev)
+    elif model.method == "landmark_affine":
+        e_after_needed = (e0 - model.beta) / model.alpha
+        y = _interp_to_grid(e1, y1, e_after_needed)
+    else:
+        raise ValueError("Bad I0DriftModel.method")
+
+    # intensity correction
+    e0c = e0 - np.nanmedian(e0)
+    y = model.scale_a * y + model.offset_b + model.slope_c * e0c
+    return y
+
+
+def interpolate_i0_between_before_after(
+    i0_before: Spectrum,
+    i0_after: Spectrum,
+    model: I0DriftModel,
+    *,
+    alpha: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    alpha=0 -> before, alpha=1 -> corrected-after (mapped to before grid)
+    Returns (energy_grid, I0_alpha)
+    """
+    a = float(np.clip(alpha, 0.0, 1.0))
+    e0 = i0_before.energy
+    y0 = i0_before.signal
+    y1_corr = apply_i0_drift_to_after_on_before_grid(i0_before, i0_after, model)
+    return e0, (1 - a) * y0 + a * y1_corr
+
+
+def i0_change_report(i0_before: Spectrum, i0_after: Spectrum, model: I0DriftModel) -> Dict[str, Any]:
+    """
+    Compute residual mismatch after correction (useful to decide if correction is needed).
+    """
+    e0 = i0_before.energy
+    y0 = i0_before.signal
+    y1_corr = apply_i0_drift_to_after_on_before_grid(i0_before, i0_after, model)
+
+    rms = float(np.sqrt(np.nanmean((y0 - y1_corr) ** 2)))
+    rel = float(rms / (np.nanmedian(np.abs(y0)) + 1e-12))
+
+    out = {
+        "method": model.method,
+        "shift_ev": float(model.shift_ev),
+        "alpha": float(model.alpha),
+        "beta": float(model.beta),
+        "scale_a": float(model.scale_a),
+        "offset_b": float(model.offset_b),
+        "slope_c": float(model.slope_c),
+        "score": float(model.score) if np.isfinite(model.score) else None,
+        "rel_rms": rel,
+    }
+    return out
+
+
+# -----------------------------
+# High-level: make Spectrum from Bundle
+# -----------------------------
+
+@dataclass
+class EnergyAxisConfig:
+    use_angle_correction: bool = True
+    fit_linear_calibration: bool = True
+    lattice_a_overrides: Optional[Dict[str, float]] = None
+    # Column names (override if your export differs)
+    angle_col: str = "Angle(deg)"
+    energy_col: str = "Energy(eV)"
+
+@dataclass
+class SignalConfig:
+    prefer: str = "csv"  # "csv" or "npz"
+    signal_col: str = "ROI_CountsPerLive(C/s)"  # preferred, but extractor can infer if absent
+
+
+def spectrum_from_bundle(
+    bundle: Bundle,
+    *,
+    energy_cfg: EnergyAxisConfig = EnergyAxisConfig(),
+    signal_cfg: SignalConfig = SignalConfig(),
+    kind: Optional[str] = None,
+) -> Spectrum:
+    """
+    Build a Spectrum (I0 or It) from a bundle.
+    Uses CSV columns by default, can compute ROI from NPZ if prefer="npz".
+    Energy axis can be corrected from angle using scan_def.
+    """
+    df = bundle.df
+
+    # Extract (angle, energy_ref, signal) from CSV
+    angle, e_ref, sig_csv, cols = extract_energy_angle_signal(
+        df,
+        angle_col=energy_cfg.angle_col,
+        energy_col=energy_cfg.energy_col,
+        signal_col=signal_cfg.signal_col if signal_cfg.signal_col in df.columns else None,
+    )
+
+    # Signal source selection
+    signal = sig_csv
+    signal_source = cols["signal_col"]
+    units = "counts/s" if ("countsperlive" in signal_source.lower() or "/s" in signal_source.lower()) else "counts"
+
+    if signal_cfg.prefer.lower() == "npz":
+        if not bundle.npz_bytes:
+            raise FileNotFoundError("prefer='npz' but bundle has no '*_mcas.npz'")
+        roi = bundle.scan_def.get("ROI", {})
+        roi_min = int(roi.get("roi_min"))
+        roi_max = int(roi.get("roi_max"))
+        sig_npz = roi_counts_from_mcas(bundle.npz_bytes, roi_min=roi_min, roi_max=roi_max)
+
+        # Need to match lengths to angle/e_ref subset mask. We used mask in extract_energy_angle_signal;
+        # the safest path is to apply the same mask to NPZ by rebuilding it from original df rows.
+        # We'll do a simple alignment by taking the first N points; better is to reapply row mask.
+        n = min(sig_npz.size, signal.size)
+        signal = sig_npz[:n]
+        angle = angle[:n]
+        e_ref = e_ref[:n]
+        signal_source = f"NPZ ROI sum [{roi_min}:{roi_max}]"
+        units = "counts"
+
+    # Energy axis correction
+    if energy_cfg.use_angle_correction and bundle.scan_def:
+        e_corr, diag = corrected_energy_from_scan_def(
+            angle_deg=angle,
+            energy_ref_ev=e_ref,
+            scan_def=bundle.scan_def,
+            lattice_a_overrides=energy_cfg.lattice_a_overrides,
+            fit_linear_calibration=energy_cfg.fit_linear_calibration,
+        )
+        energy = e_corr
+        energy_meta = diag
+    else:
+        energy = e_ref
+        energy_meta = {"used_angle_correction": False}
+
+    name = bundle.name
+    knd = kind or _classify_kind_from_name(name)
+
+    return Spectrum(
+        name=name,
+        kind=knd,
+        energy=np.asarray(energy, float),
+        signal=np.asarray(signal, float),
+        units=units,
+        meta={
+            "bundle_path": bundle.path,
+            "columns": cols,
+            "signal_source": signal_source,
+            "energy_axis": energy_meta,
+            "scan_def": bundle.scan_def,
+            "metadata": bundle.metadata,
+        },
+    )
+
+
+# -----------------------------
+# Full pipeline: compute mu with bracketed I0, with optional I0 fitting
+# -----------------------------
+
+@dataclass
+class I0FitConfig:
+    enabled: bool = False
+    method: str = "chebyshev"  # "chebyshev" only for now
+    degree: int = 40
+
+def fit_i0_signal(energy: np.ndarray, i0: np.ndarray, cfg: I0FitConfig) -> np.ndarray:
+    if not cfg.enabled:
+        return np.asarray(i0, float)
+    if cfg.method.lower() == "chebyshev":
+        return chebyshev_fit(energy, i0, degree=cfg.degree)
+    raise ValueError(f"Unknown I0 fit method: {cfg.method}")
+
+@dataclass
+class MuConfig:
+    log_base: str = "ln"               # "ln" or "log10"
+    deglitch: bool = False
+    deglitch_z: float = 6.0
+    deglitch_window: int = 21
+    smooth_window: int = 0
+    # If It energy grid differs, we interpolate It onto I0 grid.
+    # (Angle-based correction should usually keep grids consistent.)
+
+def compute_mu_for_it_with_i0(
+    it_spec: Spectrum,
+    i0_energy: np.ndarray,
+    i0_signal: np.ndarray,
+    *,
+    cfg: MuConfig = MuConfig(),
+) -> Spectrum:
+    # Interpolate It onto I0 grid
+    it_on = _interp_to_grid(it_spec.energy, it_spec.signal, i0_energy)
+    mu = transmission_to_mu(it_on, i0_signal, log_base=cfg.log_base)
+
+    if cfg.deglitch:
+        mu, _flag = deglitch_robust(i0_energy, mu, z_thresh=cfg.deglitch_z, window=cfg.deglitch_window)
+    if cfg.smooth_window and cfg.smooth_window > 1:
+        mu = moving_average(mu, window=cfg.smooth_window)
+
+    return Spectrum(
+        name=f"{it_spec.name}_mu",
+        kind="mu",
+        energy=i0_energy.copy(),
+        signal=mu,
+        units="a.u.",
+        meta={"from": it_spec.name, "log_base": cfg.log_base},
+    )
+
+def compute_mu_bracketed(
+    it_spec: Spectrum,
+    i0_before: Spectrum,
+    i0_after: Spectrum,
+    *,
+    alpha: float,
+    drift_model: I0DriftModel,
+    i0_fit_cfg: I0FitConfig = I0FitConfig(),
+    mu_cfg: MuConfig = MuConfig(),
+) -> Spectrum:
+    e0, i0_alpha = interpolate_i0_between_before_after(i0_before, i0_after, drift_model, alpha=alpha)
+
+    # Optional I0 fitting (use the fit for mu)
+    i0_used = fit_i0_signal(e0, i0_alpha, i0_fit_cfg)
+
+    return compute_mu_for_it_with_i0(it_spec, e0, i0_used, cfg=mu_cfg)
+
+
+# -----------------------------
+# Plotting
+# -----------------------------
+
+def plot_spectra(
+    specs: List[Spectrum],
+    *,
+    title: Optional[str] = None,
+    xlabel: str = "Energy (eV)",
+    ylabel: str = "Signal",
+    xlim: Optional[Tuple[float, float]] = None,
+    ylim: Optional[Tuple[float, float]] = None,
+    offset: float = 0.0,
+    legend: bool = True,
+    savepath: Optional[Union[str, Path]] = None,
+):
+    if plt is None:
+        raise RuntimeError("matplotlib is not available.")
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for i, sp in enumerate(specs):
+        ax.plot(sp.energy, sp.signal + i * float(offset), label=sp.name)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if title:
+        ax.set_title(title)
+    if xlim:
+        ax.set_xlim(*xlim)
+    if ylim:
+        ax.set_ylim(*ylim)
+    if legend:
+        ax.legend()
+
+    fig.tight_layout()
+    if savepath:
+        savepath = Path(savepath)
+        savepath.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(savepath, dpi=300)
+
+    return fig, ax
+
+
+# -----------------------------
+# Example usage (as comments)
+# -----------------------------
+"""
+# 1) Read bundles (directories or zips)
+b_i0_before = read_bundle("I0_000_exd")               # folder
+b_i0_after  = read_bundle("I0_after_000_exd")         # folder
+b_it        = read_bundle("Fe_sample_001_exd")        # folder
+
+# 2) Convert to Spectrum using scan_def-based angle correction (Si or Ge supported)
+energy_cfg = EnergyAxisConfig(use_angle_correction=True, fit_linear_calibration=True)
+signal_cfg = SignalConfig(prefer="csv", signal_col="ROI_CountsPerLive(C/s)")
+
+i0_before = spectrum_from_bundle(b_i0_before, energy_cfg=energy_cfg, signal_cfg=signal_cfg, kind="I0")
+i0_after  = spectrum_from_bundle(b_i0_after,  energy_cfg=energy_cfg, signal_cfg=signal_cfg, kind="I0")
+it_spec   = spectrum_from_bundle(b_it,        energy_cfg=energy_cfg, signal_cfg=signal_cfg, kind="It")
+
+# 3) Define windows around instrument features (example from your plot)
+windows = [(13342, 13352), (13434, 13446)]
+
+# 4) Build drift model (choose one method)
+model = build_i0_drift_model(
+    i0_before, i0_after,
+    method="xcorr_windows",
+    windows=windows,
+    intensity_model="scale_offset",   # or "scale_offset_slope"
+)
+
+print(i0_change_report(i0_before, i0_after, model))
+
+# 5) Compute mu for a scan acquired halfway between I0_before and I0_after
+mu_cfg = MuConfig(log_base="ln", deglitch=True, smooth_window=7)
+i0_fit_cfg = I0FitConfig(enabled=True, method="chebyshev", degree=40)
+
+mu_spec = compute_mu_bracketed(
+    it_spec, i0_before, i0_after,
+    alpha=0.5,
+    drift_model=model,
+    i0_fit_cfg=i0_fit_cfg,
+    mu_cfg=mu_cfg,
+)
+
+# 6) Plot
+plot_spectra([i0_before, i0_after], title="I0 before/after", ylabel="I0 (counts/s)")
+plot_spectra([mu_spec], title="mu(E)", ylabel="mu(E)")
+"""
