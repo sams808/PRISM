@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import io
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 import re
 import zipfile
 from dataclasses import dataclass, field
@@ -315,6 +315,98 @@ def _require_larch():
         raise ImportError(
             "xraylarch is required for Athena-like processing. Install with: pip install xraylarch"
         ) from exc
+
+
+def infer_xas_edge_from_spectrum(
+    energy_ev: np.ndarray,
+    mu: np.ndarray,
+    *,
+    roi_min: Optional[float] = None,
+    roi_max: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Infer element/edge directly from energy window and Larch tools.
+
+    If roi_min/roi_max are provided, they define the target energy window used
+    for edge matching and for estimating e0. This is intended for EasyXAFS
+    scan_def['ROI_Scaled'] windows.
+
+    Returns a dict with at least:
+      - element: chemical symbol (e.g. "Fe")
+      - edge: edge name (e.g. "K", "L3")
+      - label: compact label (e.g. "Fe K")
+      - e0: detected edge position from find_e0
+      - edge_energy: tabulated edge energy for selected element/edge
+    Returns {} when Larch/xraydb is unavailable or no robust match is found.
+    """
+    try:
+        from larch.xafs import find_e0
+        from larch import xraydb
+    except Exception:
+        return {}
+
+    e = np.asarray(energy_ev, dtype=float)
+    m = np.asarray(mu, dtype=float)
+    mask = np.isfinite(e) & np.isfinite(m)
+    if mask.sum() < 8:
+        return {}
+    e = e[mask]
+    m = m[mask]
+    order = np.argsort(e, kind="mergesort")
+    e = e[order]
+    m = m[order]
+
+    e_roi = e
+    m_roi = m
+    if roi_min is not None and roi_max is not None:
+        lo = float(min(roi_min, roi_max))
+        hi = float(max(roi_min, roi_max))
+        roi_mask = (e >= lo) & (e <= hi)
+        if int(np.count_nonzero(roi_mask)) >= 8:
+            e_roi = e[roi_mask]
+            m_roi = m[roi_mask]
+
+    try:
+        e0 = float(find_e0(energy=e_roi, mu=m_roi))
+    except Exception:
+        return {}
+
+    e_min, e_max = float(np.nanmin(e_roi)), float(np.nanmax(e_roi))
+    window_pad = max(25.0, 0.01 * (e_max - e_min))
+
+    best: Optional[Dict[str, Any]] = None
+    for z in range(1, 99):
+        symbol = xraydb.atomic_symbol(z)
+        if not symbol:
+            continue
+        try:
+            edges = xraydb.xray_edges(symbol)
+        except Exception:
+            continue
+        if not edges:
+            continue
+
+        for edge_name, edge_obj in edges.items():
+            edge_energy = float(getattr(edge_obj, "energy", np.nan))
+            if not np.isfinite(edge_energy):
+                continue
+            if edge_energy < (e_min - window_pad) or edge_energy > (e_max + window_pad):
+                continue
+            delta = abs(edge_energy - e0)
+            candidate = {
+                "element": symbol,
+                "edge": str(edge_name),
+                "label": f"{symbol} {edge_name}",
+                "e0": e0,
+                "edge_energy": edge_energy,
+                "delta_e0": float(delta),
+                "roi_min": e_min,
+                "roi_max": e_max,
+            }
+            if best is None or candidate["delta_e0"] < best["delta_e0"]:
+                best = candidate
+
+    return best or {}
 
 
 @dataclass
