@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import io
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional, Union
+import re
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -20,6 +24,145 @@ class XASData:
     it: np.ndarray
 
 
+@dataclass
+class Bundle:
+    name: str
+    df: pd.DataFrame
+    scan_def: dict
+    metadata: dict
+    path: str
+    npz_bytes: Optional[bytes] = None
+
+
+def _safe_json_load_path(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+
+
+def _safe_json_load_bytes(b: bytes) -> dict:
+    return json.loads(b.decode("utf-8", errors="ignore"))
+
+
+def _group_zip_members_by_dataset(members: List[str]) -> Dict[str, Dict[str, str]]:
+    """
+    Groups zip members into dataset groups keyed by a dataset root path.
+
+    Returns:
+      {group_key: {"csv": <member>, "npz": <member>, "scan_def": <member>, "metadata": <member>}}
+    Works for zips where files are at root OR inside subfolders.
+    """
+    csvs = [m for m in members if re.search(r"_exd\.csv$", m, flags=re.IGNORECASE)]
+    if not csvs:
+        return {}
+
+    groups: Dict[str, Dict[str, str]] = {}
+    for csv in csvs:
+        key = str(Path(csv).parent).replace("\\", "/")
+        if key == ".":
+            key = ""
+        groups.setdefault(key, {})
+        groups[key]["csv"] = csv
+
+    def find_in_group(key: str, pattern: str) -> Optional[str]:
+        prefix = (key.rstrip("/") + "/") if key else ""
+        in_same = [m for m in members if m.startswith(prefix) and re.search(pattern, m, re.IGNORECASE)]
+        if in_same:
+            return in_same[0]
+        in_root = [m for m in members if "/" not in m.strip("/") and re.search(pattern, m, re.IGNORECASE)]
+        return in_root[0] if in_root else None
+
+    for key in list(groups.keys()):
+        groups[key]["npz"] = find_in_group(key, r"_mcas\.npz$")
+        groups[key]["scan_def"] = find_in_group(key, r"(?:^|/)scan_def\.json$")
+        groups[key]["metadata"] = find_in_group(key, r"(?:^|/)metadata\.json$")
+
+    return {k: v for k, v in groups.items() if "csv" in v}
+
+
+def read_bundle(path: Union[str, Path]) -> Bundle:
+    path = Path(path)
+    if path.is_dir():
+        csvs = sorted(path.glob("*_exd.csv"))
+        if not csvs:
+            raise FileNotFoundError(f"No '*_exd.csv' found in {path}")
+
+        npzs = sorted(path.glob("*_mcas.npz"))
+        scan_p = path / "scan_def.json"
+        meta_p = path / "metadata.json"
+
+        df = pd.read_csv(csvs[0])
+        df.attrs["source_csv"] = csvs[0].name
+
+        return Bundle(
+            name=path.name,
+            df=df,
+            scan_def=_safe_json_load_path(scan_p) if scan_p.exists() else {},
+            metadata=_safe_json_load_path(meta_p) if meta_p.exists() else {},
+            path=str(path),
+            npz_bytes=npzs[0].read_bytes() if npzs else None,
+        )
+
+    if path.is_file() and path.suffix.lower() == ".zip":
+        bundles = read_bundles_from_zip(path)
+        if not bundles:
+            raise FileNotFoundError(f"No '*_exd.csv' found in zip: {path}")
+        if len(bundles) > 1:
+            raise ValueError(f"Zip contains multiple datasets; use read_bundles(...) for {path}")
+        return bundles[0]
+
+    raise ValueError("Path must be a bundle directory or a .zip bundle.")
+
+
+def read_bundles_from_zip(zip_path: Union[str, Path]) -> List[Bundle]:
+    zip_path = Path(zip_path)
+    with zipfile.ZipFile(zip_path, "r") as z:
+        members = z.namelist()
+        groups = _group_zip_members_by_dataset(members)
+        if not groups:
+            raise FileNotFoundError(f"No '*_exd.csv' found in zip: {zip_path}")
+
+        bundles: List[Bundle] = []
+        for key, files in groups.items():
+            csv_m = files["csv"]
+            df = pd.read_csv(io.BytesIO(z.read(csv_m)))
+            df.attrs["source_csv"] = csv_m
+
+            scan_def = _safe_json_load_bytes(z.read(files["scan_def"])) if files.get("scan_def") else {}
+            metadata = _safe_json_load_bytes(z.read(files["metadata"])) if files.get("metadata") else {}
+            npz_bytes = z.read(files["npz"]) if files.get("npz") else None
+
+            csv_stem = Path(csv_m).stem
+            ds_name = Path(key).name if key else csv_stem
+            name = f"{zip_path.stem}__{ds_name}" if len(groups) > 1 else zip_path.stem
+
+            bundles.append(
+                Bundle(
+                    name=name,
+                    df=df,
+                    scan_def=scan_def,
+                    metadata=metadata,
+                    path=str(zip_path),
+                    npz_bytes=npz_bytes,
+                )
+            )
+        return bundles
+
+
+def read_bundles(paths: Union[str, Path, List[Union[str, Path]]]) -> List[Bundle]:
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+
+    out: List[Bundle] = []
+    for p in paths:
+        p = Path(p)
+        if p.is_dir():
+            out.append(read_bundle(p))
+        elif p.is_file() and p.suffix.lower() == ".zip":
+            out.extend(read_bundles_from_zip(p))
+        else:
+            raise ValueError(f"Unsupported path: {p}")
+    return out
+
+
 def _find_col(columns: list[str], patterns: list[str]) -> Optional[str]:
     for pattern in patterns:
         for col in columns:
@@ -28,15 +171,14 @@ def _find_col(columns: list[str], patterns: list[str]) -> Optional[str]:
     return None
 
 
-def parse_xas_file(path: str) -> XASData:
-    df = pd.read_csv(path, sep=None, engine="python", comment="#")
+def _xasdata_from_df(df: pd.DataFrame, path: str) -> XASData:
     df = df.dropna(how="all", axis=0).dropna(how="all", axis=1)
     cols = [str(c).strip() for c in df.columns]
     df.columns = cols
 
-    energy_col = _find_col(cols, ["energy", "ev"])
+    energy_col = _find_col(cols, ["energy", "ev", "angle"])
     i0_col = _find_col(cols, ["i0", "incident"])
-    it_col = _find_col(cols, ["it", "trans", "transmitted"])
+    it_col = _find_col(cols, ["it", "trans", "transmitted", "if", "fluor"])
 
     numeric_cols = [c for c in cols if pd.to_numeric(df[c], errors="coerce").notna().sum() > max(8, int(len(df) * 0.25))]
     if energy_col is None and numeric_cols:
@@ -62,7 +204,7 @@ def parse_xas_file(path: str) -> XASData:
     order = np.argsort(energy, kind="mergesort")
 
     return XASData(
-        path=str(Path(path)),
+        path=path,
         df=df,
         energy_col=energy_col,
         i0_col=i0_col,
@@ -71,6 +213,15 @@ def parse_xas_file(path: str) -> XASData:
         i0=i0[order],
         it=it[order],
     )
+
+
+def parse_xas_file(path: str) -> XASData:
+    df = pd.read_csv(path, sep=None, engine="python", comment="#")
+    return _xasdata_from_df(df, str(Path(path)))
+
+
+def parse_xas_bundle(bundle: Bundle) -> XASData:
+    return _xasdata_from_df(bundle.df.copy(), bundle.path)
 
 
 def moving_average(y: np.ndarray, window: int = 7) -> np.ndarray:

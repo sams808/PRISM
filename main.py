@@ -39,7 +39,7 @@ from ui_fit_params import FitParamWindow
 from ui_simple_plot import SimplePlotWindow
 from ui_dta_processing import DtaProcessingWindow
 from ui_xas_processing import XASProcessingWindow
-from xas_processing import parse_xas_file, compute_mu
+from xas_processing import parse_xas_file, compute_mu, read_bundles, parse_xas_bundle
 # cif_tools.py est importé par ui_simple_plot.py
 
 # Ignore matplotlib layout warnings (Tkinter UI redraw)
@@ -954,44 +954,79 @@ class RamanApp:
             messagebox.showinfo("Import", "No new files were added.", parent=self.root)
 
     def import_xas_files(self):
-        """Import XAS files with Energy/I0/It parsing and precompute mu(E)."""
+        """Import XAS files (text/csv/dat or EasyXAFS zip bundles) and precompute mu(E)."""
         paths = filedialog.askopenfilenames(
-            title="Select XAS files",
-            filetypes=[("Text/CSV", "*.txt *.csv *.dat"), ("All files", "*.*")],
+            title="Select XAS files or zip bundles",
+            filetypes=[("XAS + bundles", "*.txt *.csv *.dat *.zip"), ("All files", "*.*")],
         )
         if not paths:
             return
 
         added = False
         for path in paths:
-            if path in self.file_paths:
-                continue
+            path_obj = Path(path)
             try:
-                xas = parse_xas_file(path)
-                mu = compute_mu(xas)
+                if path_obj.suffix.lower() == ".zip":
+                    bundles = read_bundles(path_obj)
+                    for idx, bundle in enumerate(bundles):
+                        synthetic_path = f"{path}::{bundle.name}::{idx}"
+                        if synthetic_path in self.file_paths:
+                            continue
+                        xas = parse_xas_bundle(bundle)
+                        mu = compute_mu(xas)
+                        display_name = Path(bundle.metadata.get("source_file", "")).name or Path(bundle.df.attrs.get("source_csv", "")).name
+                        if not display_name:
+                            csv_cols = [str(c) for c in bundle.df.columns]
+                            display_name = f"{bundle.name}.csv" if csv_cols else f"{bundle.name}_exd.csv"
+                        self.xy_by_path[synthetic_path] = {
+                            "kind": "XAS",
+                            "x": xas.energy,
+                            "y": mu,
+                            "df": xas.df,
+                            "meta": {
+                                "selected_parser": "xas_bundle_zip",
+                                "energy_col": xas.energy_col,
+                                "i0_col": xas.i0_col,
+                                "it_col": xas.it_col,
+                                "scan_def": bundle.scan_def,
+                                "metadata": bundle.metadata,
+                                "display_filename": display_name,
+                            },
+                            "x_col": xas.energy_col,
+                            "y_col": "mu(E)",
+                            "xas": xas,
+                        }
+                        self.file_paths.append(synthetic_path)
+                        self.file_titles.append(bundle.name)
+                        self.file_statuses.append("imported")
+                        added = True
+                else:
+                    if path in self.file_paths:
+                        continue
+                    xas = parse_xas_file(path)
+                    mu = compute_mu(xas)
+                    self.xy_by_path[path] = {
+                        "kind": "XAS",
+                        "x": xas.energy,
+                        "y": mu,
+                        "df": xas.df,
+                        "meta": {
+                            "selected_parser": "xas_text",
+                            "energy_col": xas.energy_col,
+                            "i0_col": xas.i0_col,
+                            "it_col": xas.it_col,
+                        },
+                        "x_col": xas.energy_col,
+                        "y_col": "mu(E)",
+                        "xas": xas,
+                    }
+                    self.file_paths.append(path)
+                    self.file_titles.append(Path(path).stem)
+                    self.file_statuses.append("imported")
+                    added = True
             except Exception as e:
                 messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
                 continue
-
-            self.xy_by_path[path] = {
-                "kind": "XAS",
-                "x": xas.energy,
-                "y": mu,
-                "df": xas.df,
-                "meta": {
-                    "selected_parser": "xas_text",
-                    "energy_col": xas.energy_col,
-                    "i0_col": xas.i0_col,
-                    "it_col": xas.it_col,
-                },
-                "x_col": xas.energy_col,
-                "y_col": "mu(E)",
-                "xas": xas,
-            }
-            self.file_paths.append(path)
-            self.file_titles.append(Path(path).stem)
-            self.file_statuses.append("imported")
-            added = True
 
         if added:
             self.update_file_listbox()
@@ -1006,6 +1041,29 @@ class RamanApp:
             self.file_titles = []
             self.file_statuses = []
             self.update_file_listbox()
+
+    def _xas_edge_label(self, rec: dict) -> str:
+        meta = (rec or {}).get("meta") or {}
+        scan_def = meta.get("scan_def") or {}
+        xmeta = meta.get("metadata") or {}
+        edge = xmeta.get("edge") or scan_def.get("edge")
+        element = xmeta.get("element") or scan_def.get("element")
+        if edge and element and str(edge).lower().startswith(str(element).lower()):
+            token = str(edge)
+        elif edge and element:
+            token = f"{element}{edge}"
+        else:
+            token = edge or element
+        return f"XAS({token}) " if token else "XAS "
+
+    def _display_filename(self, path: str, rec: dict | None) -> str:
+        meta = (rec or {}).get("meta") or {}
+        custom_name = meta.get("display_filename")
+        if custom_name:
+            return str(custom_name)
+        if "::" in path:
+            return path.split("::", 1)[0].split(os.sep)[-1]
+        return os.path.basename(path)
 
     def update_file_listbox(self):
         self.text_files.config(state="normal", bg=self.palette["card"], fg=self.palette["text"])
@@ -1027,7 +1085,7 @@ class RamanApp:
                     indicator_label = "DTA "
                 elif kind == "XAS":
                     indicator_tag = "type_xas"
-                    indicator_label = "XAS "
+                    indicator_label = self._xas_edge_label(rec)
                 else:
                     indicator_tag = "type_xy"
                     indicator_label = "XY  "
@@ -1036,7 +1094,7 @@ class RamanApp:
                 self.text_files.insert(tk.END, indicator_label, indicator_tag)
 
             self.text_files.insert(tk.END, title, tag)
-            self.text_files.insert(tk.END, f"  ({os.path.basename(path)})\n", "filename")
+            self.text_files.insert(tk.END, f"  ({self._display_filename(path, rec)})\n", "filename")
         self.text_files.tag_configure("sum", foreground=self.palette["accent_alt"], font=("Consolas", 11, "bold"))
         self.text_files.tag_configure("baseline", foreground=self.palette["accent_pink"], font=("Consolas", 11, "bold"))
         self.text_files.tag_configure("title", foreground=self.palette["text"], font=("Consolas", 11, "bold"))
