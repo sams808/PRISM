@@ -317,19 +317,9 @@ def _require_larch():
         ) from exc
 
 
-def infer_xas_edge_from_spectrum(
-    energy_ev: np.ndarray,
-    mu: np.ndarray,
-    *,
-    roi_min: Optional[float] = None,
-    roi_max: Optional[float] = None,
-) -> Dict[str, Any]:
+def infer_xas_edge_from_spectrum(energy_ev: np.ndarray, mu: np.ndarray) -> Dict[str, Any]:
     """
-    Infer element/edge directly from energy window and Larch tools.
-
-    If roi_min/roi_max are provided, they define the target energy window used
-    for edge matching and for estimating e0. This is intended for EasyXAFS
-    scan_def['ROI_Scaled'] windows.
+    Infer element/edge directly from spectrum energy window and Larch tools.
 
     Returns a dict with at least:
       - element: chemical symbol (e.g. "Fe")
@@ -356,22 +346,12 @@ def infer_xas_edge_from_spectrum(
     e = e[order]
     m = m[order]
 
-    e_roi = e
-    m_roi = m
-    if roi_min is not None and roi_max is not None:
-        lo = float(min(roi_min, roi_max))
-        hi = float(max(roi_min, roi_max))
-        roi_mask = (e >= lo) & (e <= hi)
-        if int(np.count_nonzero(roi_mask)) >= 8:
-            e_roi = e[roi_mask]
-            m_roi = m[roi_mask]
-
     try:
-        e0 = float(find_e0(energy=e_roi, mu=m_roi))
+        e0 = float(find_e0(energy=e, mu=m))
     except Exception:
         return {}
 
-    e_min, e_max = float(np.nanmin(e_roi)), float(np.nanmax(e_roi))
+    e_min, e_max = float(np.nanmin(e)), float(np.nanmax(e))
     window_pad = max(25.0, 0.01 * (e_max - e_min))
 
     best: Optional[Dict[str, Any]] = None
@@ -400,8 +380,6 @@ def infer_xas_edge_from_spectrum(
                 "e0": e0,
                 "edge_energy": edge_energy,
                 "delta_e0": float(delta),
-                "roi_min": e_min,
-                "roi_max": e_max,
             }
             if best is None or candidate["delta_e0"] < best["delta_e0"]:
                 best = candidate

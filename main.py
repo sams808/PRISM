@@ -974,10 +974,7 @@ class RamanApp:
                             continue
                         xas = parse_xas_bundle(bundle)
                         mu = compute_mu(xas)
-                        roi_scaled = (bundle.scan_def or {}).get("ROI_Scaled") or {}
-                        roi_min = roi_scaled.get("roi_min")
-                        roi_max = roi_scaled.get("roi_max")
-                        inferred_edge = infer_xas_edge_from_spectrum(xas.energy, mu, roi_min=roi_min, roi_max=roi_max)
+                        inferred_edge = infer_xas_edge_from_spectrum(xas.energy, mu)
                         source_csv = Path(bundle.df.attrs.get("source_csv", "")).name
                         display_name = source_csv or Path(bundle.metadata.get("source_file", "")).name or f"{bundle.name}_exd.csv"
                         edge_label = inferred_edge.get("label")
@@ -1057,7 +1054,18 @@ class RamanApp:
         inferred_label = inferred.get("label")
         if inferred_label:
             return f"XAS({inferred_label}) "
-        return "XAS "
+
+        scan_def = meta.get("scan_def") or {}
+        xmeta = meta.get("metadata") or {}
+        edge = xmeta.get("edge") or xmeta.get("xray_edge") or scan_def.get("edge") or scan_def.get("xray_edge")
+        element = xmeta.get("element") or xmeta.get("xray_element") or scan_def.get("element") or scan_def.get("xray_element")
+        if edge and element and str(edge).lower().startswith(str(element).lower()):
+            token = str(edge)
+        elif edge and element:
+            token = f"{element}{edge}"
+        else:
+            token = edge or element
+        return f"XAS({token}) " if token else "XAS "
 
     def _display_filename(self, path: str, rec: dict | None) -> str:
         meta = (rec or {}).get("meta") or {}
