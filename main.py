@@ -39,7 +39,7 @@ from ui_fit_params import FitParamWindow
 from ui_simple_plot import SimplePlotWindow
 from ui_dta_processing import DtaProcessingWindow
 from ui_xas_processing import XASProcessingWindow
-from xas_processing import parse_xas_file, compute_mu, read_bundles, parse_xas_bundle
+from xas_processing import parse_xas_file, compute_mu, read_bundles, parse_xas_bundle, infer_xas_edge_from_spectrum
 # cif_tools.py est importé par ui_simple_plot.py
 
 # Ignore matplotlib layout warnings (Tkinter UI redraw)
@@ -782,7 +782,7 @@ class RamanApp:
         }
 
         self.file_paths.append(path)
-        self.file_titles.append(Path(path).stem)
+        self.file_titles.append(f"{Path(path).stem} [{edge_label}]" if edge_label else Path(path).stem)
         self.file_statuses.append("imported")
 
     def _setup_layout(self):
@@ -974,8 +974,11 @@ class RamanApp:
                             continue
                         xas = parse_xas_bundle(bundle)
                         mu = compute_mu(xas)
+                        inferred_edge = infer_xas_edge_from_spectrum(xas.energy, mu)
                         source_csv = Path(bundle.df.attrs.get("source_csv", "")).name
                         display_name = source_csv or Path(bundle.metadata.get("source_file", "")).name or f"{bundle.name}_exd.csv"
+                        edge_label = inferred_edge.get("label")
+                        title = f"{bundle.name} [{edge_label}]" if edge_label else bundle.name
                         self.xy_by_path[synthetic_path] = {
                             "kind": "XAS",
                             "x": xas.energy,
@@ -988,6 +991,7 @@ class RamanApp:
                                 "it_col": xas.it_col,
                                 "scan_def": bundle.scan_def,
                                 "metadata": bundle.metadata,
+                                "inferred_edge": inferred_edge,
                                 "display_filename": display_name,
                                 "source_csv": source_csv,
                             },
@@ -996,7 +1000,7 @@ class RamanApp:
                             "xas": xas,
                         }
                         self.file_paths.append(synthetic_path)
-                        self.file_titles.append(bundle.name)
+                        self.file_titles.append(title)
                         self.file_statuses.append("imported")
                         added = True
                 else:
@@ -1004,6 +1008,8 @@ class RamanApp:
                         continue
                     xas = parse_xas_file(path)
                     mu = compute_mu(xas)
+                    inferred_edge = infer_xas_edge_from_spectrum(xas.energy, mu)
+                    edge_label = inferred_edge.get("label")
                     self.xy_by_path[path] = {
                         "kind": "XAS",
                         "x": xas.energy,
@@ -1014,13 +1020,14 @@ class RamanApp:
                             "energy_col": xas.energy_col,
                             "i0_col": xas.i0_col,
                             "it_col": xas.it_col,
+                            "inferred_edge": inferred_edge,
                         },
                         "x_col": xas.energy_col,
                         "y_col": "mu(E)",
                         "xas": xas,
                     }
                     self.file_paths.append(path)
-                    self.file_titles.append(Path(path).stem)
+                    self.file_titles.append(f"{Path(path).stem} [{edge_label}]" if edge_label else Path(path).stem)
                     self.file_statuses.append("imported")
                     added = True
             except Exception as e:
@@ -1043,6 +1050,11 @@ class RamanApp:
 
     def _xas_edge_label(self, rec: dict) -> str:
         meta = (rec or {}).get("meta") or {}
+        inferred = meta.get("inferred_edge") or {}
+        inferred_label = inferred.get("label")
+        if inferred_label:
+            return f"XAS({inferred_label}) "
+
         scan_def = meta.get("scan_def") or {}
         xmeta = meta.get("metadata") or {}
         edge = xmeta.get("edge") or xmeta.get("xray_edge") or scan_def.get("edge") or scan_def.get("xray_edge")
