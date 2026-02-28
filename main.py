@@ -38,8 +38,14 @@ from io_universal import load_any as _io_load_any
 from ui_fit_params import FitParamWindow
 from ui_simple_plot import SimplePlotWindow
 from ui_dta_processing import DtaProcessingWindow
-from ui_xas_processing import XASProcessingWindow
-from xas_processing import parse_xas_file, compute_mu, read_bundles, parse_xas_bundle, infer_xas_edge_from_spectrum
+from ui_xas_processing import (
+    XASProcessingWindow,
+    parse_xas_file,
+    compute_mu,
+    read_bundles,
+    parse_xas_bundle,
+    infer_xas_edge_from_spectrum,
+)
 # cif_tools.py est importé par ui_simple_plot.py
 
 # Ignore matplotlib layout warnings (Tkinter UI redraw)

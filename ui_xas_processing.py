@@ -24,6 +24,7 @@ import io
 import json
 import re
 import zipfile
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -468,6 +469,37 @@ def infer_xas_edge_from_roi_scaled(
     cmax = e_win_max + pad
 
     best = None
+    for sym, edge_name, ee in _cached_edge_energy_table():
+        if ee < cmin or ee > cmax:
+            continue
+        delta = abs(ee - e0)
+        if delta > max_delta_ev:
+            continue
+        cand = {
+            "element": sym,
+            "edge": str(edge_name),
+            "label": f"XAS({sym} {edge_name})",
+            "e0": float(e0),
+            "edge_energy": float(ee),
+            "delta_e0": float(delta),
+            "roi_scaled_min": float(e_win_min),
+            "roi_scaled_max": float(e_win_max),
+        }
+        if best is None or cand["delta_e0"] < best["delta_e0"]:
+            best = cand
+
+    return best or {}
+
+
+@lru_cache(maxsize=1)
+def _cached_edge_energy_table() -> Tuple[Tuple[str, str, float], ...]:
+    """Cache all tabulated edge energies to avoid repeated xraydb scans."""
+    try:
+        _, xraydb, *_ = _require_larch()
+    except Exception:
+        return tuple()
+
+    out: List[Tuple[str, str, float]] = []
     for z in range(1, 99):
         sym = xraydb.atomic_symbol(z)
         if not sym:
@@ -487,26 +519,48 @@ def infer_xas_edge_from_roi_scaled(
                 ee = float(ee)
             except Exception:
                 continue
-            if not np.isfinite(ee):
-                continue
-            if ee < cmin or ee > cmax:
-                continue
-            delta = abs(ee - e0)
-            if delta > max_delta_ev:
-                continue
-            cand = {
-                "element": sym,
-                "edge": str(edge_name),
-                "label": f"XAS({sym} {edge_name})",
-                "e0": float(e0),
-                "edge_energy": float(ee),
-                "delta_e0": float(delta),
-                "roi_scaled_min": float(e_win_min),
-                "roi_scaled_max": float(e_win_max),
-            }
-            if best is None or cand["delta_e0"] < best["delta_e0"]:
-                best = cand
+            if np.isfinite(ee):
+                out.append((sym, str(edge_name), ee))
+    return tuple(out)
 
+
+def infer_xas_edge_from_spectrum(energy_ev: np.ndarray, mu: np.ndarray, *, max_delta_ev: float = 80.0) -> Dict[str, Any]:
+    """Infer XAS edge from spectrum only (no scan_def required)."""
+    try:
+        _, _, find_e0, *_ = _require_larch()
+        e0 = float(find_e0(energy=energy_ev, mu=mu))
+    except Exception:
+        e = np.asarray(energy_ev, dtype=float)
+        m = np.asarray(mu, dtype=float)
+        mask = np.isfinite(e) & np.isfinite(m)
+        if mask.sum() < 8:
+            return {}
+        e = e[mask]
+        m = m[mask]
+        order = np.argsort(e, kind="mergesort")
+        e = e[order]
+        m = m[order]
+        try:
+            d = np.gradient(m, e)
+            e0 = float(e[int(np.nanargmax(d))])
+        except Exception:
+            return {}
+
+    best = None
+    for sym, edge_name, edge_energy in _cached_edge_energy_table():
+        delta = abs(edge_energy - e0)
+        if delta > max_delta_ev:
+            continue
+        cand = {
+            "element": sym,
+            "edge": edge_name,
+            "label": f"{sym} {edge_name}",
+            "e0": e0,
+            "edge_energy": edge_energy,
+            "delta_e0": delta,
+        }
+        if best is None or cand["delta_e0"] < best["delta_e0"]:
+            best = cand
     return best or {}
 
 
