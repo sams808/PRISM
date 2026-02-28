@@ -81,11 +81,15 @@ def _group_zip_members_by_dataset(members: List[str]) -> Dict[str, Dict[str, str
 def read_bundle(path: Union[str, Path]) -> Bundle:
     path = Path(path)
     if path.is_dir():
-        csvs = sorted(path.glob("*_exd.csv"))
+        csvs = list(path.glob("*_exd.csv"))
         if not csvs:
             raise FileNotFoundError(f"No '*_exd.csv' found in {path}")
+        if len(csvs) > 1:
+            raise ValueError(f"Multiple '*_exd.csv' files found in {path}, which is ambiguous for a single bundle.")
 
-        npzs = sorted(path.glob("*_mcas.npz"))
+        npzs = list(path.glob("*_mcas.npz"))
+        if len(npzs) > 1:
+            raise ValueError(f"Multiple '*_mcas.npz' files found in {path}, which is ambiguous for a single bundle.")
         scan_p = path / "scan_def.json"
         meta_p = path / "metadata.json"
 
