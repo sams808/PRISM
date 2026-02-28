@@ -38,6 +38,8 @@ from io_universal import load_any as _io_load_any
 from ui_fit_params import FitParamWindow
 from ui_simple_plot import SimplePlotWindow
 from ui_dta_processing import DtaProcessingWindow
+from ui_xas_processing import XASProcessingWindow
+from xas_processing import parse_xas_file, compute_mu
 # cif_tools.py est importé par ui_simple_plot.py
 
 # Ignore matplotlib layout warnings (Tkinter UI redraw)
@@ -143,6 +145,7 @@ def _apply_futuristic_style(widget):
     _button_style("Ghost.TButton", palette["accent"])
     _button_style("ImportXY.TButton", "#b7d8ff")
     _button_style("ImportDTA.TButton", palette["accent_alt"])
+    _button_style("ImportXAS.TButton", "#fff3bf")
     _button_style("Exit.TButton", palette["accent_warn"])
     style.configure(
         "TButton",
@@ -317,6 +320,8 @@ def _friendly_kind(meta: Dict) -> str:
         return "DTA / STA table"
     if name == "saxs_edf_ascii":
         return "SAXS (EDF ASCII)"
+    if name == "xas_text":
+        return "XAS (Energy/I0/It)"
     return "XY (generic)"
 
 
@@ -758,6 +763,7 @@ class RamanApp:
         # NEW: cache des mappings X/Y choisis (payloads LoadedXY)
         self.xy_by_path: Dict[str, LoadedXY] = {}
         self.dta_windows: List[tk.Toplevel] = []
+        self.xas_windows: List[tk.Toplevel] = []
         # Layout
         self._setup_layout()
         self.update_file_listbox()
@@ -820,6 +826,7 @@ class RamanApp:
         imports.pack(fill="x", pady=(0, 10))
         ttk.Button(imports, text="Import XY", command=self.import_xy_files, style="ImportXY.TButton").pack(pady=4, fill="x")
         ttk.Button(imports, text="Import DTA", command=self.import_dta_files, style="ImportDTA.TButton").pack(pady=4, fill="x")
+        ttk.Button(imports, text="Import XAS", command=self.import_xas_files, style="ImportXAS.TButton").pack(pady=4, fill="x")
 
         manage = ttk.LabelFrame(frame_left, text="Organize", padding=10, style="Card.TLabelframe", labelanchor="n")
         manage.pack(fill="x", pady=(0, 10))
@@ -859,6 +866,7 @@ class RamanApp:
         ttk.Label(frame_right, text="Launch dedicated tooling per task.", style="SectionNote.TLabel").pack(pady=(0,8), anchor="w")
         ttk.Button(frame_right, text="Simple plot", command=self.simple_plot, style="Primary.TButton").pack(pady=4, fill="x")
         ttk.Button(frame_right, text="DTA processing", command=self.open_dta_processing, style="Primary.TButton").pack(pady=4, fill="x")
+        ttk.Button(frame_right, text="XAS processing", command=self.open_xas_processing, style="Primary.TButton").pack(pady=4, fill="x")
         ttk.Button(frame_right, text="Sum spectra", command=self.sum_spectra, style="Primary.TButton").pack(pady=4, fill="x")
         ttk.Button(frame_right, text="1 fit", command=self.one_fit, style="Primary.TButton").pack(pady=4, fill="x")
         ttk.Button(frame_right, text="Multi fit", command=self.multi_fit, style="Primary.TButton").pack(pady=4, fill="x")
@@ -945,6 +953,51 @@ class RamanApp:
         else:
             messagebox.showinfo("Import", "No new files were added.", parent=self.root)
 
+    def import_xas_files(self):
+        """Import XAS files with Energy/I0/It parsing and precompute mu(E)."""
+        paths = filedialog.askopenfilenames(
+            title="Select XAS files",
+            filetypes=[("Text/CSV", "*.txt *.csv *.dat"), ("All files", "*.*")],
+        )
+        if not paths:
+            return
+
+        added = False
+        for path in paths:
+            if path in self.file_paths:
+                continue
+            try:
+                xas = parse_xas_file(path)
+                mu = compute_mu(xas)
+            except Exception as e:
+                messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
+                continue
+
+            self.xy_by_path[path] = {
+                "kind": "XAS",
+                "x": xas.energy,
+                "y": mu,
+                "df": xas.df,
+                "meta": {
+                    "selected_parser": "xas_text",
+                    "energy_col": xas.energy_col,
+                    "i0_col": xas.i0_col,
+                    "it_col": xas.it_col,
+                },
+                "x_col": xas.energy_col,
+                "y_col": "mu(E)",
+                "xas": xas,
+            }
+            self.file_paths.append(path)
+            self.file_titles.append(Path(path).stem)
+            self.file_statuses.append("imported")
+            added = True
+
+        if added:
+            self.update_file_listbox()
+        else:
+            messagebox.showinfo("Import", "No new files were added.", parent=self.root)
+
     def clear_imports(self):
         """Remove all imported files after confirmation."""
         resp = messagebox.askyesno("Clear imports", "Are you sure you want to remove all imported files?")
@@ -972,6 +1025,9 @@ class RamanApp:
                 if kind in {"DTA", "TA_SDT"}:
                     indicator_tag = "type_dta"
                     indicator_label = "DTA "
+                elif kind == "XAS":
+                    indicator_tag = "type_xas"
+                    indicator_label = "XAS "
                 else:
                     indicator_tag = "type_xy"
                     indicator_label = "XY  "
@@ -985,6 +1041,7 @@ class RamanApp:
         self.text_files.tag_configure("baseline", foreground=self.palette["accent_pink"], font=("Consolas", 11, "bold"))
         self.text_files.tag_configure("title", foreground=self.palette["text"], font=("Consolas", 11, "bold"))
         self.text_files.tag_configure("type_dta", foreground="#2e9e6f", font=("Consolas", 9, "bold"))
+        self.text_files.tag_configure("type_xas", foreground="#b8860b", font=("Consolas", 9, "bold"))
         self.text_files.tag_configure("type_xy", foreground="#3b82f6", font=("Consolas", 9, "bold"))
         self.text_files.config(state="disabled")
         if hasattr(self, "lbl_hero_badge"):
@@ -1161,6 +1218,35 @@ class RamanApp:
 
         win.protocol("WM_DELETE_WINDOW", _cleanup)
         DtaProcessingWindow(win, records)
+
+
+    def open_xas_processing(self):
+        """Open the dedicated XAS processing window for imported XAS datasets."""
+        records = []
+        for path, title in zip(self.file_paths, self.file_titles):
+            rec = getattr(self, "xy_by_path", {}).get(path)
+            if not rec:
+                continue
+            if rec.get("kind") != "XAS" or "xas" not in rec:
+                continue
+            records.append({"title": title, "path": path, "xas": rec["xas"]})
+
+        if not records:
+            messagebox.showinfo("Info", "No XAS files imported.")
+            return
+
+        win = tk.Toplevel(self.root)
+        self.xas_windows.append(win)
+
+        def _cleanup():
+            try:
+                self.xas_windows.remove(win)
+            except ValueError:
+                pass
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _cleanup)
+        XASProcessingWindow(win, records)
 
     def on_new_file_exported(self, path, status="sum"):
         """
@@ -2674,6 +2760,7 @@ def main():
     filemenu = tk.Menu(menubar, tearoff=0)
     filemenu.add_command(label="Import XY", command=app.import_xy_files)
     filemenu.add_command(label="Import DTA", command=app.import_dta_files)
+    filemenu.add_command(label="Import XAS", command=app.import_xas_files)
     filemenu.add_separator()
     filemenu.add_command(label="Simple plot \tCtrl+P", command=app.simple_plot)
     filemenu.add_separator()
@@ -2685,6 +2772,7 @@ def main():
     root.bind("<Control-p>", lambda e: app.simple_plot())
     root.bind("<Control-o>", lambda e: app.import_xy_files())
     root.bind("<Control-d>", lambda e: app.import_dta_files())
+    root.bind("<Control-Shift-O>", lambda e: app.import_xas_files())
     root.bind("<Control-q>", lambda e: app.exit_app())
 
     # Quit propre si on ferme la croix
