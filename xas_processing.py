@@ -221,7 +221,7 @@ def parse_xas_file(path: str) -> XASData:
 
 
 def parse_xas_bundle(bundle: Bundle) -> XASData:
-    return _xasdata_from_df(bundle.df.copy(), bundle.path)
+    return _xasdata_from_df(bundle.df.copy(), f"{bundle.path}::{bundle.name}")
 
 
 def moving_average(y: np.ndarray, window: int = 7) -> np.ndarray:

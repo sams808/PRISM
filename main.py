@@ -966,18 +966,16 @@ class RamanApp:
         for path in paths:
             path_obj = Path(path)
             try:
-                if path_obj.suffix.lower() == ".zip":
+                if path_obj.suffix.lower() == ".zip" or path_obj.is_dir():
                     bundles = read_bundles(path_obj)
                     for idx, bundle in enumerate(bundles):
-                        synthetic_path = f"{path}::{bundle.name}::{idx}"
+                        synthetic_path = f"{path_obj}::{bundle.name}::{idx}"
                         if synthetic_path in self.file_paths:
                             continue
                         xas = parse_xas_bundle(bundle)
                         mu = compute_mu(xas)
-                        display_name = Path(bundle.metadata.get("source_file", "")).name or Path(bundle.df.attrs.get("source_csv", "")).name
-                        if not display_name:
-                            csv_cols = [str(c) for c in bundle.df.columns]
-                            display_name = f"{bundle.name}.csv" if csv_cols else f"{bundle.name}_exd.csv"
+                        source_csv = Path(bundle.df.attrs.get("source_csv", "")).name
+                        display_name = source_csv or Path(bundle.metadata.get("source_file", "")).name or f"{bundle.name}_exd.csv"
                         self.xy_by_path[synthetic_path] = {
                             "kind": "XAS",
                             "x": xas.energy,
@@ -991,6 +989,7 @@ class RamanApp:
                                 "scan_def": bundle.scan_def,
                                 "metadata": bundle.metadata,
                                 "display_filename": display_name,
+                                "source_csv": source_csv,
                             },
                             "x_col": xas.energy_col,
                             "y_col": "mu(E)",
@@ -1046,8 +1045,8 @@ class RamanApp:
         meta = (rec or {}).get("meta") or {}
         scan_def = meta.get("scan_def") or {}
         xmeta = meta.get("metadata") or {}
-        edge = xmeta.get("edge") or scan_def.get("edge")
-        element = xmeta.get("element") or scan_def.get("element")
+        edge = xmeta.get("edge") or xmeta.get("xray_edge") or scan_def.get("edge") or scan_def.get("xray_edge")
+        element = xmeta.get("element") or xmeta.get("xray_element") or scan_def.get("element") or scan_def.get("xray_element")
         if edge and element and str(edge).lower().startswith(str(element).lower()):
             token = str(edge)
         elif edge and element:
