@@ -21,8 +21,7 @@ except Exception:  # pragma: no cover
     tk = None
     ttk = None
 
-from xas_processing_v10 import (
-    XASUltimateApp,
+from EXAMPLES.EXAMPLE_xas_processing import (
     _extract_energy_angle_signal,
     infer_edge_label_from_roi_scaled,
     mu_from_transmission,
@@ -30,6 +29,7 @@ from xas_processing_v10 import (
     read_csv_dataset,
     read_easyxafs_zip,
 )
+from xas_processing_v10 import XASUltimateApp
 
 
 @dataclass
