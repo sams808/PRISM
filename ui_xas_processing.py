@@ -1,5 +1,5 @@
 """
-Compatibility XAS module backed by EXAMPLES.xas_processing_v10.
+Compatibility XAS module backed by xas_processing_v10.
 
 This module keeps the API expected by main.py while delegating core XAS
 processing logic to the v10 implementation.
@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover
     tk = None
     ttk = None
 
-from EXAMPLES.xas_processing_v10 import (
+from xas_processing_v10 import (
     XASUltimateApp,
     _extract_energy_angle_signal,
     infer_edge_label_from_roi_scaled,
@@ -237,7 +237,13 @@ def infer_xas_edge_from_roi_scaled(
     max_delta_ev: float = 80.0,
 ) -> Dict[str, Any]:
     label, e0 = infer_edge_label_from_roi_scaled(energy_ev, mu, scan_def, max_delta=float(max_delta_ev))
-    out: Dict[str, Any] = {"label": label}
+    out: Dict[str, Any] = {"label": "?"}
+    import re
+    m = re.match(r"^XAS\(([^\s\)\?]+)\s+([^\s\)\?]+)\)$", str(label))
+    if m:
+        out["element"] = m.group(1)
+        out["edge"] = m.group(2)
+        out["label"] = f"{m.group(1)} {m.group(2)}"
     if e0 is not None and np.isfinite(e0):
         out["e0"] = float(e0)
     return out
@@ -245,7 +251,7 @@ def infer_xas_edge_from_roi_scaled(
 
 def infer_xas_edge_from_spectrum(energy_ev: np.ndarray, mu: np.ndarray, *, max_delta_ev: float = 80.0) -> Dict[str, Any]:
     label, e0 = infer_edge_label_from_roi_scaled(energy_ev, mu, {}, max_delta=float(max_delta_ev))
-    out: Dict[str, Any] = {}
+    out: Dict[str, Any] = {"label": "?"}
     import re
     m = re.match(r"^XAS\(([^\s\)\?]+)\s+([^\s\)\?]+)\)$", str(label))
     if m:
