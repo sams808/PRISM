@@ -448,9 +448,56 @@ def _guess_col(columns: Iterable[str], patterns: List[str]) -> Optional[str]:
             if r.search(c): return c
     return None
 
+def _read_table_auto(src: Union[Path, io.BytesIO, bytes]) -> pd.DataFrame:
+    """Best-effort tabular reader for EasyXAFS-like text/CSV inputs."""
+    if isinstance(src, Path):
+        text = src.read_text(encoding="utf-8", errors="ignore")
+    elif isinstance(src, bytes):
+        text = src.decode("utf-8", errors="ignore")
+    else:
+        text = src.getvalue().decode("utf-8", errors="ignore")
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    first_data = next((ln for ln in lines if not ln.lstrip().startswith("#")), "")
+    if first_data:
+        parts = [p for p in re.split(r"[\s,;]+", first_data.strip()) if p]
+        try:
+            [float(p) for p in parts]
+            df = pd.read_csv(io.StringIO("\n".join(lines)), sep=r"[\s,;]+", engine="python", header=None, comment="#")
+            df.columns = [f"col_{i}" for i in range(df.shape[1])]
+            return df
+        except Exception:
+            pass
+
+    try:
+        return pd.read_csv(io.StringIO(text), sep=None, engine="python")
+    except Exception:
+        pass
+
+    numeric = []
+    for ln in lines:
+        if ln.lstrip().startswith("#"):
+            continue
+        parts = re.split(r"[\s,;]+", ln.strip())
+        try:
+            [float(p) for p in parts if p != ""]
+            numeric.append(ln)
+        except Exception:
+            continue
+
+    if not numeric:
+        raise ValueError("Could not parse file as tabular numeric dataset.")
+
+    df = pd.read_csv(io.StringIO("\n".join(numeric)), sep=r"[\s,;]+", engine="python", header=None)
+    df.columns = [f"col_{i}" for i in range(df.shape[1])]
+    return df
+
 def _extract_energy_angle_signal(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, str]]:
     e_col = _guess_col(df.columns, [r"energy.*ev", r"^energy$"])
-    if e_col is None: raise ValueError("Could not infer Energy(eV) column.")
+    if e_col is None:
+        numeric_cols = [str(c) for c in df.columns if np.isfinite(pd.to_numeric(df[c], errors="coerce").to_numpy(float)).mean() > 0.8]
+        if len(numeric_cols) >= 2: e_col = numeric_cols[0]
+        else: raise ValueError("Could not infer Energy(eV) column.")
     a_col = _guess_col(df.columns, [r"angle.*deg", r"\bangle\b", r"\btheta\b", r"bragg"])
     s_col = _guess_col(df.columns, [r"roi.*countsperlive", r"roi.*c/s", r"roi.*counts"])
     
@@ -464,7 +511,9 @@ def _extract_energy_angle_signal(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarr
             if "perlive" in cl or "/s" in cl: sc += 10
             if "time" in cl or "dead" in cl: sc -= 25
             return sc
-        s_col = max([c for c in numeric_cols if c.lower() != e_col.lower()], key=score)
+        cand = [c for c in numeric_cols if c.lower() != e_col.lower()]
+        if not cand: raise ValueError("Could not infer a signal column distinct from energy.")
+        s_col = max(cand, key=score)
 
     energy = pd.to_numeric(df[e_col], errors="coerce").to_numpy(float)
     signal = pd.to_numeric(df[s_col], errors="coerce").to_numpy(float)
@@ -506,7 +555,7 @@ def read_easyxafs_zip(zip_path: Union[str, Path]) -> List[Dict[str, Any]]:
         out = []
         for key, files in groups.items():
             if not files.get("csv"): continue
-            df = pd.read_csv(io.BytesIO(z.read(files["csv"])), sep=None, engine="python")
+            df = _read_table_auto(z.read(files["csv"]))
             sd = _safe_json_load_bytes(z.read(files["scan_def"])) if files.get("scan_def") else {}
             md = _safe_json_load_bytes(z.read(files["metadata"])) if files.get("metadata") else {}
             bname = Path(key).name if key else Path(files["csv"]).stem
@@ -516,7 +565,7 @@ def read_easyxafs_zip(zip_path: Union[str, Path]) -> List[Dict[str, Any]]:
 
 def read_csv_dataset(csv_path: Union[str, Path]) -> Dict[str, Any]:
     p = Path(csv_path)
-    df = pd.read_csv(p, sep=None, engine="python")
+    df = _read_table_auto(p)
     scan_def = {}; metadata = {}
     for cand in (p.parent / "scan_def.json", p.parent / "metadata.json"):
         if cand.exists():
