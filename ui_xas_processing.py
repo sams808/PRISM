@@ -298,11 +298,11 @@ class XASProcessingWindow:
         self.master = master
         self.records = records
         self.master.title("XAS processing")
-        ttk.Label(master, text="Launching XAS v10 processor...", padding=16).pack(fill="both", expand=True)
+        ttk.Label(master, text="Launching full XAS processor...", padding=16).pack(fill="both", expand=True)
         self.master.after(100, self._launch)
 
     def _launch(self):
         # Launch v10 app in-process as requested and close placeholder Toplevel.
         self.master.destroy()
-        app = XASUltimateApp(initial_records=self.records, allow_import=False)
+        app = XASUltimateApp(initial_records=self.records, allow_import=True)
         app.mainloop()
