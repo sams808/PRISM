@@ -618,11 +618,12 @@ def show_text_window(parent, title: str, text: str):
 # ---------------------------- Main App ----------------------------
 
 class XASUltimateApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, *, initial_records: Optional[List[Dict[str, Any]]] = None, allow_import: bool = False):
         super().__init__()
         self.title("XAS Ultimate GUI (EasyXAFS ↔ Athena)")
         self.geometry("1500x900")
         self.store = SpectrumStore()
+        self.allow_import = bool(allow_import)
         self.selected_sid: Optional[str] = None
         self.status_var = tk.StringVar(value="Ready.")
         self.tiepoints: List[TiePoint] = []
@@ -634,17 +635,20 @@ class XASUltimateApp(tk.Tk):
         self._fit_last_preview = None
 
         self._build_ui()
+        if initial_records:
+            self.load_initial_records(initial_records)
 
     def _build_ui(self):
         root = ttk.Frame(self, padding=8); root.pack(fill="both", expand=True)
         left = ttk.Frame(root); left.pack(side="left", fill="y", padx=(0,8))
         right = ttk.Frame(root); right.pack(side="left", fill="both", expand=True)
 
-        lf_import = ttk.LabelFrame(left, text="Import", padding=8); lf_import.pack(fill="x", pady=(0,8))
-        ttk.Button(lf_import, text="Import ZIP(s)...", command=self.ui_import_zips).pack(fill="x")
-        ttk.Button(lf_import, text="Import CSV(s)...", command=self.ui_import_csvs).pack(fill="x", pady=(6,0))
-        ttk.Button(lf_import, text="Import Athena .prj...", command=self.ui_import_prj).pack(fill="x", pady=(6,0))
-        ttk.Button(lf_import, text="Clear", command=self.ui_clear).pack(fill="x", pady=(6,0))
+        if self.allow_import:
+            lf_import = ttk.LabelFrame(left, text="Import", padding=8); lf_import.pack(fill="x", pady=(0,8))
+            ttk.Button(lf_import, text="Import ZIP(s)...", command=self.ui_import_zips).pack(fill="x")
+            ttk.Button(lf_import, text="Import CSV(s)...", command=self.ui_import_csvs).pack(fill="x", pady=(6,0))
+            ttk.Button(lf_import, text="Import Athena .prj...", command=self.ui_import_prj).pack(fill="x", pady=(6,0))
+            ttk.Button(lf_import, text="Clear", command=self.ui_clear).pack(fill="x", pady=(6,0))
 
         lf_list = ttk.LabelFrame(left, text="Imported spectra (objects)", padding=8); lf_list.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(lf_list, columns=("name","kind","label","e0","erange","source"), show="headings", height=24)
@@ -1067,6 +1071,49 @@ class XASUltimateApp(tk.Tk):
     def ui_clear(self):
         self.store.clear(); self.selected_sid = None; self.tiepoints.clear(); self._refresh_tiepoints_table()
         self.refresh_tree(); self.preview_plot.clear("Preview"); self.status_var.set("Cleared all spectra.")
+
+    def load_initial_records(self, records: List[Dict[str, Any]]):
+        loaded = 0
+        for rec in records:
+            xas = rec.get("xas")
+            if xas is None:
+                continue
+            energy = np.asarray(getattr(xas, "energy", []), dtype=float)
+            i0 = np.asarray(getattr(xas, "i0", []), dtype=float)
+            it = np.asarray(getattr(xas, "it", []), dtype=float)
+            if energy.size == 0 or i0.size == 0 or it.size == 0:
+                continue
+            mu = mu_from_transmission(i0, it, logbase="ln")
+            inferred = (rec.get("meta") or {}).get("inferred_edge") or {}
+            label = inferred.get("label") or "XAS(Imported)"
+            sp = Spectrum(
+                sid=_uid("sp"),
+                name=rec.get("title") or getattr(xas, "path", "Imported XAS"),
+                kind="mu",
+                energy=energy,
+                y=mu,
+                angle=None,
+                units="μ(E)",
+                label=label,
+                e0=inferred.get("e0"),
+                meta={
+                    "source": getattr(xas, "path", ""),
+                    "columns": {
+                        "energy_col": getattr(xas, "energy_col", "Energy"),
+                        "i0_col": getattr(xas, "i0_col", "I0"),
+                        "it_col": getattr(xas, "it_col", "It"),
+                    },
+                    "scan_def": getattr(xas, "scan_def", {}),
+                    "metadata": getattr(xas, "metadata", {}),
+                },
+            )
+            sp.history.append(Operation("import", {"source": sp.meta.get("source", "")}))
+            self.store.add(sp)
+            loaded += 1
+
+        self.refresh_tree()
+        if loaded:
+            self.status_var.set(f"Loaded {loaded} dataset(s) from the main app.")
 
     def _spectrum_from_record(self, rec: Dict[str, Any]) -> Spectrum:
         angle, energy, signal, cols = _extract_energy_angle_signal(rec["df"])

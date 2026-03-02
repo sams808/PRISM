@@ -26,6 +26,7 @@ from EXAMPLES.xas_processing_v10 import (
     _extract_energy_angle_signal,
     infer_edge_label_from_roi_scaled,
     mu_from_transmission,
+    read_athena_prj,
     read_csv_dataset,
     read_easyxafs_zip,
 )
@@ -126,6 +127,43 @@ def _xasdata_from_df(df: pd.DataFrame, path: str, *, scan_def: Optional[dict] = 
 def parse_xas_file(path: Union[str, Path]) -> XASData:
     rec = read_csv_dataset(path)
     return _xasdata_from_df(rec["df"], str(path), scan_def=rec.get("scan_def") or {}, metadata=rec.get("metadata") or {})
+
+
+def read_athena_project(path: Union[str, Path]) -> List[XASData]:
+    """Load Athena .prj groups into XASData-compatible datasets."""
+    spectra = read_athena_prj(path)
+    out: List[XASData] = []
+    for idx, sp in enumerate(spectra):
+        energy = np.asarray(getattr(sp, "energy", []), dtype=float)
+        mu = np.asarray(getattr(sp, "y", []), dtype=float)
+        mask = np.isfinite(energy) & np.isfinite(mu)
+        energy = energy[mask]
+        mu = mu[mask]
+        if energy.size == 0:
+            continue
+
+        # Build synthetic transmission channels so compute_mu() remains compatible.
+        i0 = np.ones_like(mu, dtype=float)
+        mu_clipped = np.clip(mu, -700.0, 700.0)
+        it = np.exp(-mu_clipped)
+
+        name = getattr(sp, "name", "Athena") or f"Athena_{idx+1}"
+        df = pd.DataFrame({"Energy": energy, "I0_synth": i0, "It_from_mu": it, "mu_imported": mu})
+        out.append(
+            XASData(
+                path=f"{path}::{name}::{idx}",
+                df=df,
+                energy_col="Energy",
+                i0_col="I0_synth",
+                it_col="It_from_mu",
+                energy=energy,
+                i0=i0,
+                it=it,
+                scan_def={},
+                metadata={"source": str(path), "athena_name": name},
+            )
+        )
+    return out
 
 
 def read_bundles_from_zip(zip_path: Union[str, Path]) -> List[Bundle]:
@@ -260,5 +298,5 @@ class XASProcessingWindow:
     def _launch(self):
         # Launch v10 app in-process as requested and close placeholder Toplevel.
         self.master.destroy()
-        app = XASUltimateApp()
+        app = XASUltimateApp(initial_records=self.records, allow_import=False)
         app.mainloop()
