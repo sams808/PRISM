@@ -258,6 +258,13 @@ def infer_edge_label_from_roi_scaled(energy: np.ndarray, mu: np.ndarray, scan_de
     return (f"XAS({cands[0][1]} {cands[0][2]})", e0)
 
 
+def edge_text(label: str) -> str:
+    m = re.match(r"^XAS\(([^\s\)\?]+)\s+([^\s\)\?]+)\)$", str(label or "").strip())
+    if m:
+        return f"{m.group(1)} {m.group(2)}"
+    return "?"
+
+
 # ---------------------------- Larch Wrappers ----------------------------
 
 def larch_available() -> bool:
@@ -652,7 +659,7 @@ class XASUltimateApp(tk.Tk):
 
         lf_list = ttk.LabelFrame(left, text="Imported spectra (objects)", padding=8); lf_list.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(lf_list, columns=("name","kind","label","e0","erange","source"), show="headings", height=24)
-        for c, t, w in [("name","Name",170),("kind","Type",70),("label","XAS Label",130),("e0","E0",70),("erange","E range",120),("source","Source",180)]:
+        for c, t, w in [("name","Name",170),("kind","Type",70),("label","Edge",130),("e0","E0",70),("erange","E range",120),("source","Source",180)]:
             self.tree.heading(c, text=t); self.tree.column(c, width=w, anchor="w" if c in ("name","label","source") else "e")
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select); self.tree.bind("<Button-3>", self.on_tree_right_click)
@@ -979,7 +986,7 @@ class XASUltimateApp(tk.Tk):
         for sp in self.store.all():
             e0 = "" if sp.e0 is None or not np.isfinite(sp.e0) else f"{sp.e0:.1f}"
             er = f"{np.nanmin(sp.energy):.1f}–{np.nanmax(sp.energy):.1f}" if sp.energy.size else ""
-            self.tree.insert("", "end", iid=sp.sid, values=(sp.name, sp.kind, sp.label, e0, er, sp.meta.get("source","")))
+            self.tree.insert("", "end", iid=sp.sid, values=(sp.name, sp.kind, edge_text(sp.label), e0, er, sp.meta.get("source","")))
         self.refresh_dropdowns()
 
     def refresh_dropdowns(self):
@@ -1085,7 +1092,7 @@ class XASUltimateApp(tk.Tk):
                 continue
             mu = mu_from_transmission(i0, it, logbase="ln")
             inferred = (rec.get("meta") or {}).get("inferred_edge") or {}
-            label = inferred.get("label") or "XAS(Imported)"
+            label = inferred.get("label") or "?"
             sp = Spectrum(
                 sid=_uid("sp"),
                 name=rec.get("title") or getattr(xas, "path", "Imported XAS"),

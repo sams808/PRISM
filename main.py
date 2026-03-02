@@ -987,7 +987,7 @@ class RamanApp:
             "df": xas.df,
             "meta": meta,
             "x_col": xas.energy_col,
-            "y_col": "mu(E)",
+            "y_col": "I0/It (mu built)",
             "xas": xas,
         }
         self.file_paths.append(key)
@@ -1090,9 +1090,9 @@ class RamanApp:
     def _xas_edge_label(self, rec: dict) -> str:
         meta = (rec or {}).get("meta") or {}
         inferred = meta.get("inferred_edge") or {}
-        inferred_label = inferred.get("label")
+        inferred_label = (inferred.get("label") or "").strip()
         if inferred_label:
-            return f"XAS({inferred_label}) "
+            return inferred_label if inferred_label != "XAS(?)" else "?"
 
         scan_def = meta.get("scan_def") or {}
         xmeta = meta.get("metadata") or {}
@@ -1101,10 +1101,11 @@ class RamanApp:
         if edge and element and str(edge).lower().startswith(str(element).lower()):
             token = str(edge)
         elif edge and element:
-            token = f"{element}{edge}"
+            token = f"{element} {edge}"
         else:
             token = edge or element
-        return f"XAS({token}) " if token else "XAS "
+        token = str(token).strip() if token else ""
+        return token if token else "?"
 
     def _display_filename(self, path: str, rec: dict | None) -> str:
         meta = (rec or {}).get("meta") or {}
@@ -1135,7 +1136,8 @@ class RamanApp:
                     indicator_label = "DTA "
                 elif kind == "XAS":
                     indicator_tag = "type_xas"
-                    indicator_label = self._xas_edge_label(rec)
+                    edge_label = self._xas_edge_label(rec)
+                    indicator_label = f"I0/It · edge {edge_label} "
                 else:
                     indicator_tag = "type_xy"
                     indicator_label = "XY  "
