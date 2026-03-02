@@ -45,6 +45,7 @@ from ui_xas_processing import (
     read_bundles,
     parse_xas_bundle,
     infer_xas_edge_from_spectrum,
+    read_athena_project,
 )
 # cif_tools.py est importé par ui_simple_plot.py
 
@@ -832,7 +833,13 @@ class RamanApp:
         imports.pack(fill="x", pady=(0, 10))
         ttk.Button(imports, text="Import XY", command=self.import_xy_files, style="ImportXY.TButton").pack(pady=4, fill="x")
         ttk.Button(imports, text="Import DTA", command=self.import_dta_files, style="ImportDTA.TButton").pack(pady=4, fill="x")
-        ttk.Button(imports, text="Import XAS", command=self.import_xas_files, style="ImportXAS.TButton").pack(pady=4, fill="x")
+        xas_row = ttk.Frame(imports, style="Card.TFrame")
+        xas_row.pack(pady=4, fill="x")
+        for col in range(3):
+            xas_row.columnconfigure(col, weight=1)
+        ttk.Button(xas_row, text="XAS ZIP", command=self.import_xas_zip_files, style="ImportXAS.TButton").grid(row=0, column=0, padx=(0, 4), sticky="ew")
+        ttk.Button(xas_row, text="XAS CSV", command=self.import_xas_csv_files, style="ImportXAS.TButton").grid(row=0, column=1, padx=2, sticky="ew")
+        ttk.Button(xas_row, text="XAS .Prj", command=self.import_xas_prj_files, style="ImportXAS.TButton").grid(row=0, column=2, padx=(4, 0), sticky="ew")
 
         manage = ttk.LabelFrame(frame_left, text="Organize", padding=10, style="Card.TLabelframe", labelanchor="n")
         manage.pack(fill="x", pady=(0, 10))
@@ -959,12 +966,59 @@ class RamanApp:
         else:
             messagebox.showinfo("Import", "No new files were added.", parent=self.root)
 
-    def import_xas_files(self):
-        """Import XAS files (text/csv/dat or EasyXAFS zip bundles) and precompute mu(E)."""
+    def _store_xas_dataset(self, key: str, xas, *, parser_name: str, title: str, extra_meta: Optional[dict] = None):
+        mu = compute_mu(xas)
+        inferred_edge = infer_xas_edge_from_spectrum(xas.energy, mu)
+        edge_label = inferred_edge.get("label")
+        meta = {
+            "selected_parser": parser_name,
+            "energy_col": xas.energy_col,
+            "i0_col": xas.i0_col,
+            "it_col": xas.it_col,
+            "inferred_edge": inferred_edge,
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+        display_title = f"{title} [{edge_label}]" if edge_label else title
+        self.xy_by_path[key] = {
+            "kind": "XAS",
+            "x": xas.energy,
+            "y": mu,
+            "df": xas.df,
+            "meta": meta,
+            "x_col": xas.energy_col,
+            "y_col": "mu(E)",
+            "xas": xas,
+        }
+        self.file_paths.append(key)
+        self.file_titles.append(display_title)
+        self.file_statuses.append("imported")
+
+    def import_xas_zip_files(self):
+        """Import EasyXAFS ZIP bundles and precompute mu(E)."""
         paths = filedialog.askopenfilenames(
-            title="Select XAS files or zip bundles",
-            filetypes=[("XAS + bundles", "*.txt *.csv *.dat *.zip"), ("All files", "*.*")],
+            title="Select XAS ZIP bundles",
+            filetypes=[("XAS ZIP", "*.zip"), ("All files", "*.*")],
         )
+        self._import_xas_paths(paths, mode="zip")
+
+    def import_xas_csv_files(self):
+        """Import XAS CSV/TXT/DAT files and precompute mu(E)."""
+        paths = filedialog.askopenfilenames(
+            title="Select XAS CSV files",
+            filetypes=[("XAS text", "*.csv *.txt *.dat"), ("All files", "*.*")],
+        )
+        self._import_xas_paths(paths, mode="csv")
+
+    def import_xas_prj_files(self):
+        """Import Athena .prj files and precompute mu(E)."""
+        paths = filedialog.askopenfilenames(
+            title="Select Athena projects",
+            filetypes=[("Athena project", "*.prj"), ("All files", "*.*")],
+        )
+        self._import_xas_paths(paths, mode="prj")
+
+    def _import_xas_paths(self, paths, *, mode: str):
         if not paths:
             return
 
@@ -972,70 +1026,49 @@ class RamanApp:
         for path in paths:
             path_obj = Path(path)
             try:
-                if path_obj.suffix.lower() == ".zip" or path_obj.is_dir():
+                if mode == "zip":
                     bundles = read_bundles(path_obj)
                     for idx, bundle in enumerate(bundles):
                         synthetic_path = f"{path_obj}::{bundle.name}::{idx}"
                         if synthetic_path in self.file_paths:
                             continue
                         xas = parse_xas_bundle(bundle)
-                        mu = compute_mu(xas)
-                        inferred_edge = infer_xas_edge_from_spectrum(xas.energy, mu)
                         source_csv = Path(bundle.df.attrs.get("source_csv", "")).name
                         display_name = source_csv or Path(bundle.metadata.get("source_file", "")).name or f"{bundle.name}_exd.csv"
-                        edge_label = inferred_edge.get("label")
-                        title = f"{bundle.name} [{edge_label}]" if edge_label else bundle.name
-                        self.xy_by_path[synthetic_path] = {
-                            "kind": "XAS",
-                            "x": xas.energy,
-                            "y": mu,
-                            "df": xas.df,
-                            "meta": {
-                                "selected_parser": "xas_bundle_zip",
-                                "energy_col": xas.energy_col,
-                                "i0_col": xas.i0_col,
-                                "it_col": xas.it_col,
+                        self._store_xas_dataset(
+                            synthetic_path,
+                            xas,
+                            parser_name="xas_bundle_zip",
+                            title=bundle.name,
+                            extra_meta={
                                 "scan_def": bundle.scan_def,
                                 "metadata": bundle.metadata,
-                                "inferred_edge": inferred_edge,
                                 "display_filename": display_name,
                                 "source_csv": source_csv,
                             },
-                            "x_col": xas.energy_col,
-                            "y_col": "mu(E)",
-                            "xas": xas,
-                        }
-                        self.file_paths.append(synthetic_path)
-                        self.file_titles.append(title)
-                        self.file_statuses.append("imported")
+                        )
                         added = True
-                else:
+                elif mode == "csv":
                     if path in self.file_paths:
                         continue
                     xas = parse_xas_file(path)
-                    mu = compute_mu(xas)
-                    inferred_edge = infer_xas_edge_from_spectrum(xas.energy, mu)
-                    edge_label = inferred_edge.get("label")
-                    self.xy_by_path[path] = {
-                        "kind": "XAS",
-                        "x": xas.energy,
-                        "y": mu,
-                        "df": xas.df,
-                        "meta": {
-                            "selected_parser": "xas_text",
-                            "energy_col": xas.energy_col,
-                            "i0_col": xas.i0_col,
-                            "it_col": xas.it_col,
-                            "inferred_edge": inferred_edge,
-                        },
-                        "x_col": xas.energy_col,
-                        "y_col": "mu(E)",
-                        "xas": xas,
-                    }
-                    self.file_paths.append(path)
-                    self.file_titles.append(f"{Path(path).stem} [{edge_label}]" if edge_label else Path(path).stem)
-                    self.file_statuses.append("imported")
+                    self._store_xas_dataset(path, xas, parser_name="xas_text", title=Path(path).stem)
                     added = True
+                elif mode == "prj":
+                    xas_datasets = read_athena_project(path)
+                    for idx, xas in enumerate(xas_datasets):
+                        group_name = xas.metadata.get("athena_name") or f"group_{idx+1}"
+                        synthetic_path = f"{path}::{group_name}::{idx}"
+                        if synthetic_path in self.file_paths:
+                            continue
+                        self._store_xas_dataset(
+                            synthetic_path,
+                            xas,
+                            parser_name="xas_athena_prj",
+                            title=group_name,
+                            extra_meta={"source_prj": path, "athena_name": group_name},
+                        )
+                        added = True
             except Exception as e:
                 messagebox.showerror("Import error", f"{os.path.basename(path)}\n{e}", parent=self.root)
                 continue
@@ -2835,7 +2868,9 @@ def main():
     filemenu = tk.Menu(menubar, tearoff=0)
     filemenu.add_command(label="Import XY", command=app.import_xy_files)
     filemenu.add_command(label="Import DTA", command=app.import_dta_files)
-    filemenu.add_command(label="Import XAS", command=app.import_xas_files)
+    filemenu.add_command(label="Import XAS ZIP", command=app.import_xas_zip_files)
+    filemenu.add_command(label="Import XAS CSV", command=app.import_xas_csv_files)
+    filemenu.add_command(label="Import XAS .Prj", command=app.import_xas_prj_files)
     filemenu.add_separator()
     filemenu.add_command(label="Simple plot \tCtrl+P", command=app.simple_plot)
     filemenu.add_separator()
@@ -2847,7 +2882,7 @@ def main():
     root.bind("<Control-p>", lambda e: app.simple_plot())
     root.bind("<Control-o>", lambda e: app.import_xy_files())
     root.bind("<Control-d>", lambda e: app.import_dta_files())
-    root.bind("<Control-Shift-O>", lambda e: app.import_xas_files())
+    root.bind("<Control-Shift-O>", lambda e: app.import_xas_csv_files())
     root.bind("<Control-q>", lambda e: app.exit_app())
 
     # Quit propre si on ferme la croix
