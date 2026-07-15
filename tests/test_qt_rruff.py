@@ -1,0 +1,177 @@
+"""Tests for qt_rruff.py (M12) — the RRUFF match-assist UI.
+
+Uses a small synthetic cache_dir (index.json + raw/*.txt), never the real
+~/.raman_cache/rruff/ corpus, so these tests are fast, deterministic, and
+don't depend on M10's ingest having been run on this machine.
+
+Run separately from the default Tk-focused suite (see pytest.ini / conftest.py
+for why): `pytest tests/test_qt_rruff.py --override-ini="addopts="`
+"""
+from __future__ import annotations
+
+import json
+
+import numpy as np
+import rampy as rp
+
+from qt_models import Spectrum, SpectrumLibrary
+from qt_rruff import RruffMatchWorkspace
+from qt_shell import DataappMainWindow
+
+
+def _write_fake_cache(cache_dir, raw_dir):
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / "Quartz__R040031__Raman__532__0-000____Raman_Data_Processed__abc.txt"
+    raw_path.write_text(
+        "##NAMES=Quartz\n##RRUFFID=R040031\n##RAMAN WAVELENGTH=532\n\n"
+        "460.0, 10.0\n464.0, 500.0\n468.0, 12.0\n1080.0, 8.0\n1085.0, 300.0\n1090.0, 9.0\n",
+        encoding="utf-8",
+    )
+    index = [
+        {
+            "mineral": "Quartz", "rruff_id": "R040031", "wavelength_nm": 532.0,
+            "orientation_deg": None, "polarization": None, "data_kind": "Processed",
+            "peaks": [464.0, 1085.0], "raw_path": str(raw_path), "category": "excellent_unoriented",
+            "x_min": 460.0, "x_max": 1090.0,
+        },
+        {
+            "mineral": "Calcite", "rruff_id": "R050128", "wavelength_nm": 785.0,
+            "orientation_deg": None, "polarization": None, "data_kind": "Processed",
+            "peaks": [1085.0], "raw_path": "", "category": "fair_unoriented",
+            "x_min": 100.0, "x_max": 1200.0,
+        },
+        {
+            "mineral": "NoPeaksMineral", "rruff_id": "R000000", "wavelength_nm": 514.0,
+            "peaks": [], "raw_path": "", "category": "poor_unoriented", "x_min": 0.0, "x_max": 100.0,
+        },
+    ]
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "index.json").write_text(json.dumps(index), encoding="utf-8")
+
+
+def _synthetic_query_spectrum() -> Spectrum:
+    x = np.linspace(400, 1200, 1600)
+    y = rp.gaussian(x, 100.0, 464.0, 8.0) + rp.gaussian(x, 60.0, 1085.0, 8.0)
+    return Spectrum(id=Spectrum.new_id(), title="query_sample", path="", kind="raman_xy", x=x, y=y)
+
+
+def test_workspace_constructs_empty(qtbot, tmp_path):
+    widget = RruffMatchWorkspace(cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+    assert widget.spec_combo.count() == 0
+    assert widget.results_table.rowCount() == 0
+
+
+def test_set_spectra_populates_combo(qtbot, tmp_path):
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    assert widget.spec_combo.count() == 1
+
+
+def test_auto_find_peaks_populates_field(qtbot, tmp_path):
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+
+    widget.auto_find_peaks()
+    text = widget.peaks_edit.text()
+    assert text != ""
+    peaks = [float(p) for p in text.split(",")]
+    assert any(abs(p - 464.0) < 15 for p in peaks)
+    assert any(abs(p - 1085.0) < 15 for p in peaks)
+
+
+def test_find_matches_without_peaks_warns_and_does_not_crash(qtbot, tmp_path):
+    widget = RruffMatchWorkspace(cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+    widget.find_matches()  # no peaks entered -> QMessageBox.warning, neutralized by conftest fixture
+    assert widget.results_table.rowCount() == 0
+
+
+def test_find_matches_missing_cache_updates_status(qtbot, tmp_path):
+    widget = RruffMatchWorkspace(cache_dir=str(tmp_path / "does_not_exist"))
+    qtbot.addWidget(widget)
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.find_matches()
+    assert "No RRUFF database found" in widget.db_status_label.text()
+
+
+def test_find_matches_ranks_best_candidate_first(qtbot, tmp_path):
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.tolerance_edit.setText("10.0")
+    widget.find_matches()
+    qtbot.wait(20)  # let the preview's deferred canvas.draw_idle() complete before teardown
+
+    assert widget.results_table.rowCount() == 2  # NoPeaksMineral excluded
+    assert widget.results_table.item(0, 0).text() == "Quartz"
+    assert widget.results_table.item(0, 3).text() == "2"  # matched
+    assert "3 spectra" in widget.db_status_label.text() or "database" in widget.db_status_label.text().lower()
+
+
+def test_accept_selected_candidate_writes_spectrum_metadata(qtbot, tmp_path):
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.find_matches()
+    qtbot.wait(20)
+
+    widget.accept_selected_candidate()
+    assert sp.meta["rruff_match"]["mineral"] == "Quartz"
+    assert sp.meta["rruff_match"]["rruff_id"] == "R040031"
+    assert sp.meta["rruff_match"]["wavelength_nm"] == 532.0
+
+
+def test_render_preview_overlays_measured_spectrum(qtbot, tmp_path):
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.find_matches()
+    qtbot.wait(20)
+
+    ax = widget.plot.figure.get_axes()[0]
+    assert len(ax.lines) >= 2  # query + candidate measured spectrum
+
+
+def test_shell_rruff_page_picks_up_library_records(qtbot, raman_example_path):
+    from qt_shell import _load_spectrum_from_path
+
+    window = DataappMainWindow()
+    qtbot.addWidget(window)
+    spectrum = _load_spectrum_from_path(str(raman_example_path))
+    window.library.add(spectrum)
+
+    window.nav.setCurrentRow(6)  # Mineral ID workspace
+    qtbot.wait(20)
+
+    assert window.rruff_page.spec_combo.count() == 1

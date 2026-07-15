@@ -1,0 +1,151 @@
+"""Tests for qt_simple_plot.py (M7) — the Qt port of Simple Plot + CIF
+Bragg overlay.
+
+Run separately from the default Tk-focused suite (see pytest.ini / conftest.py
+for why): `pytest tests/test_qt_simple_plot.py --override-ini="addopts="`
+"""
+from __future__ import annotations
+
+import pytest
+
+from qt_models import Spectrum, SpectrumLibrary
+from qt_shell import DataappMainWindow, _load_spectrum_from_path
+from qt_simple_plot import SimplePlotWorkspace
+
+_CUBIC_CIF = """\
+data_test_cubic
+_cell_length_a 5.6400
+_cell_length_b 5.6400
+_cell_length_c 5.6400
+_cell_angle_alpha 90.0
+_cell_angle_beta 90.0
+_cell_angle_gamma 90.0
+_diffrn_radiation_wavelength 1.5406
+"""
+
+
+@pytest.fixture
+def cif_path(tmp_path):
+    p = tmp_path / "cubic_test.cif"
+    p.write_text(_CUBIC_CIF, encoding="utf-8")
+    return p
+
+
+def _library_with_raman(raman_example_path) -> SpectrumLibrary:
+    library = SpectrumLibrary()
+    library.add(_load_spectrum_from_path(str(raman_example_path)))
+    return library
+
+
+def test_workspace_constructs_empty(qtbot):
+    widget = SimplePlotWorkspace()
+    qtbot.addWidget(widget)
+    assert widget.file_list.count() == 0
+
+
+def test_set_spectra_populates_list_and_selection_renders(qtbot, raman_example_path):
+    library = _library_with_raman(raman_example_path)
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+
+    widget.set_spectra([s.id for s in library.all()])
+    assert widget.file_list.count() == 1
+
+    widget.file_list.selectAll()
+    qtbot.wait(200)  # let the debounced redraw fire
+    assert len(widget.plot.figure.get_axes()) >= 1
+
+
+def test_stacked_mode_with_two_spectra_offsets_lines(qtbot, raman_example_path):
+    library = SpectrumLibrary()
+    s1 = _load_spectrum_from_path(str(raman_example_path))
+    s2 = Spectrum(id=Spectrum.new_id(), title="copy", path=s1.path, kind=s1.kind,
+                  x=s1.x.copy(), y=s1.y.copy(), df=s1.df, meta=dict(s1.meta))
+    library.add(s1)
+    library.add(s2)
+
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s1.id, s2.id])
+    widget.file_list.selectAll()
+    widget.mode_stacked.setChecked(True)
+    qtbot.wait(200)
+
+    axes = widget.plot.figure.get_axes()
+    assert len(axes) == 1
+    assert len(axes[0].lines) == 2
+
+
+def test_cif_import_adds_series_and_draws_markers(qtbot, raman_example_path, cif_path):
+    library = _library_with_raman(raman_example_path)
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()
+    qtbot.wait(200)
+
+    peaks_before = len(widget.cif_series)
+    from cif_tools import bragg_peaks_from_cif_generic
+    peaks = bragg_peaks_from_cif_generic(str(cif_path), two_theta_max=80.0, hkl_max=6)
+    assert len(peaks) > 0
+
+    widget.cif_series.append({
+        "path": str(cif_path), "label": "cubic_test.cif", "plot_label": "",
+        "peaks": peaks, "visible": True, "color": "crimson", "pad": 0.03,
+    })
+    widget.render()
+    qtbot.wait(20)
+    assert len(widget.cif_series) == peaks_before + 1
+    ax = widget.plot.figure.get_axes()[0]
+    # Bragg markers are drawn as vlines collections distinct from the data line.
+    assert len(ax.collections) > 0
+
+
+def test_cif_manager_toggle_visible_triggers_debounced_redraw(qtbot, raman_example_path, cif_path):
+    library = _library_with_raman(raman_example_path)
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()
+
+    from cif_tools import bragg_peaks_from_cif_generic
+    peaks = bragg_peaks_from_cif_generic(str(cif_path), two_theta_max=80.0, hkl_max=6)
+    serie = {"path": str(cif_path), "label": "cubic_test.cif", "plot_label": "",
+             "peaks": peaks, "visible": False, "color": "crimson", "pad": 0.03}
+    widget.cif_series.append(serie)
+    widget.render()
+    qtbot.wait(20)
+    ax = widget.plot.figure.get_axes()[0]
+    assert len(ax.collections) == 0  # not visible yet
+
+    widget.set_cif_field(serie, "visible", True)
+    qtbot.wait(200)  # debounce interval is 120ms
+    ax = widget.plot.figure.get_axes()[0]
+    assert len(ax.collections) > 0
+
+
+def test_color_scheme_change_does_not_crash(qtbot, raman_example_path):
+    library = _library_with_raman(raman_example_path)
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()
+    qtbot.wait(200)
+
+    for scheme in ["Matplotlib cycle", "Distinct", "Hash by name", "Monochrome"]:
+        widget.color_combo.setCurrentText(scheme)
+        qtbot.wait(200)
+    assert len(widget.plot.figure.get_axes()) >= 1
+
+
+def test_shell_raman_page_picks_up_library_records(qtbot, raman_example_path):
+    window = DataappMainWindow()
+    qtbot.addWidget(window)
+
+    spectrum = _load_spectrum_from_path(str(raman_example_path))
+    window.library.add(spectrum)
+
+    window.nav.setCurrentRow(1)  # Raman workspace
+    qtbot.wait(20)
+
+    assert window.raman_page.file_list.count() == 1
