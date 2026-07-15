@@ -162,6 +162,32 @@ def test_generate_report_quick_writes_report_next_to_source(qtbot, tmp_path):
     assert "Centroid" in content
 
 
+def test_fit_param_dialog_round_trips_new_shapes_and_link(qtbot):
+    """The extended schema (V/EMG shapes, skew bounds, link_fwhm) must
+    survive the dialog's table rebuild/sync cycle unchanged."""
+    params = [
+        {"shape": "V", "shift_min": 400.0, "shift_val": 500.0, "shift_max": 600.0, "fit_shift": True,
+         "fwhm_min": 1.0, "fwhm_val": 20.0, "fwhm_max": 100.0, "fit_fwhm": True,
+         "eta_min": 0.0, "eta_val": 0.3, "eta_max": 1.0, "fit_eta": True,
+         "amp_val": 50.0, "fit_amp": True},
+        {"shape": "EMG", "shift_min": 700.0, "shift_val": 800.0, "shift_max": 900.0, "fit_shift": True,
+         "fwhm_min": 1.0, "fwhm_val": 15.0, "fwhm_max": 100.0, "fit_fwhm": True,
+         "skew_min": -50.0, "skew_val": 12.0, "skew_max": 50.0, "fit_skew": True,
+         "amp_val": 30.0, "fit_amp": True, "link_fwhm": 0},
+    ]
+    accepted = {}
+    dlg = FitParamDialog(None, params_struct=params, on_accept=lambda p: accepted.update(result=p))
+    qtbot.addWidget(dlg)
+    dlg._on_accept_clicked()
+
+    out = accepted["result"]
+    assert out[0]["shape"] == "V"
+    assert out[0]["eta_val"] == 0.3
+    assert out[1]["shape"] == "EMG"
+    assert out[1]["skew_val"] == 12.0
+    assert out[1]["link_fwhm"] == 0
+
+
 def test_fit_param_dialog_auto_find_peaks_seeds_component(qtbot):
     x = np.linspace(0, 1000, 2000)
     y = rp.gaussian(x, 100.0, 300.0, 15.0)

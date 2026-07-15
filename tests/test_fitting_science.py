@@ -180,3 +180,110 @@ def test_find_peak_candidates_excludes_edge_artifact():
 
 def test_find_peak_candidates_on_short_input_returns_empty():
     assert fs.find_peak_candidates(np.array([1.0, 2.0]), np.array([1.0, 2.0])) == []
+
+
+# --------------------------------------------------------------------------
+# Deferred-fitting-features additions: true Voigt, EMG, parameter linking.
+# --------------------------------------------------------------------------
+
+def test_voigt_peak_limits_match_gaussian_and_lorentzian():
+    """Width convention: rampy's third parameter is HWHM (despite the app's
+    historical 'FWHM' labels), and the new shapes must match the G/GL
+    behavior for the same `l` value — see the module note in
+    fitting_science.py. So eta=0 must reproduce rp.gaussian for the SAME
+    width argument, and eta=1 a Lorentzian whose full width is 2*l."""
+    x = np.linspace(400, 600, 2000)
+    v0 = fs.voigt_peak(x, 100.0, 500.0, 20.0, eta=0.0)
+    g = rp.gaussian(x, 100.0, 500.0, 20.0)
+    assert np.allclose(v0, g, atol=0.5)
+    v1 = fs.voigt_peak(x, 100.0, 500.0, 20.0, eta=1.0)
+    # rel=1e-3, not tighter: the 2000-point grid over [400,600] never lands
+    # exactly on x=500, so the sampled max sits slightly below the true apex.
+    assert np.nanmax(v1) == pytest.approx(100.0, rel=1e-3)
+    above_half = x[v1 >= 50.0]
+    assert (above_half.max() - above_half.min()) == pytest.approx(40.0, abs=0.5)  # full width = 2*HWHM
+
+
+def test_voigt_peak_height_normalized_at_intermediate_eta():
+    x = np.linspace(400, 600, 4000)
+    v = fs.voigt_peak(x, 77.0, 500.0, 15.0, eta=0.5)
+    assert np.nanmax(v) == pytest.approx(77.0, rel=1e-3)
+    assert x[int(np.nanargmax(v))] == pytest.approx(500.0, abs=0.1)
+
+
+def test_emg_peak_positive_skew_tails_right_negative_tails_left():
+    # skew (tau=30) well above sigma (hwhm=10 -> sigma about 8.5) so the
+    # asymmetry is pronounced enough for a robust mass-ratio assertion —
+    # under the HWHM convention a smaller skew/width ratio gives only a
+    # mild, grid-sensitive asymmetry.
+    x = np.linspace(400, 600, 2000)
+    right = fs.emg_peak(x, 100.0, 500.0, 10.0, skew=30.0)
+    left = fs.emg_peak(x, 100.0, 500.0, 10.0, skew=-30.0)
+    assert np.nanmax(right) == pytest.approx(100.0, rel=1e-6)
+    # Asymmetry: mass above vs below the mode
+    mode_r = x[int(np.nanargmax(right))]
+    mass_hi = np.trapz(right[x > mode_r], x[x > mode_r])
+    mass_lo = np.trapz(right[x < mode_r], x[x < mode_r])
+    assert mass_hi > 1.5 * mass_lo
+    # Mirror symmetry between +skew and -skew
+    assert np.allclose(right, left[::-1], atol=1e-6)
+
+
+def test_emg_peak_zero_skew_degenerates_to_gaussian():
+    x = np.linspace(400, 600, 1000)
+    emg = fs.emg_peak(x, 100.0, 500.0, 20.0, skew=0.0)
+    g = rp.gaussian(x, 100.0, 500.0, 20.0)
+    assert np.allclose(emg, g)
+
+
+def test_fit_spectrum_recovers_emg_asymmetric_peak():
+    x = np.linspace(400, 600, 800)
+    y = fs.emg_peak(x, 90.0, 490.0, 12.0, skew=15.0)
+    comp = {
+        "shape": "EMG",
+        "shift_val": 495.0, "shift_min": 450.0, "shift_max": 550.0, "fit_shift": True,
+        "fwhm_val": 15.0, "fwhm_min": 1.0, "fwhm_max": 60.0, "fit_fwhm": True,
+        "skew_val": 5.0, "skew_min": -100.0, "skew_max": 100.0, "fit_skew": True,
+        "amp_val": 80.0, "fit_amp": True,
+    }
+    result = fs.fit_spectrum(x, y, [comp], mode="classic")
+    assert result.lmfit_result.params["f0"].value == pytest.approx(490.0, abs=1.5)
+    assert result.lmfit_result.params["s0"].value == pytest.approx(15.0, rel=0.15)
+    assert result.chi2_red < 0.5
+
+
+def test_fit_spectrum_recovers_true_voigt_peak():
+    x = np.linspace(400, 600, 800)
+    y = fs.voigt_peak(x, 90.0, 505.0, 18.0, eta=0.4)
+    comp = _gaussian_component(center=500.0, fwhm=15.0, amp=80.0, shape="V", eta=0.5)
+    result = fs.fit_spectrum(x, y, [comp], mode="classic")
+    assert result.lmfit_result.params["f0"].value == pytest.approx(505.0, abs=0.5)
+    assert result.lmfit_result.params["eta0"].value == pytest.approx(0.4, abs=0.1)
+
+
+def test_link_fwhm_shares_width_between_components():
+    x = np.linspace(0, 100, 600)
+    true_fwhm = 6.0
+    y = rp.gaussian(x, 100.0, 30.0, true_fwhm) + rp.gaussian(x, 60.0, 70.0, true_fwhm)
+
+    comps = [
+        _gaussian_component(center=30.0, fwhm=8.0, amp=90.0),
+        {**_gaussian_component(center=70.0, fwhm=12.0, amp=50.0), "link_fwhm": 0},
+    ]
+    lm_params = fs.build_lmfit_parameters(comps)
+    assert lm_params["l1"].expr == "l0"
+
+    result = fs.fit_spectrum(x, y, comps, mode="classic")
+    fitted = result.lmfit_result.params
+    assert fitted["l0"].value == pytest.approx(true_fwhm, abs=0.3)
+    assert fitted["l1"].value == pytest.approx(fitted["l0"].value)  # constrained equal
+
+
+def test_link_ignores_self_and_out_of_range():
+    comps = [
+        {**_gaussian_component(center=30.0), "link_fwhm": 0},   # self-link
+        {**_gaussian_component(center=70.0), "link_fwhm": 99},  # out of range
+    ]
+    lm_params = fs.build_lmfit_parameters(comps)
+    assert lm_params["l0"].expr in (None, "")
+    assert lm_params["l1"].expr in (None, "")

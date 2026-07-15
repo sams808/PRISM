@@ -25,17 +25,22 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+# NOTE: the "FWHM" labels are kept for continuity with every existing saved
+# model, but the value has always been passed to rampy's HWHM slot — see the
+# width-convention note in fitting_science.py.
 COLUMNS = [
     "Comp", "Shift min", "Shift val", "Shift max", "Vary",
     "FWHM min", "FWHM val", "FWHM max", "Vary",
     "Eta min", "Eta val", "Eta max", "Vary",
-    "Shape", "Amp val", "Vary",
+    "Skew min", "Skew val", "Skew max", "Vary",
+    "Shape", "Amp val", "Vary", "FWHM=#",
 ]
 
 _DEFAULTS: Dict[str, Any] = {
     "shift_min": 900.0, "shift_val": 1000.0, "shift_max": 1100.0, "fit_shift": True,
     "fwhm_min": 1.0, "fwhm_val": 50.0, "fwhm_max": 200.0, "fit_fwhm": True,
     "eta_min": 0.0, "eta_val": 0.5, "eta_max": 1.0, "fit_eta": True,
+    "skew_min": -100.0, "skew_val": 1.0, "skew_max": 100.0, "fit_skew": True,
     "shape": "G", "amp_val": 1.0, "fit_amp": True,
 }
 
@@ -43,10 +48,13 @@ _NUMERIC_COLS = {
     1: "shift_min", 2: "shift_val", 3: "shift_max",
     5: "fwhm_min", 6: "fwhm_val", 7: "fwhm_max",
     9: "eta_min", 10: "eta_val", 11: "eta_max",
-    14: "amp_val",
+    13: "skew_min", 14: "skew_val", 15: "skew_max",
+    18: "amp_val",
 }
-_VARY_COLS = {4: "fit_shift", 8: "fit_fwhm", 12: "fit_eta", 15: "fit_amp"}
-_SHAPE_COL = 13
+_VARY_COLS = {4: "fit_shift", 8: "fit_fwhm", 12: "fit_eta", 16: "fit_skew", 19: "fit_amp"}
+_SHAPE_COL = 17
+_LINK_COL = 20  # Origin-style "share this FWHM with peak N" (1-based in UI, blank = no link)
+SHAPES = ["G", "GL", "V", "EMG"]
 
 
 def _default_model_dir() -> str:
@@ -148,9 +156,13 @@ class FitParamDialog(QDialog):
                 self.table.setCellWidget(i, col, cb)
 
             shape_combo = QComboBox()
-            shape_combo.addItems(["G", "GL"])
+            shape_combo.addItems(SHAPES)
             shape_combo.setCurrentText(row.get("shape", "G"))
             self.table.setCellWidget(i, _SHAPE_COL, shape_combo)
+
+            link = row.get("link_fwhm")
+            link_item = QTableWidgetItem("" if link is None else str(int(link) + 1))  # 1-based in the UI
+            self.table.setItem(i, _LINK_COL, link_item)
 
         self.table.resizeColumnsToContents()
 
@@ -168,6 +180,17 @@ class FitParamDialog(QDialog):
                 row[key] = bool(cb.isChecked()) if cb is not None else True
             combo = self.table.cellWidget(i, _SHAPE_COL)
             row["shape"] = combo.currentText() if combo is not None else "G"
+
+            link_item = self.table.item(i, _LINK_COL)
+            link_text = (link_item.text() if link_item is not None else "").strip()
+            row.pop("link_fwhm", None)
+            if link_text:
+                try:
+                    j = int(float(link_text)) - 1  # UI is 1-based; params_struct is 0-based
+                    if j != i and 0 <= j < self.table.rowCount():
+                        row["link_fwhm"] = j
+                except (TypeError, ValueError):
+                    pass
 
     # ------------------------------------------------------------------
     def _add_component(self) -> None:

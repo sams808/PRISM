@@ -523,8 +523,10 @@ class SingleFitWorkspace(QWidget):
             d["fwhm_val"] = float(result.params[f"l{i}"].value)
             if f"a{i}" in result.params:
                 d["amp_val"] = float(result.params[f"a{i}"].value)
-            if d.get("shape", "G") == "GL" and f"eta{i}" in result.params:
+            if d.get("shape", "G") in ("GL", "V") and f"eta{i}" in result.params:
                 d["eta_val"] = float(result.params[f"eta{i}"].value)
+            if d.get("shape", "G") == "EMG" and f"s{i}" in result.params:
+                d["skew_val"] = float(result.params[f"s{i}"].value)
         self.fit_param_memory.set(self._current_spectrum_id, params_struct)
 
     # ------------------------------------------------------------------
@@ -606,6 +608,17 @@ class SingleFitWorkspace(QWidget):
         areas = [float(np.trapz(pk, x)) for pk in peaks]
         centroids = [peak_centroid(x, pk) for pk in peaks]
 
+        def _stderr(pname: str) -> str:
+            """1-sigma uncertainty from the last fit's covariance matrix
+            (lmfit's leastsq computes these for free — the pragmatic
+            uncertainty report; full conf_interval() profiling deferred)."""
+            if self._current_fit is None:
+                return ""
+            par = self._current_fit.params.get(pname)
+            if par is None or par.stderr is None or not np.isfinite(par.stderr):
+                return ""
+            return f" ± {par.stderr:.3g}"
+
         try:
             with open(filename, "w", encoding="utf-8") as f:
                 f.write("# Raman Fit Report\n")
@@ -613,8 +626,9 @@ class SingleFitWorkspace(QWidget):
                 f.write(f"# Date: {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"# Chi2: {chi2:.5g}\n")
                 f.write(f"# R2: {r2:.5g}\n")
+                f.write("# Uncertainties (when shown) are 1-sigma standard errors from the fit covariance matrix.\n")
                 f.write("#\n")
-                f.write("# Component\tCenter\tFWHM\tAmplitude\tArea\tCentroid\tShape\tEta\n")
+                f.write("# Component\tCenter\tFWHM\tAmplitude\tArea\tCentroid\tShape\tEta\tSkew\n")
                 for i, d in enumerate(params_struct):
                     center = d["shift_val"]
                     fwhm = d["fwhm_val"]
@@ -622,8 +636,12 @@ class SingleFitWorkspace(QWidget):
                     area = areas[i] if i < len(areas) else float("nan")
                     centroid = centroids[i] if i < len(centroids) else float("nan")
                     shape = d.get("shape", "G")
-                    eta = d.get("eta_val", "--") if shape == "GL" else "--"
-                    f.write(f"{i + 1}\t{center:.2f}\t{fwhm:.2f}\t{amp}\t{area:.2f}\t{centroid:.2f}\t{shape}\t{eta}\n")
+                    eta = d.get("eta_val", "--") if shape in ("GL", "V") else "--"
+                    skew = d.get("skew_val", "--") if shape == "EMG" else "--"
+                    f.write(
+                        f"{i + 1}\t{center:.2f}{_stderr(f'f{i}')}\t{fwhm:.2f}{_stderr(f'l{i}')}\t"
+                        f"{amp}{_stderr(f'a{i}')}\t{area:.2f}\t{centroid:.2f}\t{shape}\t{eta}\t{skew}\n"
+                    )
                 f.write("#\n# End of report\n")
         except OSError as exc:
             QMessageBox.critical(self, "Report error", str(exc))

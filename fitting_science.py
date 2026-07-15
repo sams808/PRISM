@@ -24,12 +24,81 @@ import rampy as rp
 # Peak model — the ONE place peak shapes are computed from lmfit Parameters.
 # =============================================================================
 
+# NOTE on the width convention: rampy's gaussian/pseudovoigt third
+# parameter is HWHM (half-width at half-maximum), even though this app's
+# params_struct keys and UI labels have historically said "FWHM" — the
+# original main.py passed fwhm_val straight into rampy's HWHM slot, so
+# every saved model and every fit ever made uses the HWHM interpretation.
+# Discovered while adding the V/EMG shapes (their first drafts assumed the
+# label was literal and produced peaks half as wide as G/GL for the same
+# `l`). The new shapes below deliberately take `hwhm` to match the
+# established behavior rather than the label — changing the semantics now
+# would silently re-interpret every existing saved model.
+
+def voigt_peak(x: np.ndarray, amplitude: float, center: float, hwhm: float, eta: float) -> np.ndarray:
+    """TRUE Voigt profile (Gaussian⊗Lorentzian convolution via
+    scipy.special.voigt_profile), height-normalized so `amplitude` is the
+    peak height — the same conventions as rampy's gaussian/pseudovoigt used
+    by the G/GL shapes (width = HWHM, see module note above). `eta` (0..1)
+    splits the width between the two components: eta=0 is a pure Gaussian
+    of HWHM=hwhm and eta=1 a pure Lorentzian of HWHM=hwhm. (For
+    intermediate eta the total width is close to, not exactly, `hwhm` —
+    the same interpretation the pseudo-Voigt already carries.)"""
+    from scipy.special import voigt_profile
+    fwhm_total = 2.0 * max(float(hwhm), 1e-12)
+    eta = min(max(float(eta), 0.0), 1.0)
+    f_l = eta * fwhm_total
+    f_g = (1.0 - eta) * fwhm_total
+    sigma = f_g / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    gamma = f_l / 2.0
+    if sigma < 1e-12 and gamma < 1e-12:
+        sigma = 1e-12
+    profile = voigt_profile(np.asarray(x, float) - float(center), sigma, gamma)
+    peak_val = voigt_profile(0.0, sigma, gamma)
+    if peak_val <= 0:
+        return np.zeros_like(np.asarray(x, float))
+    return float(amplitude) * profile / peak_val
+
+
+def emg_peak(x: np.ndarray, amplitude: float, center: float, hwhm: float, skew: float) -> np.ndarray:
+    """Exponentially modified Gaussian with SIGNED skew, height-normalized
+    so `amplitude` is the peak height (width = HWHM of the underlying
+    Gaussian, matching the G/GL convention — see module note above).
+    skew > 0 tails to high x, skew < 0 tails to low x (mirror), |skew| is
+    the exponential decay constant in x-units. |skew| below ~1% of sigma
+    degenerates numerically toward a plain Gaussian, which is what's
+    returned in that limit.
+
+    Uses the erfcx-stable formulation (exp(-(x-mu)^2/2sigma^2) * erfcx(z))
+    rather than the naive exp(...)*erfc(...) kernel, which overflows for
+    small tau."""
+    from scipy.special import erfcx
+    x = np.asarray(x, dtype=float)
+    sigma = 2.0 * max(float(hwhm), 1e-12) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    tau = float(skew)
+    if abs(tau) < 1e-2 * sigma:
+        return rp.gaussian(x, amplitude, center, hwhm)
+
+    sign = 1.0 if tau > 0 else -1.0
+    tau_abs = abs(tau)
+    dx = sign * (x - float(center))  # mirror for negative skew
+    z = sigma / (np.sqrt(2.0) * tau_abs) - dx / (np.sqrt(2.0) * sigma)
+    profile = np.exp(-dx * dx / (2.0 * sigma * sigma)) * erfcx(z)
+    peak_val = float(np.nanmax(profile))
+    if peak_val <= 0 or not np.isfinite(peak_val):
+        return np.zeros_like(x)
+    return float(amplitude) * profile / peak_val
+
+
 def compute_model(x: np.ndarray, lm_params: "lmfit.Parameters", params_struct: List[Dict[str, Any]]) -> Tuple[np.ndarray, List[np.ndarray]]:
-    """Sum of per-component Gaussian/pseudo-Voigt(GL) peaks.
+    """Sum of per-component peaks. Shapes: "G" (Gaussian), "GL"
+    (pseudo-Voigt), "V" (true Voigt), "EMG" (exponentially modified
+    Gaussian, signed skew — the asymmetric-peak shape).
 
     params_struct is a list of per-component dicts (one per peak), each with
-    at least a "shape" key ("G" or "GL"); lm_params must contain matching
-    a{i}/f{i}/l{i}(/eta{i} for GL) entries, as built by build_lmfit_parameters.
+    at least a "shape" key; lm_params must contain matching a{i}/f{i}/l{i}
+    (/eta{i} for GL and V, /s{i} for EMG) entries, as built by
+    build_lmfit_parameters.
     """
     x = np.asarray(x, dtype=float)
     total = np.zeros_like(x)
@@ -38,9 +107,16 @@ def compute_model(x: np.ndarray, lm_params: "lmfit.Parameters", params_struct: L
         a = lm_params[f"a{i}"].value
         f = lm_params[f"f{i}"].value
         l = lm_params[f"l{i}"].value
-        if d.get("shape", "G") == "G":
+        shape = d.get("shape", "G")
+        if shape == "G":
             pk = rp.gaussian(x, a, f, l)
-        else:
+        elif shape == "V":
+            eta = lm_params[f"eta{i}"].value if f"eta{i}" in lm_params else 0.5
+            pk = voigt_peak(x, a, f, l, eta)
+        elif shape == "EMG":
+            skew = lm_params[f"s{i}"].value if f"s{i}" in lm_params else 0.0
+            pk = emg_peak(x, a, f, l, skew)
+        else:  # "GL" pseudo-Voigt (historic default for any unknown shape)
             eta = lm_params[f"eta{i}"].value if f"eta{i}" in lm_params else 0.5
             pk = rp.pseudovoigt(x, a, f, l, eta)
         peaks.append(pk)
@@ -96,8 +172,8 @@ def build_lmfit_parameters(params_struct: List[Dict[str, Any]]) -> "lmfit.Parame
 
         p.add(f"l{i}", value=lval, min=lmin, max=lmax, vary=bool(d.get("fit_fwhm", True)))
 
-        # ---- Pseudo-Voigt (GL): eta in [0,1] ----
-        if d.get("shape", "G") == "GL":
+        # ---- Pseudo-Voigt (GL) and true Voigt (V): eta in [0,1] ----
+        if d.get("shape", "G") in ("GL", "V"):
             try:
                 eta_min = float(d.get("eta_min", 0.0))
                 eta_max = float(d.get("eta_max", 1.0))
@@ -114,6 +190,44 @@ def build_lmfit_parameters(params_struct: List[Dict[str, Any]]) -> "lmfit.Parame
             if not (eta_min < eta_val < eta_max):
                 eta_val = 0.5
             p.add(f"eta{i}", value=eta_val, min=eta_min, max=eta_max, vary=bool(d.get("fit_eta", True)))
+
+        # ---- EMG: signed skew (exponential decay constant, x-units) ----
+        if d.get("shape", "G") == "EMG":
+            try:
+                s_min = float(d.get("skew_min", -100.0))
+                s_max = float(d.get("skew_max", 100.0))
+            except Exception:
+                s_min, s_max = -100.0, 100.0
+            if s_min > s_max:
+                s_min, s_max = s_max, s_min
+            try:
+                s_val = float(d.get("skew_val", 1.0))
+            except Exception:
+                s_val = 1.0
+            if not (s_min < s_val < s_max):
+                s_val = (s_min + s_max) / 2.0
+            p.add(f"s{i}", value=s_val, min=s_min, max=s_max, vary=bool(d.get("fit_skew", True)))
+
+    # ---- Parameter linking (Origin-style "share this FWHM with peak N") ----
+    # Second pass, after every base parameter exists: a component with
+    # "link_fwhm": j takes its width from component j via an lmfit
+    # constraint expression (l{i} = l{j}); same for "link_eta". Self-links
+    # and out-of-range indices are ignored rather than erroring — a linked
+    # recipe applied to a smaller model shouldn't explode.
+    n = len(params_struct)
+    for i, d in enumerate(params_struct):
+        for key, pname in (("link_fwhm", "l"), ("link_eta", "eta")):
+            j = d.get(key)
+            if j is None:
+                continue
+            try:
+                j = int(j)
+            except (TypeError, ValueError):
+                continue
+            if j == i or not (0 <= j < n):
+                continue
+            if f"{pname}{i}" in p and f"{pname}{j}" in p:
+                p[f"{pname}{i}"].expr = f"{pname}{j}"
 
     return p
 

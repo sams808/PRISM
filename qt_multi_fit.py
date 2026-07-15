@@ -293,8 +293,10 @@ class MultiFitWorkspace(QWidget):
             d["fwhm_val"] = float(result.params[f"l{i}"].value)
             if f"a{i}" in result.params:
                 d["amp_val"] = float(result.params[f"a{i}"].value)
-            if d.get("shape", "G") == "GL" and f"eta{i}" in result.params:
+            if d.get("shape", "G") in ("GL", "V") and f"eta{i}" in result.params:
                 d["eta_val"] = float(result.params[f"eta{i}"].value)
+            if d.get("shape", "G") == "EMG" and f"s{i}" in result.params:
+                d["skew_val"] = float(result.params[f"s{i}"].value)
 
     # ------------------------------------------------------------------
     def _populate_results_table(self) -> None:
