@@ -166,6 +166,10 @@ class SimplePlotWorkspace(QWidget):
         self.zero_line_check.toggled.connect(lambda: self.plot.request_redraw(self.render))
         left_layout.addWidget(self.zero_line_check)
 
+        self.diff_check = QCheckBox("Difference (1st − 2nd selected)")
+        self.diff_check.toggled.connect(lambda: self.plot.request_redraw(self.render))
+        left_layout.addWidget(self.diff_check)
+
         smooth_row = QHBoxLayout()
         smooth_row.addWidget(QLabel("Smoothing"))
         self.smooth_combo = QComboBox()
@@ -357,6 +361,32 @@ class SimplePlotWorkspace(QWidget):
                         y = y / area * 100
             y = self._apply_smoothing(y)
             prepared.append((x, y, s.title))
+
+        if self.diff_check.isChecked():
+            # Spectral-difference mode (deferred M7 item): with exactly two
+            # spectra selected, plot A, B, and A − B (B interpolated onto
+            # A's grid) on one axes, overriding separate/stacked layout.
+            if len(prepared) == 2:
+                (xa, ya, la), (xb, yb, lb) = prepared
+                yb_on_a = np.interp(xa, xb, yb)
+                ax = fig.add_subplot(111)
+                ax.plot(xa, ya, lw=1, label=la)
+                ax.plot(xa, yb_on_a, lw=1, label=lb)
+                ax.plot(xa, ya - yb_on_a, lw=1.4, color="black", label=f"{la} − {lb}")
+                ax.axhline(0.0, lw=0.8, alpha=0.6, color="0.6")
+                ax.set_xlabel(self.x_title_edit.text())
+                ax.set_ylabel(self.y_title_edit.text())
+                if not self.no_title_check.isChecked():
+                    ax.set_title(global_title or f"Difference: {la} − {lb}")
+                ax.legend(fontsize=8)
+                ax.grid(True, alpha=0.3) if self.grid_check.isChecked() else ax.grid(False)
+                self._draw_cif_bragg_markers()
+                self._apply_axis_limits(skip_redraw=True)
+                fig.tight_layout()
+                self.plot.canvas.draw_idle()
+                return
+            # Wrong selection count: fall through to normal rendering so the
+            # user still sees their data (checkbox simply has no effect).
 
         if mode == "separate":
             axes = np.atleast_1d(fig.subplots(1, len(prepared), sharey=True)).ravel()

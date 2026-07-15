@@ -6,6 +6,7 @@ for why): `pytest tests/test_qt_simple_plot.py --override-ini="addopts="`
 """
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from qt_models import Spectrum, SpectrumLibrary
@@ -136,6 +137,67 @@ def test_color_scheme_change_does_not_crash(qtbot, raman_example_path):
         widget.color_combo.setCurrentText(scheme)
         qtbot.wait(200)
     assert len(widget.plot.figure.get_axes()) >= 1
+
+
+def test_difference_mode_plots_a_minus_b(qtbot):
+    library = SpectrumLibrary()
+    x = np.linspace(0, 100, 200)
+    a = Spectrum(id=Spectrum.new_id(), title="a", path="", kind="raman_xy", x=x, y=np.full(200, 5.0))
+    b = Spectrum(id=Spectrum.new_id(), title="b", path="", kind="raman_xy", x=x, y=np.full(200, 2.0))
+    library.add(a)
+    library.add(b)
+
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([a.id, b.id])
+    widget.file_list.selectAll()
+    widget.diff_check.setChecked(True)
+    qtbot.wait(200)  # debounced redraw
+
+    axes = widget.plot.figure.get_axes()
+    assert len(axes) == 1
+    lines = axes[0].lines
+    # a, b, and the difference curve (plus the y=0 axhline)
+    labels = [ln.get_label() for ln in lines]
+    assert any("−" in lbl for lbl in labels)
+    diff_line = [ln for ln in lines if "−" in ln.get_label()][0]
+    assert np.allclose(diff_line.get_ydata(), 3.0)
+
+
+def test_difference_mode_with_wrong_selection_count_falls_back(qtbot, raman_example_path):
+    library = _library_with_raman(raman_example_path)
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()  # only ONE spectrum
+    widget.diff_check.setChecked(True)
+    qtbot.wait(200)
+    # Falls back to normal rendering rather than erroring or blanking.
+    assert len(widget.plot.figure.get_axes()) == 1
+    assert len(widget.plot.figure.get_axes()[0].lines) >= 1
+
+
+def test_plot_widget_mouse_readout_label_exists(qtbot):
+    from qt_widgets import PlotWidget
+    widget = PlotWidget()
+    qtbot.addWidget(widget)
+    assert widget.coords_label.text() == ""
+
+    class _FakeEvent:
+        inaxes = widget.ax
+        xdata = 123.456
+        ydata = 7.89
+
+    widget._on_mouse_move(_FakeEvent())
+    assert "123.5" in widget.coords_label.text()
+
+    class _OutsideEvent:
+        inaxes = None
+        xdata = None
+        ydata = None
+
+    widget._on_mouse_move(_OutsideEvent())
+    assert widget.coords_label.text() == ""
 
 
 def test_shell_raman_page_picks_up_library_records(qtbot, raman_example_path):

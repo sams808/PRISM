@@ -561,6 +561,10 @@ class XasWorkspace(QWidget):
         lcf_btn.clicked.connect(self.linear_combination_fit_selected)
         ctrl_layout.addWidget(lcf_btn)
 
+        pca_btn = QPushButton("PCA across selected (species count)")
+        pca_btn.clicked.connect(self.pca_selected)
+        ctrl_layout.addWidget(pca_btn)
+
         self.analysis_result_text = QTextEdit()
         self.analysis_result_text.setReadOnly(True)
         self.analysis_result_text.setMaximumHeight(140)
@@ -678,6 +682,55 @@ class XasWorkspace(QWidget):
         ax.set_title(f"Linear combination fit — R²={r2:.4f}")
         ax.legend(fontsize=7); ax.grid(alpha=0.25)
         self.analysis_plot.figure.tight_layout()
+        self.analysis_plot.canvas.draw_idle()
+
+    def pca_selected(self) -> None:
+        """Athena-inspired PCA across a spectral series (M21): the explained-
+        variance profile indicates how many distinct chemical species/
+        environments the series contains (components with non-trivial
+        variance ≈ independent spectral signatures)."""
+        from cluster_science import build_feature_matrix, pca_scores
+
+        specs = self._analysis_selected_spectra()
+        if len(specs) < 3:
+            QMessageBox.warning(self, "PCA", "Select at least 3 spectra.")
+            return
+        try:
+            matrix, grid = build_feature_matrix([(sp.energy, sp.y) for sp in specs], normalize=None)
+            out = pca_scores(matrix, n_components=min(5, len(specs) - 1))
+        except (ValueError, ImportError) as exc:
+            QMessageBox.critical(self, "PCA error", str(exc))
+            return
+
+        var = out["explained_variance_ratio"]
+        lines = [f"PCA across {len(specs)} spectra:", ""]
+        cumulative = 0.0
+        for i, v in enumerate(var):
+            cumulative += v
+            lines.append(f"  PC{i + 1}: {v * 100:.1f}%  (cumulative {cumulative * 100:.1f}%)")
+        n_significant = int(np.sum(var > 0.01))
+        lines.append("")
+        lines.append(f"Components above 1% variance: {n_significant} — a rough lower bound on the number of distinct species present.")
+        self.analysis_result_text.setPlainText("\n".join(lines))
+
+        fig = self.analysis_plot.figure
+        fig.clf()
+        ax_sc = fig.add_subplot(121)
+        scores = out["scores"]  # n_components >= 2 given the 3-spectrum minimum above
+        ax_sc.scatter(scores[:, 0], scores[:, 1], s=36, color=COLORS[0])
+        for sp, (px, py) in zip(specs, scores[:, :2]):
+            ax_sc.annotate(sp.name, (px, py), fontsize=6, alpha=0.7)
+        ax_sc.set_xlabel(f"PC1 ({var[0] * 100:.0f}%)")
+        ax_sc.set_ylabel(f"PC2 ({var[1] * 100:.0f}%)" if len(var) > 1 else "PC2")
+        ax_sc.grid(alpha=0.25)
+
+        ax_scree = fig.add_subplot(122)
+        ax_scree.bar(np.arange(1, len(var) + 1), var * 100, color=COLORS[1])
+        ax_scree.set_xlabel("Component")
+        ax_scree.set_ylabel("Explained variance (%)")
+        ax_scree.set_title("Scree", fontsize=9)
+        ax_scree.grid(alpha=0.25, axis="y")
+        fig.tight_layout()
         self.analysis_plot.canvas.draw_idle()
 
     # ------------------------------------------------------------------

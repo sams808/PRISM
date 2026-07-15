@@ -20,7 +20,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.figure import Figure
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 
 class PlotWidget(QWidget):
@@ -48,11 +48,25 @@ class PlotWidget(QWidget):
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas)
 
+        # Live cursor readout (deferred M7 item, implemented once here so
+        # every workspace gets it): x/y of the data point under the mouse.
+        self.coords_label = QLabel("")
+        self.coords_label.setObjectName("SectionNote")
+        self.coords_label.setAlignment(Qt.AlignRight)
+        layout.addWidget(self.coords_label)
+        self.canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
+
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(debounce_ms)
         self._debounce.timeout.connect(self._flush_redraw)
         self._pending: Optional[tuple] = None
+
+    def _on_mouse_move(self, event) -> None:
+        if event.inaxes is None or event.xdata is None:
+            self.coords_label.setText("")
+            return
+        self.coords_label.setText(f"x = {event.xdata:.4g}   y = {event.ydata:.4g}")
 
     def request_redraw(self, fn: Callable, *args, **kwargs) -> None:
         """Coalesce rapid-fire redraw requests (slider drags, live text-entry,

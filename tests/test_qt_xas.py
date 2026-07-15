@@ -207,6 +207,34 @@ def test_linear_combination_fit_recovers_known_weights(qtbot):
     assert "R²" in widget.analysis_result_text.toPlainText()
 
 
+def test_pca_selected_reports_species_count(qtbot):
+    """M21: PCA across a synthetic 2-species series must attribute the
+    dominant variance to PC1 and report a small species count."""
+    widget = XasWorkspace()
+    qtbot.addWidget(widget)
+    energy = np.linspace(7000, 7400, 300)
+    rng = np.random.default_rng(0)
+    spec_a = 0.15 + 1.0 * 0.5 * (1 + erf((energy - 7112.0) / 3.0))
+    spec_b = 0.15 + 1.0 * 0.5 * (1 + erf((energy - 7130.0) / 3.0))
+    for i, frac in enumerate([0.0, 0.25, 0.5, 0.75, 1.0]):
+        y = (1 - frac) * spec_a + frac * spec_b + rng.normal(0, 1e-3, energy.shape)
+        widget.store.add(Spectrum(sid=_uid("sp"), name=f"mix{i}", kind="mu", energy=energy, y=y))
+    widget._refresh_all()
+
+    for i in range(widget.analysis_list.count()):
+        widget.analysis_list.item(i).setSelected(True)
+    widget.pca_selected()
+    qtbot.wait(20)
+
+    text = widget.analysis_result_text.toPlainText()
+    assert "PC1" in text
+    assert "distinct species" in text
+    # Two-species linear mixtures live on a 1D line in spectrum space:
+    # PC1 alone should carry essentially all the variance.
+    assert "PC1: 9" in text or "PC1: 100" in text  # >= 90%
+    assert len(widget.analysis_plot.figure.get_axes()) == 2  # scatter + scree
+
+
 def test_edge_definer_apply_sets_label(qtbot):
     widget = XasWorkspace()
     qtbot.addWidget(widget)

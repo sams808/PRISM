@@ -28,6 +28,25 @@ PALETTE = {
     "critical_bg": "#f6e4df",
 }
 
+# Dark variant (deferred M7 item). Applies to the Qt chrome only —
+# matplotlib plot areas deliberately stay white so on-screen plots always
+# match what PNG/SVG/PDF export produces (publication figures are white).
+DARK_PALETTE = {
+    "bg": "#1d2320",
+    "bg_alt": "#171c19",
+    "card": "#252c28",
+    "ink": "#dbe4de",
+    "muted": "#93a29a",
+    "border": "#39423d",
+    "accent": "#4d8f93",
+    "accent_hover": "#67a9ad",
+    "accent_ink": "#0e1412",
+    "selection_bg": "#2f4341",
+    "warn": "#c98844",
+    "critical": "#c05a47",
+    "critical_bg": "#3a2723",
+}
+
 _FONT_FAMILY = '"Segoe UI", -apple-system, sans-serif'
 _MONO_FAMILY = '"Cascadia Mono", Consolas, monospace'
 
@@ -152,5 +171,5 @@ def build_stylesheet(palette: dict = PALETTE) -> str:
     """
 
 
-def apply_theme(app, palette: dict = PALETTE) -> None:
-    app.setStyleSheet(build_stylesheet(palette))
+def apply_theme(app, palette: dict = PALETTE, *, dark: bool = False) -> None:
+    app.setStyleSheet(build_stylesheet(DARK_PALETTE if dark else palette))

@@ -251,7 +251,21 @@ class DataappMainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
 
+        view_menu = self.menuBar().addMenu("&View")
+        self.dark_mode_action = view_menu.addAction("Dark mode")
+        self.dark_mode_action.setCheckable(True)
+        self.dark_mode_action.toggled.connect(self._on_dark_mode_toggled)
+
         self.statusBar().showMessage("Ready.")
+
+    def _on_dark_mode_toggled(self, enabled: bool) -> None:
+        """Dark mode restyles the Qt chrome only — matplotlib plot areas
+        stay white so what's on screen always matches PNG/SVG/PDF export."""
+        from PySide6.QtWidgets import QApplication
+        from qt_theme import apply_theme
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, dark=enabled)
 
     # ------------------------------------------------------------------
     # Project persistence (M14): everything in the shared Library plus the
