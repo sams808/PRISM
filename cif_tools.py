@@ -173,10 +173,17 @@ def bragg_peaks_from_cif_generic(path: str, two_theta_max: float = 80.0, hkl_max
             return [(tt, (h,k,l), d) for (tt, h, k, l, d) in cached]
 
     a, b, c, alpha, beta, gamma, wavelength = parse_cif_generic(path)
-    out = []
-    for h in range(0, hkl_max+1):
-        for k in range(0, hkl_max+1):
-            for l in range(0, hkl_max+1):
+    # Full +/-hkl_max range for every index: for non-orthogonal cells (nonzero
+    # cos(alpha)/cos(beta)/cos(gamma) cross-terms in _d_triclinic), mixed-sign
+    # combinations like (h,k,-l) give different d-spacings than (h,k,l) — the
+    # old non-negative-only octant silently missed those reflections for
+    # triclinic/monoclinic structures. (h,k,l) and (-h,-k,-l) always share the
+    # same |d| (Friedel pairs), so dedupe on rounded d instead of restricting
+    # the search range, which would risk reintroducing the same coverage gap.
+    seen_d: dict[float, tuple] = {}
+    for h in range(-hkl_max, hkl_max + 1):
+        for k in range(-hkl_max, hkl_max + 1):
+            for l in range(-hkl_max, hkl_max + 1):
                 if h == k == l == 0:
                     continue
                 d = _d_triclinic(a, b, c, alpha, beta, gamma, h, k, l)
@@ -187,8 +194,12 @@ def bragg_peaks_from_cif_generic(path: str, two_theta_max: float = 80.0, hkl_max
                     continue
                 theta = math.degrees(math.asin(arg))
                 tt = 2.0 * theta
-                if tt <= two_theta_max:
-                    out.append((tt, (h, k, l), d))
+                if tt > two_theta_max:
+                    continue
+                key = round(d, 6)
+                if key not in seen_d:
+                    seen_d[key] = (tt, (h, k, l), d)
+    out = list(seen_d.values())
     out.sort(key=lambda t: t[0])
     if use_cache:
         try:

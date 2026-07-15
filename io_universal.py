@@ -61,7 +61,9 @@ def _decode_text_autodetect(raw: bytes, extra_encodings: tuple[str, ...] = ()) -
         except Exception:
             pass
 
-    for enc in ("utf-8-sig", "utf-8", "latin-1", *extra_encodings):
+    # latin-1 never raises (it maps every byte 0x00-0xFF), so it must stay
+    # last or any caller-supplied extra_encodings would be unreachable.
+    for enc in ("utf-8-sig", "utf-8", *extra_encodings, "latin-1"):
         try:
             return raw.decode(enc, errors="strict"), enc
         except Exception:
@@ -166,10 +168,12 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
     lines = text.splitlines()
 
     start_idx = None
+    marker_found = False
     for i, line in enumerate(lines):
         norm = re.sub(r"\s+", "", line).lower()
         if "startofdata" in norm:
             start_idx = i
+            marker_found = True
             break
 
     if start_idx is None:
@@ -178,14 +182,22 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
             if not s:
                 continue
             if s[0].isdigit() or s[0] in "+-.":
-                start_idx = i - 1
+                start_idx = i
                 break
 
     if start_idx is None:
         raise ValueError("Could not find data start (no StartOfData marker and no numeric data rows).")
 
-    header_lines = lines[:start_idx]
-    data_lines = lines[start_idx + 1 :]
+    if marker_found:
+        header_lines = lines[:start_idx]
+        data_lines = lines[start_idx + 1:]
+    else:
+        # No StartOfData marker: start_idx points at the first numeric row.
+        # Header is everything before it (including the column-name line
+        # immediately preceding the data, which must NOT be dropped); data
+        # starts exactly at start_idx (handles start_idx == 0 correctly too).
+        header_lines = lines[:start_idx]
+        data_lines = lines[start_idx:]
 
     header: dict[str, str] = {}
     for line in header_lines:
@@ -211,7 +223,16 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
     else:
         first_data = next((ln for ln in data_lines if ln.strip()), "")
         ncols = len(re.split(r"\s+", first_data.strip()))
-        colnames = [f"col{i+1}" for i in range(ncols)]
+        # Try the last non-empty header line as real column names (common when
+        # there's no StartOfData/SigN metadata but a plain header row exists).
+        header_row_candidate = next((ln for ln in reversed(header_lines) if ln.strip()), None)
+        colnames = None
+        if header_row_candidate is not None:
+            tokens = re.split(r"\s+", header_row_candidate.strip())
+            if len(tokens) == ncols and not any(_NUM_LIKE.match(t) for t in tokens):
+                colnames = [t.strip() for t in tokens]
+        if colnames is None:
+            colnames = [f"col{i+1}" for i in range(ncols)]
 
     numeric_rows = []
     for ln in data_lines:
@@ -348,8 +369,14 @@ def sniff_dta_table(path: str, head: str) -> bool:
         return True
     if re.search(r"dsc|heat\s*flow|tg|dtg", low):
         return True
-    if ";" in head and re.search(r"temperature", low):
-        return True
+    # Require actual semicolon-delimited *table structure* on the same line as
+    # a temperature token (a real DTA header row has multiple such fields),
+    # not just a semicolon and the word "temperature" appearing independently
+    # anywhere in the header block — that misfired on e.g. a Raman file whose
+    # comment header merely says "# Raman spectrum; acquired at room temperature".
+    for ln in head.splitlines():
+        if ln.count(";") >= 2 and re.search(r"\btemperature\b", ln, re.I):
+            return True
     return False
 
 # ==============================
@@ -424,14 +451,16 @@ def parse_saxs_edf_ascii(path: str) -> tuple[pd.DataFrame, dict]:
     df.columns = colnames
 
     canonical = {}
+    i_count = 0
     for col in df.columns:
         low = col.lower()
         if low.startswith("q"):
-            canonical["q_A^-1"] = col
+            canonical.setdefault("q_A^-1", col)
         elif "sig" in low:
-            canonical["sigma"] = col
+            canonical.setdefault("sigma", col)
         else:
-            canonical["I"] = col
+            i_count += 1
+            canonical["I" if i_count == 1 else f"I{i_count}"] = col
 
     canonical.setdefault("X", canonical.get("q_A^-1"))
     canonical.setdefault("Y", canonical.get("I"))
@@ -527,28 +556,21 @@ def parse_generic_xy(path: str) -> tuple[pd.DataFrame, dict]:
 def _read_table_flexible(path: str) -> tuple[pd.DataFrame, str, str | None]:
     text, enc = _read_text_with_fallbacks(path)
     decimal = "," if len(re.findall(r"\d+,\d", text[:2000])) > len(re.findall(r"\d+\.\d", text[:2000])) else "."
+
+    # Decide header=None vs header=0 BEFORE reading, so headerless numeric
+    # files never lose their first data row to a phantom pandas header.
+    first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+    first_is_numeric = _split_numeric_line(first_line) is not None
+
     for sep in [";", "\t", ",", " ", None]:
         try:
-            df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python")
+            df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python",
+                              header=None if first_is_numeric else 0)
             if df.shape[1] >= 2:
                 return df, enc, sep
         except Exception:
             continue
     raise ValueError("Could not read table with flexible settings.")
-
-def _canonicalize_xy(df: pd.DataFrame, prefer: list[str]) -> tuple[str, str]:
-    cols = {c.lower(): c for c in df.columns}
-    for cand in prefer:
-        low = cand.lower()
-        for key, col in cols.items():
-            if low in key:
-                for other_key, other_col in cols.items():
-                    if other_col == col:
-                        continue
-                    if any(y in other_key for y in ["intensity","counts","absorb","a.u","signal","heat flow","dsc","tg","dtg"]):
-                        return col, other_col
-    # fallback: first two
-    return df.columns[0], df.columns[1]
 
 def parse_raman(path: str) -> tuple[pd.DataFrame, dict]:
     df, enc, sep = _read_table_flexible(path)
@@ -628,6 +650,73 @@ def parse_xrd(path: str) -> tuple[pd.DataFrame, dict]:
     }
     return df.reset_index(drop=True), meta
 
+def sniff_rasx(path: str, head: str) -> bool:
+    """Rigaku SmartLab .rasx is a ZIP container, not text — detect by extension
+    (the generic _head_text() sniff can't see inside a ZIP's binary layout)."""
+    return path.lower().endswith(".rasx")
+
+
+def parse_rasx(path: str) -> tuple[pd.DataFrame, dict]:
+    """Rigaku SmartLab .rasx: a ZIP container. Data*/Profile*.txt holds
+    headerless tab-separated (2theta, intensity, count) rows;
+    Data*/MesurementConditions*.xml holds axis metadata, including the "Temp"
+    axis's Position/EndPosition (deg. C) — the scan's temperature range for
+    in-situ/high-temperature XRD, where each pattern is collected while the
+    sample continues heating (a real range, not a single instantaneous value).
+    """
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    with zipfile.ZipFile(path, "r") as zf:
+        names = zf.namelist()
+        profile_names = sorted(n for n in names if re.match(r"Data\d+/Profile\d+\.txt$", n))
+        if not profile_names:
+            raise ValueError(f"No Data*/Profile*.txt found inside .rasx: {path}")
+        profile_name = profile_names[0]
+        raw = zf.read(profile_name).decode("utf-8-sig", errors="replace")
+
+        temp_start = temp_end = None
+        cond_name = re.sub(r"Profile(\d+)\.txt$", r"MesurementConditions\1.xml", profile_name)
+        if cond_name in names:
+            try:
+                root_xml = ET.fromstring(zf.read(cond_name))
+                for axis in root_xml.iter("Axis"):
+                    if axis.get("Name") == "Temp":
+                        temp_start = _clean_float_or_none(axis.get("Position"))
+                        temp_end = _clean_float_or_none(axis.get("EndPosition")) or temp_start
+                        break
+            except Exception:
+                pass
+
+    data_lines = [ln for ln in raw.splitlines() if ln.strip()]
+    if not data_lines:
+        raise ValueError(f"Empty profile data in .rasx: {path}")
+    rows = [ln.split("\t") for ln in data_lines]
+    ncols = len(rows[0])
+    colnames = ["2theta_deg", "intensity"] + [f"col{i+1}" for i in range(2, ncols)]
+    df = pd.DataFrame(rows, columns=colnames[:ncols])
+    for c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(how="all").reset_index(drop=True)
+
+    canonical = {"2theta_deg": "2theta_deg", "intensity": "intensity", "X": "2theta_deg", "Y": "intensity"}
+    meta = {
+        "parser": "rasx",
+        "canonical_map": canonical,
+        "path": os.path.abspath(path),
+        "temp_start_C": temp_start,
+        "temp_end_C": temp_end,
+    }
+    return df, meta
+
+
+def _clean_float_or_none(val) -> float | None:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
     header, signals, df = parse_ta_sdt_txt(Path(path))
     canonical = _build_dta_canonical(df)
@@ -648,6 +737,7 @@ def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
 # ==============================
 # Register parsers (priority)
 # ==============================
+register_parser(ParserSpec("rasx", sniff_rasx, parse_rasx, priority=5))
 register_parser(ParserSpec("ta_sdt", sniff_ta_sdt, parse_ta_sdt, priority=10))
 register_parser(ParserSpec("saxs_edf_ascii", sniff_saxs_edf_ascii, parse_saxs_edf_ascii, priority=20))
 register_parser(ParserSpec("dta_table", sniff_dta_table, parse_dta_table, priority=30))
