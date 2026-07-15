@@ -70,8 +70,9 @@ class RruffSpectrum:
     orientation_deg: Optional[str]
     polarization: Optional[str]
     data_kind: str  # "Processed" | "RAW" | ""
-    x: np.ndarray
-    y: np.ndarray
+    scan_type: str = "Raman"  # "Raman" (high-res category ZIPs) | "Broad_Scan" (LR-Raman.zip)
+    x: np.ndarray = field(default_factory=lambda: np.array([]))
+    y: np.ndarray = field(default_factory=lambda: np.array([]))
     ideal_chemistry: Optional[str] = None
     locality: Optional[str] = None
     owner: Optional[str] = None
@@ -88,13 +89,21 @@ def parse_rruff_filename(filename: str) -> Dict[str, Any]:
     Returns {} if the filename doesn't match the expected double-underscore
     schema (e.g. a directory entry or an unrelated file some archives
     occasionally bundle) rather than raising — callers should skip those.
+
+    Field 3 is the scan type: "Raman" in the 8 quality/orientation category
+    ZIPs, "Broad_Scan" in LR-Raman.zip — confirmed by downloading and
+    inspecting the real LR-Raman.zip (9,941 files, ~227MB): "LR" turns out
+    to be low-resolution broad-range survey scans of the same samples,
+    complementary to (not duplicating) the high-resolution scans. Same
+    ##-header in-file format; the scan type is preserved in the returned
+    dict so matching UIs can distinguish them.
     """
     stem = filename[:-4] if filename.lower().endswith(".txt") else filename
     parts = stem.split("__")
     if len(parts) < 7:
         return {}
-    mineral, rruff_id, literal_raman = parts[0], parts[1], parts[2]
-    if literal_raman != "Raman":
+    mineral, rruff_id, scan_type = parts[0], parts[1], parts[2]
+    if scan_type not in ("Raman", "Broad_Scan"):
         return {}
     wavelength_txt, orientation_deg, polarization = parts[3], parts[4], parts[5]
     data_kind_field = parts[6]
@@ -106,6 +115,7 @@ def parse_rruff_filename(filename: str) -> Dict[str, Any]:
     return {
         "mineral": mineral,
         "rruff_id": rruff_id,
+        "scan_type": scan_type,
         "wavelength_nm": wavelength_nm,
         "orientation_deg": orientation_deg or None,
         "polarization": polarization or None,
@@ -168,6 +178,7 @@ def parse_rruff_txt(text: str, source_filename: str = "") -> RruffSpectrum:
         orientation_deg=filename_fields.get("orientation_deg"),
         polarization=filename_fields.get("polarization"),
         data_kind=data_kind,
+        scan_type=filename_fields.get("scan_type", "Raman"),
         x=np.asarray(xs, dtype=float),
         y=np.asarray(ys, dtype=float),
         ideal_chemistry=header.get("IDEAL CHEMISTRY"),
@@ -238,6 +249,7 @@ def ingest_zip(
                 "orientation_deg": spectrum.orientation_deg,
                 "polarization": spectrum.polarization,
                 "data_kind": spectrum.data_kind,
+                "scan_type": spectrum.scan_type,
                 "ideal_chemistry": spectrum.ideal_chemistry,
                 "locality": spectrum.locality,
                 "owner": spectrum.owner,

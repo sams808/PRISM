@@ -47,6 +47,25 @@ def test_parse_rruff_filename_non_matching_returns_empty_dict():
     assert rs.parse_rruff_filename("Weird__Format__NotRaman__x.txt") == {}
 
 
+def test_parse_rruff_filename_broad_scan_from_lr_raman_zip():
+    """LR-Raman.zip (confirmed by downloading/inspecting the real 227MB
+    archive: 9,941 low-resolution broad-range survey scans) uses
+    'Broad_Scan' as the scan-type field where the category ZIPs say
+    'Raman' — same positional schema otherwise."""
+    fields = rs.parse_rruff_filename(
+        "Abramovite__R070037__Broad_Scan__532__0__unoriented__Raman_Data_Processed__db2de3a53da39189f1a8dfee39f1.txt"
+    )
+    assert fields["mineral"] == "Abramovite"
+    assert fields["scan_type"] == "Broad_Scan"
+    assert fields["wavelength_nm"] == 532.0
+    assert fields["data_kind"] == "Processed"
+
+    high_res = rs.parse_rruff_filename(
+        "Quartz__R040031__Raman__532__0-000____Raman_Data_Processed__xyz.txt"
+    )
+    assert high_res["scan_type"] == "Raman"
+
+
 # --------------------------------------------------------------------------
 # Header + data parsing
 # --------------------------------------------------------------------------
