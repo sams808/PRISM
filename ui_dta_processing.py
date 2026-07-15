@@ -248,476 +248,28 @@ def parse_ta_sdt_txt(path: Path) -> Tuple[Dict[str, str], List[str], pd.DataFram
 
 
 # =============================================================================
-# 2) Minimal smoothing + math helpers
+# 2-4) Smoothing, derivatives, and Tg methods now live in dta_science.py
+# (framework-agnostic, pytest-covered) — this file only wires the GUI to it.
 # =============================================================================
 
-def moving_average_10(y: np.ndarray) -> np.ndarray:
-    """
-    Minimal smoothing (fixed MA10) with reflected padding.
-    IMPORTANT: In this project, smoothing is applied ONLY to derivative arrays.
-    """
-    y = np.asarray(y, dtype=float)
-    if y.size < 3:
-        return y.copy()
-
-    w = 10
-    if y.size < w:
-        w = max(3, (y.size // 2) * 2 + 1)
-
-    pad = w // 2
-    ypad = np.pad(y, (pad, pad), mode="reflect")
-    kernel = np.ones(w, dtype=float) / float(w)
-    ys = np.convolve(ypad, kernel, mode="valid")
-    return ys[: y.size]
-
-
-def compute_derivative(y: np.ndarray, x: np.ndarray) -> np.ndarray:
-    """dy/dx with NaN safety and preserving output length."""
-    mask = np.isfinite(x) & np.isfinite(y)
-    out = np.full_like(y, np.nan, dtype=float)
-    if mask.sum() < 3:
-        return out
-    out[mask] = np.gradient(y[mask], x[mask])
-    return out
-
-
-def _fit_line(x: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
-    """Least-squares line fit y = m x + b."""
-    m, b = np.polyfit(x, y, 1)
-    return float(m), float(b)
-
-
-def _line_y(m: float, b: float, x: np.ndarray) -> np.ndarray:
-    return m * x + b
-
-
-def _intersect_lines(m1: float, b1: float, m2: float, b2: float) -> float:
-    denom = (m1 - m2)
-    if abs(denom) < 1e-12:
-        return float("nan")
-    return float((b2 - b1) / denom)
-
-
-def _root_on_grid(x: np.ndarray, f: np.ndarray, x_ref: Optional[float] = None) -> float:
-    """
-    Find root(s) of f(x)=0 on a sampled grid using sign changes + linear interpolation.
-    If multiple roots exist, return the one closest to x_ref.
-    Fallback: nearest-to-zero sample if no sign change exists.
-    """
-    mask = np.isfinite(x) & np.isfinite(f)
-    x = x[mask]
-    f = f[mask]
-    if len(x) < 3:
-        return float("nan")
-
-    s = np.sign(f)
-    idx = np.where(s[:-1] * s[1:] < 0)[0]
-
-    roots: List[float] = []
-    for i in idx:
-        x1, x2 = x[i], x[i + 1]
-        f1, f2 = f[i], f[i + 1]
-        if abs(f2 - f1) < 1e-12:
-            xr = float(x1)
-        else:
-            xr = float(x1 - f1 * (x2 - x1) / (f2 - f1))
-        roots.append(xr)
-
-    if roots:
-        if x_ref is None or not np.isfinite(x_ref):
-            return float(roots[0])
-        r = np.array(roots, dtype=float)
-        return float(r[np.nanargmin(np.abs(r - x_ref))])
-
-    j = int(np.nanargmin(np.abs(f)))
-    return float(x[j])
-
-
-# =============================================================================
-# 3) Tg detection core (derivative window + bounds)
-# =============================================================================
-
-@dataclass
-class TransitionInfo:
-    xw: np.ndarray
-    yw: np.ndarray
-    dy: np.ndarray
-    i0: int
-    x0: float
-    y0: float
-    m0: float
-    b0: float
-    i_left: int
-    i_right: int
-    x_left: float
-    x_right: float
-
-
-def _transition_from_derivative(
-    x: np.ndarray,
-    y: np.ndarray,
-    x_min: float,
-    x_max: float,
-    threshold: float = 0.20,
-    smooth_derivative: bool = False,
-) -> TransitionInfo:
-    """
-    Inside [x_min, x_max]:
-    - compute dy/dx from y
-    - optional MA10 smoothing on dy
-    - i0 = argmax |dy|
-    - x_left / x_right from where |dy| drops below threshold * peak(|dy|)
-
-    Returns TransitionInfo used to define automatic baseline regions.
-    """
-    if x_min > x_max:
-        x_min, x_max = x_max, x_min
-
-    w = (x >= x_min) & (x <= x_max)
-    if w.sum() < 20:
-        raise ValueError("Tg window too small (need ~20+ points).")
-
-    xw = x[w]
-    yw = y[w]
-
-    dy = compute_derivative(yw, xw)
-    if smooth_derivative:
-        dy = moving_average_10(dy)
-
-    i0 = int(np.nanargmax(np.abs(dy)))
-    x0 = float(xw[i0])
-    y0 = float(yw[i0])
-    m0 = float(dy[i0])
-    b0 = float(y0 - m0 * x0)
-
-    peak = float(np.nanmax(np.abs(dy)))
-    if not np.isfinite(peak) or peak <= 0:
-        raise ValueError("Derivative peak not meaningful (flat or NaNs). Adjust Tg window.")
-
-    thr = float(max(0.01, min(0.95, threshold)) * peak)
-
-    left_candidates = np.where(np.abs(dy[:i0]) < thr)[0]
-    i_left = int(left_candidates[-1]) if len(left_candidates) else max(0, i0 - max(5, int(0.1 * len(xw))))
-
-    right_candidates = np.where(np.abs(dy[i0:]) < thr)[0]
-    i_right = int(i0 + right_candidates[0]) if len(right_candidates) else min(len(xw) - 1, i0 + max(5, int(0.1 * len(xw))))
-
-    i_left = max(0, min(i_left, i0 - 2))
-    i_right = min(len(xw) - 1, max(i_right, i0 + 2))
-
-    return TransitionInfo(
-        xw=xw,
-        yw=yw,
-        dy=dy,
-        i0=i0,
-        x0=x0,
-        y0=y0,
-        m0=m0,
-        b0=b0,
-        i_left=i_left,
-        i_right=i_right,
-        x_left=float(xw[i_left]),
-        x_right=float(xw[i_right]),
-    )
-
-
-def _peak_index_in_range(xw: np.ndarray, dy: np.ndarray, x1: float, x2: float) -> int:
-    """Index of max|dy| within [x1, x2] on the provided arrays."""
-    a, b = sorted((float(x1), float(x2)))
-    m = (xw >= a) & (xw <= b) & np.isfinite(dy)
-    if m.sum() < 5:
-        return int(np.nanargmax(np.abs(dy)))
-    idx = np.where(m)[0]
-    j_local = int(np.nanargmax(np.abs(dy[m])))
-    return int(idx[j_local])
-
-
-# =============================================================================
-# 4) Tg methods
-# =============================================================================
-
-@dataclass
-class TgDoubleTangentResult:
-    tg: float
-    m_low: float
-    b_low: float
-    m_slope: float
-    b_slope: float
-    x_ref: float
-    x_left: float
-    x_right: float
-    low_used: Tuple[float, float]
-    slope_used: Optional[Tuple[float, float]]
-
-
-def compute_tg_double_tangent(
-    x: np.ndarray,
-    y: np.ndarray,
-    x_min: float,
-    x_max: float,
-    threshold: float = 0.20,
-    guard_frac: float = 0.00,
-    smooth_derivative: bool = False,
-    manual_low: Optional[Tuple[float, float]] = None,
-    manual_slope: Optional[Tuple[float, float]] = None,
-) -> TgDoubleTangentResult:
-    """
-    Double tangent Tg:
-    - LOW baseline tangent: line fit on low side (AUTO) or manual range.
-    - Slope tangent:
-        * AUTO: tangent at max|dY/dX| from y(x)
-        * MANUAL: line fit on y(x) in manual_slope range
-    Tg = intersection(LOW tangent, slope tangent)
-    """
-    info = _transition_from_derivative(x, y, x_min, x_max, threshold, smooth_derivative)
-
-    span = float(x_max - x_min)
-    guard = float(max(0.0, guard_frac) * span)
-
-    # LOW baseline mask
-    if manual_low is not None:
-        a, b = sorted((float(manual_low[0]), float(manual_low[1])))
-        lmask = (info.xw >= a) & (info.xw <= b)
-        if lmask.sum() < 5:
-            raise ValueError("Manual LOW range has too few points.")
-        low_used = (a, b)
-    else:
-        lmask = (info.xw >= x_min) & (info.xw <= (info.x_left - guard))
-        if lmask.sum() < 5:
-            lmask = (info.xw >= x_min) & (info.xw <= info.x_left)
-        if lmask.sum() < 5:
-            raise ValueError("Not enough points for AUTO LOW baseline. Widen window or reduce Guard.")
-        low_used = (x_min, float(info.x_left))
-
-    m_low, b_low = _fit_line(info.xw[lmask], info.yw[lmask])
-
-    # Slope tangent
-    if manual_slope is not None:
-        s1, s2 = sorted((float(manual_slope[0]), float(manual_slope[1])))
-        smask = (info.xw >= s1) & (info.xw <= s2)
-        if smask.sum() < 5:
-            raise ValueError("Manual slope range has too few points.")
-        m_slope, b_slope = _fit_line(info.xw[smask], info.yw[smask])
-        x_ref = float(0.5 * (s1 + s2))
-        slope_used = (s1, s2)
-    else:
-        m_slope, b_slope = info.m0, info.b0
-        x_ref = float(info.x0)
-        slope_used = None
-
-    tg = _intersect_lines(m_low, b_low, m_slope, b_slope)
-
-    return TgDoubleTangentResult(
-        tg=float(tg),
-        m_low=m_low, b_low=b_low,
-        m_slope=m_slope, b_slope=b_slope,
-        x_ref=float(x_ref),
-        x_left=float(info.x_left),
-        x_right=float(info.x_right),
-        low_used=low_used,
-        slope_used=slope_used,
-    )
-
-
-@dataclass
-class TgParallelTangentResult:
-    tg: float
-    m_par: float
-    b_low: float
-    b_high: float
-    b_mid: float
-    x_ref: float
-    x_left: float
-    x_right: float
-    low_used: Tuple[float, float]
-    high_used: Tuple[float, float]
-    slope_used: Optional[Tuple[float, float]]
-
-
-
-def compute_tg_parallel_improved(
-    x: np.ndarray,
-    y: np.ndarray,
-    x_min: float,
-    x_max: float,
-    smooth_derivative: bool = False,
-    manual_low_range: Optional[Tuple[float, float]] = None,
-    manual_high_range: Optional[Tuple[float, float]] = None,
-    manual_low_point: Optional[float] = None,
-    manual_high_point: Optional[float] = None,
-) -> TgParallelTangentResult:
-    """
-    Parallel tangents (improved manual mode):
-
-    Each baseline (LOW / HIGH) can be defined either by:
-      - a range [x1, x2]  -> linear fit on y(x) in that region
-      - a single point x0 -> baseline forced PARALLEL to the other baseline,
-                             passing through (x0, y(x0))
-
-    Automatic behavior:
-      - If both are ranges: fit two baselines, take the mean slope, then recompute
-        intercepts with that common slope (so the two final baselines are parallel).
-      - If one is range and the other is point: fit the range baseline, then create
-        the parallel line through the point.
-      - If neither manual spec is valid: use AUTO regions (based on derivative peak)
-        and proceed like the "both ranges" case (fit both, mean slope, parallelize).
-
-    Tg is defined as the intersection between the midline (average of the two parallel
-    baselines) and the signal y(x). Root is chosen near the derivative peak within the window.
-    """
-    # Sanity
-    if x_min > x_max:
-        x_min, x_max = x_max, x_min
-
-    # Build window arrays
-    w = (x >= x_min) & (x <= x_max) & np.isfinite(x) & np.isfinite(y)
-    if w.sum() < 20:
-        raise ValueError("Tg window too small (need ~20+ points).")
-    xw = x[w]
-    yw = y[w]
-
-    # Derivative peak for reference root choice
-    dy = compute_derivative(yw, xw)
-    if smooth_derivative:
-        dy = moving_average_10(dy)
-    i0 = int(np.nanargmax(np.abs(dy)))
-    x_ref = float(xw[i0])
-
-    # AUTO regions (fallback) from derivative bounds (fixed internal threshold)
-    # Note: threshold/guard were removed from the UI on purpose.
-    info = _transition_from_derivative(x, y, x_min, x_max, threshold=0.20, smooth_derivative=smooth_derivative)
-    auto_low = (x_min, float(info.x_left))
-    auto_high = (float(info.x_right), x_max)
-
-    # Resolve manual specs (range has priority over point if both are provided)
-    low_mode = None
-    high_mode = None
-    low_used = None
-    high_used = None
-
-    if manual_low_range is not None:
-        low_mode = "range"
-        low_used = tuple(sorted((float(manual_low_range[0]), float(manual_low_range[1]))))
-    elif manual_low_point is not None and np.isfinite(manual_low_point):
-        low_mode = "point"
-        low_used = float(manual_low_point)
-
-    if manual_high_range is not None:
-        high_mode = "range"
-        high_used = tuple(sorted((float(manual_high_range[0]), float(manual_high_range[1]))))
-    elif manual_high_point is not None and np.isfinite(manual_high_point):
-        high_mode = "point"
-        high_used = float(manual_high_point)
-
-    # If nothing usable, fall back to AUTO ranges
-    if low_mode is None:
-        low_mode = "range"
-        low_used = auto_low
-    if high_mode is None:
-        high_mode = "range"
-        high_used = auto_high
-
-    def _fit_on_range(rng: Tuple[float, float]) -> Tuple[float, float, Tuple[float, float]]:
-        a, b = sorted((float(rng[0]), float(rng[1])))
-        m = (xw >= a) & (xw <= b)
-        if m.sum() < 5:
-            raise ValueError("Baseline range has too few points.")
-        mfit, bfit = _fit_line(xw[m], yw[m])
-        return mfit, bfit, (a, b)
-
-    def _through_point_parallel(m_par: float, x0: float) -> float:
-        # Point is defined by its X; Y is read from the signal (interpolation).
-        x0 = float(x0)
-        if x0 < float(xw[0]) or x0 > float(xw[-1]):
-            raise ValueError("Point is outside the current Tg window.")
-        y0 = float(np.interp(x0, xw, yw))
-        return float(y0 - m_par * x0)
-
-    # Compute baselines depending on cases
-    if low_mode == "range" and high_mode == "range":
-        mL, bL_fit, low_rng = _fit_on_range(low_used)     # type: ignore[arg-type]
-        mH, bH_fit, high_rng = _fit_on_range(high_used)   # type: ignore[arg-type]
-        m_par = float(0.5 * (mL + mH))
-        # Recompute intercepts with common slope using mean residual (more stable)
-        b_low = float(np.nanmean(yw[(xw >= low_rng[0]) & (xw <= low_rng[1])] - m_par * xw[(xw >= low_rng[0]) & (xw <= low_rng[1])]))
-        b_high = float(np.nanmean(yw[(xw >= high_rng[0]) & (xw <= high_rng[1])] - m_par * xw[(xw >= high_rng[0]) & (xw <= high_rng[1])]))
-        low_used_out = low_rng
-        high_used_out = high_rng
-
-    elif low_mode == "range" and high_mode == "point":
-        m_par, b_low_fit, low_rng = _fit_on_range(low_used)  # type: ignore[arg-type]
-        b_low = float(np.nanmean(yw[(xw >= low_rng[0]) & (xw <= low_rng[1])] - m_par * xw[(xw >= low_rng[0]) & (xw <= low_rng[1])]))
-        b_high = _through_point_parallel(m_par, high_used)   # type: ignore[arg-type]
-        low_used_out = low_rng
-        high_used_out = (float(high_used), float(high_used))  # type: ignore[arg-type]
-
-    elif low_mode == "point" and high_mode == "range":
-        m_par, b_high_fit, high_rng = _fit_on_range(high_used)  # type: ignore[arg-type]
-        b_high = float(np.nanmean(yw[(xw >= high_rng[0]) & (xw <= high_rng[1])] - m_par * xw[(xw >= high_rng[0]) & (xw <= high_rng[1])]))
-        b_low = _through_point_parallel(m_par, low_used)        # type: ignore[arg-type]
-        low_used_out = (float(low_used), float(low_used))       # type: ignore[arg-type]
-        high_used_out = high_rng
-
-    else:
-        # point + point is under-defined -> fall back to AUTO ranges
-        mL, bL_fit, low_rng = _fit_on_range(auto_low)
-        mH, bH_fit, high_rng = _fit_on_range(auto_high)
-        m_par = float(0.5 * (mL + mH))
-        b_low = float(np.nanmean(yw[(xw >= low_rng[0]) & (xw <= low_rng[1])] - m_par * xw[(xw >= low_rng[0]) & (xw <= low_rng[1])]))
-        b_high = float(np.nanmean(yw[(xw >= high_rng[0]) & (xw <= high_rng[1])] - m_par * xw[(xw >= high_rng[0]) & (xw <= high_rng[1])]))
-        low_used_out = low_rng
-        high_used_out = high_rng
-
-    b_mid = float(0.5 * (b_low + b_high))
-    f = yw - (m_par * xw + b_mid)
-    tg = _root_on_grid(xw, f, x_ref=x_ref)
-
-    return TgParallelTangentResult(
-        tg=float(tg),
-        m_par=float(m_par),
-        b_low=float(b_low), b_high=float(b_high), b_mid=float(b_mid),
-        x_ref=float(x_ref),
-        x_left=float(info.x_left),
-        x_right=float(info.x_right),
-        low_used=tuple(low_used_out),
-        high_used=tuple(high_used_out),
-        slope_used=None,
-    )
-
-
-def compute_tg_derivative(
-    x: np.ndarray,
-    y_for_derivative: np.ndarray,
-    x_min: float,
-    x_max: float,
-    smooth_derivative: bool = False,
-    restrict_range: Optional[Tuple[float, float]] = None,
-) -> float:
-    """
-    Derivative Tg:
-      Tg = argmax_x |dY/dX| within [x_min, x_max]
-    If restrict_range is provided, the peak search is limited to that subrange.
-    """
-    if x_min > x_max:
-        x_min, x_max = x_max, x_min
-
-    w = (x >= x_min) & (x <= x_max)
-    if w.sum() < 20:
-        return float("nan")
-
-    xw = x[w]
-    yw = y_for_derivative[w]
-
-    dy = compute_derivative(yw, xw)
-    if smooth_derivative:
-        dy = moving_average_10(dy)
-
-    if restrict_range is not None:
-        i0 = _peak_index_in_range(xw, dy, restrict_range[0], restrict_range[1])
-    else:
-        i0 = int(np.nanargmax(np.abs(dy)))
-
-    return float(xw[i0])
+from dta_science import (
+    moving_average_10,
+    compute_derivative,
+    _fit_line,
+    _line_y,
+    _intersect_lines,
+    _root_on_grid,
+    TransitionInfo,
+    _transition_from_derivative,
+    _peak_index_in_range,
+    TgDoubleTangentResult,
+    compute_tg_double_tangent,
+    TgParallelTangentResult,
+    compute_tg_parallel_improved,
+    compute_tg_derivative,
+    BaselineParams,
+    resolve_baseline_params,
+)
 
 
 # =============================================================================
@@ -1944,63 +1496,51 @@ class TgGuiApp:
         ))
 
     
-    def _baseline_specs(self) -> Tuple[Optional[Tuple[float, float]], Optional[float], Optional[Tuple[float, float]], Optional[float]]:
-        """Return (low_range, low_point_x, high_range, high_point_x) with robust parsing."""
-        # LOW
-        low_range = None
-        low_point = None
-        if bool(getattr(self, "low_use_point_var", False).get()):
+    def _raw_baseline_inputs(self) -> Dict[str, Any]:
+        """Read raw widget values UNCONDITIONALLY (regardless of the Manual
+        checkbox) for feeding into dta_science.resolve_baseline_params(),
+        which is the only place that decides whether they actually get used.
+        """
+        def _f(var):
             try:
-                low_point = float(self.low_point_var.get())
+                return float(var.get())
             except Exception:
-                low_point = None
-        else:
-            try:
-                a = float(self.low_min_var.get())
-                b = float(self.low_max_var.get())
-                low_range = tuple(sorted((a, b)))
-            except Exception:
-                low_range = None
+                return None
 
-        # HIGH
-        high_range = None
-        high_point = None
-        if bool(getattr(self, "high_use_point_var", False).get()):
-            try:
-                high_point = float(self.high_point_var.get())
-            except Exception:
-                high_point = None
-        else:
-            try:
-                a = float(self.high_min_var.get())
-                b = float(self.high_max_var.get())
-                high_range = tuple(sorted((a, b)))
-            except Exception:
-                high_range = None
+        return dict(
+            low_use_point=bool(getattr(self, "low_use_point_var", False).get()),
+            low_point_x=_f(self.low_point_var) if hasattr(self, "low_point_var") else None,
+            low_min=_f(self.low_min_var) if hasattr(self, "low_min_var") else None,
+            low_max=_f(self.low_max_var) if hasattr(self, "low_max_var") else None,
+            high_use_point=bool(getattr(self, "high_use_point_var", False).get()),
+            high_point_x=_f(self.high_point_var) if hasattr(self, "high_point_var") else None,
+            high_min=_f(self.high_min_var) if hasattr(self, "high_min_var") else None,
+            high_max=_f(self.high_max_var) if hasattr(self, "high_max_var") else None,
+            slope_min=_f(self.slope_min_var) if hasattr(self, "slope_min_var") else None,
+            slope_max=_f(self.slope_max_var) if hasattr(self, "slope_max_var") else None,
+        )
 
-        return low_range, low_point, high_range, high_point
+    def _resolved_baseline_params(self) -> BaselineParams:
+        """The ONE path both interactive Compute and batch processing use to
+        turn 'Manual' checkbox state + typed fields into actual values —
+        calling this identically from both is what makes it structurally
+        impossible for batch to silently apply leftover manual values when
+        Manual is unchecked (the bug this replaces).
+        """
+        manual_enabled = bool(getattr(self, "manual_compute_var", None) and self.manual_compute_var.get())
+        return resolve_baseline_params(manual_enabled=manual_enabled, **self._raw_baseline_inputs())
 
     def _compute(self):
         import tkinter.messagebox as mb
         try:
             x, y, y_dy, x_col, y_col, dy_col = self._get_xy()
             xmin, xmax = self._get_window()
-            smooth_d = self._smooth_derivative_enabled()            # Manual inputs (ranges/points/slope) are used only in Manual mode
-            use_manual = bool(getattr(self, "manual_compute_var", None) and self.manual_compute_var.get())
+            smooth_d = self._smooth_derivative_enabled()
 
-            if use_manual:
-                low_range, low_point, high_range, high_point = self._baseline_specs()
-                # Manual slope range for Double Tangent (optional)
-                manual_slope = None
-                try:
-                    a = float(self.slope_min_var.get())
-                    b = float(self.slope_max_var.get())
-                    manual_slope = tuple(sorted((a, b)))
-                except Exception:
-                    manual_slope = None
-            else:
-                low_range, low_point, high_range, high_point = None, None, None, None
-                manual_slope = None
+            bp = self._resolved_baseline_params()
+            low_range, low_point = bp.low_range, bp.low_point
+            high_range, high_point = bp.high_range, bp.high_point
+            manual_slope = bp.manual_slope
 
             # Derivative Tg uses y_dy
             self.tg_deriv = compute_tg_derivative(
@@ -2049,15 +1589,21 @@ class TgGuiApp:
             if dy_col != "(same)":
                 lines.append(f"dY src: {dy_col}")
 
-            # describe manual mode (compact)
-            if self.low_use_point_var.get():
-                lines.append(f"LOW: point x={self.low_point_var.get()}")
-            elif low_range is not None:
-                lines.append(f"LOW: {low_range[0]:.6g}..{low_range[1]:.6g}")
-            if self.high_use_point_var.get():
-                lines.append(f"HIGH: point x={self.high_point_var.get()}")
-            elif high_range is not None:
-                lines.append(f"HIGH: {high_range[0]:.6g}..{high_range[1]:.6g}")
+            # Describe the baseline mode ACTUALLY used by the parallel-tangent
+            # result (res_parallel.low_mode/high_mode), not the raw checkbox
+            # state — the point+point case silently falls back to AUTO ranges
+            # internally, and the two must not be reported inconsistently.
+            if self.res_parallel is not None:
+                lp = self.res_parallel.low_used
+                if self.res_parallel.low_mode == "point":
+                    lines.append(f"LOW: point x={lp[0]:.6g}")
+                else:
+                    lines.append(f"LOW: {lp[0]:.6g}..{lp[1]:.6g}")
+                hp = self.res_parallel.high_used
+                if self.res_parallel.high_mode == "point":
+                    lines.append(f"HIGH: point x={hp[0]:.6g}")
+                else:
+                    lines.append(f"HIGH: {hp[0]:.6g}..{hp[1]:.6g}")
 
             self.result_label.configure(text="\n".join(lines))
             self._refresh_plot()
@@ -2122,7 +1668,9 @@ class TgGuiApp:
         xmin, xmax = self._get_window()
         smooth_d = self._smooth_derivative_enabled()
 
-        low_range, low_point, high_range, high_point = self._baseline_specs()
+        bp = self._resolved_baseline_params()
+        low_range, low_point = bp.low_range, bp.low_point
+        high_range, high_point = bp.high_range, bp.high_point
 
         def _fmt_rng(rng):
             if rng is None:
@@ -2134,6 +1682,16 @@ class TgGuiApp:
         tp = self.res_parallel.tg if self.res_parallel is not None else np.nan
         tx = self.tg_deriv if self.tg_deriv is not None else np.nan
 
+        # Report the mode ACTUALLY used by the last computed parallel-tangent
+        # result (accounts for the point+point -> AUTO fallback), not the raw
+        # checkbox/typed-field state, which can diverge from it.
+        if self.res_parallel is not None:
+            low_mode = self.res_parallel.low_mode
+            high_mode = self.res_parallel.high_mode
+        else:
+            low_mode = "point" if low_point is not None else ("range" if low_range is not None else "auto")
+            high_mode = "point" if high_point is not None else ("range" if high_range is not None else "auto")
+
         return dict(
             file=str(self.path) if self.path else "",
             sample=sample,
@@ -2143,10 +1701,10 @@ class TgGuiApp:
             window_min=xmin,
             window_max=xmax,
             smooth_derivative=int(smooth_d),
-            low_mode=("point" if self.low_use_point_var.get() else ("range" if low_range is not None else "auto")),
+            low_mode=low_mode,
             low_range=_fmt_rng(low_range),
             low_point_x=("" if low_point is None else float(low_point)),
-            high_mode=("point" if self.high_use_point_var.get() else ("range" if high_range is not None else "auto")),
+            high_mode=high_mode,
             high_range=_fmt_rng(high_range),
             high_point_x=("" if high_point is None else float(high_point)),
             Tg_double=td,
@@ -2190,17 +1748,16 @@ class TgGuiApp:
         smooth_d = self._smooth_derivative_enabled()
         invert = bool(self.invert_y_var.get())
 
-        low_range, low_point, high_range, high_point = self._baseline_specs()
+        # Same resolver interactive Compute uses — if "Manual" is unchecked,
+        # this discards any leftover typed values instead of batch silently
+        # applying them (the bug this replaces).
+        bp = self._resolved_baseline_params()
+        low_range, low_point = bp.low_range, bp.low_point
+        high_range, high_point = bp.high_range, bp.high_point
+        manual_slope = bp.manual_slope
 
-        # Manual slope range for Double Tangent in batch (optional, from GUI)
-        manual_slope = None
-        try:
-            a = float(self.slope_min_var.get())
-            b = float(self.slope_max_var.get())
-            manual_slope = tuple(sorted((a, b)))
-        except Exception:
-            manual_slope = None
-
+        default_low_mode = "point" if low_point is not None else ("range" if low_range is not None else "auto")
+        default_high_mode = "point" if high_point is not None else ("range" if high_range is not None else "auto")
 
         rows: List[Dict[str, Any]] = []
 
@@ -2287,10 +1844,13 @@ class TgGuiApp:
                     window_min=xmin,
                     window_max=xmax,
                     smooth_derivative=int(smooth_d),
-                    low_mode=("point" if (low_point is not None) else ("range" if low_range is not None else "auto")),
+                    # Report the mode ACTUALLY used by this file's parallel-
+                    # tangent result (rp), not the requested/typed mode — the
+                    # point+point case silently falls back to AUTO ranges.
+                    low_mode=(rp.low_mode if rp is not None else default_low_mode),
                     low_range=_fmt_rng(low_range),
                     low_point_x=("" if low_point is None else float(low_point)),
-                    high_mode=("point" if (high_point is not None) else ("range" if high_range is not None else "auto")),
+                    high_mode=(rp.high_mode if rp is not None else default_high_mode),
                     high_range=_fmt_rng(high_range),
                     high_point_x=("" if high_point is None else float(high_point)),
                     Tg_double=tg_double,

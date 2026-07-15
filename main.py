@@ -1,5 +1,5 @@
 # =====================================================================
-# 1. Imports and Global Settings  —  V40 (patched for io_importers)
+# 1. Imports and Global Settings
 # =====================================================================
 
 # =====================================================================
@@ -35,6 +35,13 @@ import colorsys
 
 # CUSTOM IMPORTS (patched: use io_universal universal loader)
 from io_universal import load_any as _io_load_any
+from fitting_science import (
+    compute_model as _fs_compute_model,
+    build_lmfit_parameters as _fs_build_lmfit_parameters,
+    compute_chi2 as _fs_compute_chi2,
+    relax_params as _fs_relax_params,
+    fit_spectrum as _fs_fit_spectrum,
+)
 from ui_fit_params import FitParamWindow
 from ui_simple_plot import SimplePlotWindow
 from ui_dta_processing import DtaProcessingWindow
@@ -789,7 +796,7 @@ class RamanApp:
         }
 
         self.file_paths.append(path)
-        self.file_titles.append(f"{Path(path).stem} [{edge_label}]" if edge_label else Path(path).stem)
+        self.file_titles.append(Path(path).stem)
         self.file_statuses.append("imported")
 
     def _setup_layout(self):
@@ -2350,16 +2357,7 @@ class SingleFitWindow(tk.Toplevel):
 
     def _relax_params(self, old_params, new_params, alpha=0.25):
         """Blend parameter values: old <- old + alpha * (new - old)."""
-        blended = old_params.copy()
-        for name, par in blended.items():
-            if name in new_params and par.vary:
-                try:
-                    old_v = float(par.value)
-                    new_v = float(new_params[name].value)
-                    par.set(value=old_v + alpha * (new_v - old_v))
-                except Exception:
-                    pass
-        return blended
+        return _fs_relax_params(old_params, new_params, alpha=alpha)
 
     # --------------------------
     # UI callbacks
@@ -2431,88 +2429,13 @@ class SingleFitWindow(tk.Toplevel):
         self._current_x, self._current_y = x, y
 
     def compute_model(self, x, lm_params, params_struct):
-        total = np.zeros_like(x)
-        peaks = []
-        for i, d in enumerate(params_struct):
-            a = lm_params[f"a{i}"].value
-            f = lm_params[f"f{i}"].value
-            l = lm_params[f"l{i}"].value
-            if d.get("shape", "G") == "G":
-                pk = rp.gaussian(x, a, f, l)
-            else:
-                eta = lm_params[f"eta{i}"].value if f"eta{i}" in lm_params else 0.5
-                pk = rp.pseudovoigt(x, a, f, l, eta)
-            peaks.append(pk)
-            total += pk
-        return total, peaks
+        return _fs_compute_model(x, lm_params, params_struct)
 
     # --------------------------
     # Parameter building (robust)
     # --------------------------
     def build_lmfit_parameters(self, params_struct):
-        p = lmfit.Parameters()
-        eps = 1e-9
-
-        for i, d in enumerate(params_struct):
-            # ---- Amplitude ----
-            fit_amp = bool(d.get("fit_amp", True))
-            a0 = d.get("amp_val", None)
-            try:
-                a0 = float(a0)
-            except Exception:
-                a0 = None
-            if a0 is None or a0 <= 0.0:
-                a0 = 1.0
-            p.add(f"a{i}", value=a0, min=0.0, vary=fit_amp)
-
-            # ---- Center (shift) ----
-            fmin = float(d["shift_min"]); fmax = float(d["shift_max"])
-            fval = float(d["shift_val"])
-            if fmin > fmax:
-                fmin, fmax = fmax, fmin
-            if fval <= fmin: fval = fmin + eps
-            if fval >= fmax: fval = fmax - eps
-            p.add(f"f{i}", value=fval, min=fmin, max=fmax, vary=bool(d.get("fit_shift", True)))
-
-            # ---- FWHM ----
-            lmin = float(d.get("fwhm_min", 1e-9))
-            lmax = float(d.get("fwhm_max", max(lmin*1.000001, 1e-6)))
-            lval = float(d.get("fwhm_val", max(lmin*1.0005, 1.0)))
-
-            if lmin > lmax:
-                lmin, lmax = lmax, lmin
-
-            # garantir min < max (lmfit l'exige)
-            if abs(lmax - lmin) < 1e-12:
-                lmax = lmin + 1e-6
-
-            # ne pas démarrer sur une borne
-            eps = 1e-9
-            if lval <= lmin: lval = lmin + eps
-            if lval >= lmax: lval = lmax - eps
-
-            p.add(f"l{i}", value=lval, min=lmin, max=lmax, vary=bool(d.get("fit_fwhm", True)))
-
-            # ---- Pseudo-Voigt (GL): eta in [0,1] ----
-            if d.get("shape", "G") == "GL":
-                try:
-                    eta_min = float(d.get("eta_min", 0.0))
-                    eta_max = float(d.get("eta_max", 1.0))
-                except Exception:
-                    eta_min, eta_max = 0.0, 1.0
-                eta_min = max(0.0, min(eta_min, 1.0))
-                eta_max = max(0.0, min(eta_max, 1.0))
-                if eta_min >= eta_max:
-                    eta_min, eta_max = 0.0, 1.0
-                try:
-                    eta_val = float(d.get("eta_val", 0.5))
-                except Exception:
-                    eta_val = 0.5
-                if not (eta_min < eta_val < eta_max):
-                    eta_val = 0.5
-                p.add(f"eta{i}", value=eta_val, min=eta_min, max=eta_max, vary=bool(d.get("fit_eta", True)))
-
-        return p
+        return _fs_build_lmfit_parameters(params_struct)
 
     # --------------------------
     # Classic fit (one-shot LM)
@@ -2560,79 +2483,21 @@ class SingleFitWindow(tk.Toplevel):
             messagebox.showerror("Fit error", str(e))
 
     def fit_with_params(self, x, y, lm_params, params_struct):
-        import numpy as np
-
-        # Keep only finite points
-        mask = np.isfinite(x) & np.isfinite(y)
-        x = x[mask]; y = y[mask]
-
-        def model_func(params, x):
-            total = np.zeros_like(x)
-            peaks = []
-            for i, d in enumerate(params_struct):
-                a = params[f"a{i}"].value
-                f = params[f"f{i}"].value
-                l = params[f"l{i}"].value
-                if d.get("shape", "G") == "G":
-                    pk = rp.gaussian(x, a, f, l)
-                else:
-                    eta = params[f"eta{i}"].value if f"eta{i}" in params else 0.5
-                    pk = rp.pseudovoigt(x, a, f, l, eta)
-                peaks.append(pk)
-                total += pk
-            return total, peaks
-
-        def residual(params, x, y):
-            model, _ = model_func(params, x)
-            return model - y
-
-        result = lmfit.minimize(residual, lm_params, args=(x, y), method='leastsq',
-                                ftol=1e-12, xtol=1e-12, gtol=1e-12, max_nfev=10000)
-        y_fit, peaks = model_func(result.params, x)
-        return result, y_fit, peaks
+        fr = _fs_fit_spectrum(x, y, params_struct, mode="classic", lm_params=lm_params)
+        return fr.lmfit_result, fr.y_fit, fr.peaks
 
     def compute_chi2(self, y, y_fit, lm_params):
-        resid = y - y_fit
-        n = len(y)
-        p = sum([param.vary for param in lm_params.values()])
-        dof = max(n - p, 1)
-        chi2 = float(np.sum(resid ** 2) / dof)
-        return chi2
+        return _fs_compute_chi2(y, y_fit, lm_params)
 
     # --------------------------
     # Origin-like (stepwise) mode
     # --------------------------
     def _origin_model_func(self, params, x, params_struct):
-        total = np.zeros_like(x)
-        peaks = []
-        for i, d in enumerate(params_struct):
-            a = params[f"a{i}"].value
-            f = params[f"f{i}"].value
-            l = params[f"l{i}"].value
-            if d.get("shape", "G") == "G":
-                pk = rp.gaussian(x, a, f, l)
-            else:
-                eta = params[f"eta{i}"].value if f"eta{i}" in params else 0.5
-                pk = rp.pseudovoigt(x, a, f, l, eta)
-            peaks.append(pk)
-            total += pk
-        return total, peaks
+        return _fs_compute_model(x, params, params_struct)
 
     def _origin_residual(self, params, x, y, params_struct, soft_penalty=False):
-        model, _ = self._origin_model_func(params, x, params_struct)
-        res = model - y
-        if soft_penalty:
-            pen = []
-            for name, par in params.items():
-                if not par.vary:
-                    continue
-                if (par.min is not None) and (par.value < par.min):
-                    pen.append((par.min - par.value) * 1e4)
-                if (par.max is not None) and (par.value > par.max):
-                    pen.append((par.value - par.max) * 1e4)
-            if pen:
-                res = np.r_[res, np.array(pen)]
-        return res
+        from fitting_science import origin_residual as _fs_origin_residual
+        return _fs_origin_residual(params, x, y, params_struct, soft_penalty=soft_penalty)
 
     def _origin_common(self):
         x, y = self.get_xy()
@@ -2666,16 +2531,8 @@ class SingleFitWindow(tk.Toplevel):
 
         x, y, params_struct, lm_params = self._origin_common()
 
-        method = 'leastsq'
-        fit_kws = dict(ftol=1e-12, xtol=1e-12, gtol=1e-12, max_nfev=100)
         soft_penalty = False
-
-        minimizer = lmfit.Minimizer(
-            self._origin_residual,
-            lm_params,
-            fcn_args=(x, y, params_struct),
-            fcn_kws={'soft_penalty': soft_penalty},
-        )
+        current_params = lm_params
 
         prev_chisq = getattr(self._current_fit, "chisqr", None)
         last_result = None
@@ -2686,16 +2543,15 @@ class SingleFitWindow(tk.Toplevel):
             alpha = 0.25
 
         for s in range(step_iters):
-            result = minimizer.minimize(method=method, **fit_kws)
+            fr = _fs_fit_spectrum(x, y, params_struct, mode="origin_step",
+                                   lm_params=current_params, alpha=alpha, soft_penalty=soft_penalty)
+            result = fr.lmfit_result
+            relaxed = fr.params
+            current_params = relaxed
             last_result = result
-            relaxed = self._relax_params(minimizer.params, result.params, alpha=alpha)
-            minimizer.params = relaxed
 
-            y_fit, peaks = self._origin_model_func(relaxed, x, params_struct)
-            try:
-                chi2_red = self.compute_chi2(y, y_fit, relaxed)
-            except Exception:
-                chi2_red = float('nan')
+            y_fit, peaks = fr.y_fit, fr.peaks
+            chi2_red = fr.chi2_red
 
             chisq = result.chisqr
             rel_drop = None if prev_chisq is None else (prev_chisq - chisq) / max(prev_chisq, 1e-30)

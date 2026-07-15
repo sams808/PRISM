@@ -392,13 +392,20 @@ class SimplePlotWindow(tk.Toplevel):
         ttk.Checkbutton(frame_axes, text="Grid", variable=self.var_grid,
                         command=self.plot_selected_spectrum).grid(row=2, column=8, padx=(10, 0))
 
-        self.title_global.trace_add("write", lambda *_: self.plot_selected_spectrum())
-        self.x_title.trace_add("write", lambda *_: self.plot_selected_spectrum())
-        self.y_title.trace_add("write", lambda *_: self.plot_selected_spectrum())
-        self.xmin.trace_add("write", lambda *_: self.update_plot_axes(apply_only=True))
-        self.xmax.trace_add("write", lambda *_: self.update_plot_axes(apply_only=True))
-        self.ymin.trace_add("write", lambda *_: self.update_plot_axes(apply_only=True))
-        self.ymax.trace_add("write", lambda *_: self.update_plot_axes(apply_only=True))
+        # Debounced: with several CIF overlays loaded, plot_selected_spectrum()
+        # recreates hundreds of Bragg-marker vlines/text artists per call, and
+        # these StringVars fire their trace on every keystroke. Undebounced,
+        # that made typing an axis title take multiple seconds per character.
+        # Other CIF controls in this file already use self._debounce() for the
+        # same reason (see _on_cif_field / cif visibility toggles below) — this
+        # just extends that existing pattern to the fields that were missed.
+        self.title_global.trace_add("write", lambda *_: self._debounce(("axis_title", "global"), 150, self.plot_selected_spectrum))
+        self.x_title.trace_add("write", lambda *_: self._debounce(("axis_title", "x"), 150, self.plot_selected_spectrum))
+        self.y_title.trace_add("write", lambda *_: self._debounce(("axis_title", "y"), 150, self.plot_selected_spectrum))
+        self.xmin.trace_add("write", lambda *_: self._debounce(("axis_range", "xmin"), 150, lambda: self.update_plot_axes(apply_only=True)))
+        self.xmax.trace_add("write", lambda *_: self._debounce(("axis_range", "xmax"), 150, lambda: self.update_plot_axes(apply_only=True)))
+        self.ymin.trace_add("write", lambda *_: self._debounce(("axis_range", "ymin"), 150, lambda: self.update_plot_axes(apply_only=True)))
+        self.ymax.trace_add("write", lambda *_: self._debounce(("axis_range", "ymax"), 150, lambda: self.update_plot_axes(apply_only=True)))
 
         # annotations + export
         row3 = ttk.Frame(right); row3.grid(row=3, column=0, sticky="ew", pady=(6, 0))
