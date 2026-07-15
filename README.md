@@ -4,14 +4,11 @@ A desktop application for importing, processing, and analyzing scientific spectr
 Raman, XAS/XANES/EXAFS, DTA/DSC/TGA thermal analysis, XRD (including
 high-temperature series), and SAXS.
 
-The app has two generations living side by side during the ongoing migration:
+The app is PySide6/Qt-based, organized as one main window with a left navigation
+rail of technique workspaces. (The original Tkinter application was retired after
+the Qt migration completed; it remains available in git history.)
 
-- **Qt app (current, recommended)** — `python qt_main.py`. PySide6-based, organized
-  as one main window with a left navigation rail of technique workspaces.
-- **Tk app (legacy)** — `python main.py`. The original Tkinter application, kept
-  functional as a fallback until the Qt app has been fully validated in daily use.
-
-## Qt app workspaces
+## Workspaces
 
 | Workspace | What it does |
 |---|---|
@@ -38,8 +35,7 @@ pip install -r requirements-dev.txt  # pytest + pytest-qt, for running the tests
 ## Running
 
 ```bash
-python qt_main.py    # Qt app (recommended)
-python main.py       # legacy Tk app
+python qt_main.py
 ```
 
 ## Building the RRUFF database cache (Mineral ID workspace)
@@ -64,17 +60,8 @@ database (https://rruff.net — please cite: Lafuente, Downs, Yang & Stone (2015
 
 ## Running the tests
 
-Two suites (see `pytest.ini` for why they're split — a pytest-qt/Tkinter
-conflict on Windows):
-
 ```bash
-# Default suite: science modules, parsers, Tk-safe (currently ~120 tests)
 pytest
-
-# Qt-widget suite (run separately):
-pytest tests/test_qt_shell.py tests/test_qt_dta.py tests/test_qt_simple_plot.py \
-       tests/test_qt_single_fit.py tests/test_qt_multi_fit.py tests/test_qt_xas.py \
-       tests/test_qt_rruff.py tests/test_qt_htxrd.py --override-ini="addopts="
 ```
 
 ## Repository layout
@@ -95,10 +82,6 @@ Qt layer:
   `qt_exception_hook.py`
 - One `qt_*.py` per workspace: `qt_simple_plot`, `qt_xas`, `qt_dta`,
   `qt_single_fit`, `qt_fit_params`, `qt_multi_fit`, `qt_rruff`, `qt_htxrd`
-
-Legacy Tk layer (kept until the Qt app is validated in daily use):
-- `main.py`, `ui_simple_plot.py`, `ui_fit_params.py`, `ui_dta_processing.py`,
-  `ui_xas_processing.py`, `xas_processing_v10.py`
 
 ## Troubleshooting
 

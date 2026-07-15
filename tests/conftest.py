@@ -92,12 +92,12 @@ def _prevent_blocking_qt_dialogs(monkeypatch):
     its own body (a test-local monkeypatch.setattr applied after this
     fixture's setup wins).
 
-    Guarded on PySide6 already being imported (sys.modules), NOT a bare
-    `import PySide6`, so this never imports PySide6 during the default
-    Tk-only suite — doing so unconditionally here would reintroduce the
-    exact Qt-then-Tk Tcl-interpreter corruption bug documented below (the
-    corruption comes from PySide6 being imported into the process at all,
-    not specifically from the pytest-qt plugin's autoload mechanism).
+    The sys.modules guard (skip when PySide6 isn't already imported) is a
+    holdover from when this suite also contained Tk-based tests and
+    importing PySide6 process-wide would have corrupted Tk's Tcl
+    interpreter on Windows; the Tk tests are gone now, but the guard is
+    still harmlessly correct — pure-science test sessions simply never
+    need QMessageBox patched.
     """
     import sys
     if "PySide6.QtWidgets" not in sys.modules:
@@ -107,19 +107,3 @@ def _prevent_blocking_qt_dialogs(monkeypatch):
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
-
-# NOTE on Tk + Qt in the same pytest process (Windows):
-# The pytest-qt plugin (installed for test_qt_shell.py's qtbot fixture)
-# auto-loads and imports PySide6/Qt on EVERY pytest session by default —
-# not something specific to importing test_qt_shell.py itself — which
-# corrupts Tk's Tcl interpreter for any tk.Tk() built later in the same
-# process on Windows (TclError: couldn't read .../tcl8.6/init.tcl, or
-# "invalid command name tcl_findLibrary"). Confirmed by isolating: two
-# sequential tk.Tk() roots in a plain script are fine; the plugin merely
-# being installed and auto-loaded is what breaks it, regardless of test
-# order or which files are collected. pytest.ini disables the plugin by
-# default (-p no:qt) and ignores test_qt_shell.py; run Qt-shell tests
-# separately with the plugin re-enabled:
-#     pytest tests/test_qt_shell.py -p qt --override-ini="addopts="
-# This whole note goes away once M6-M13 finish the Qt migration and there
-# are no more Tk-based tests left to conflict with.

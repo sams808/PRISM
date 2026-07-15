@@ -4,4 +4,3 @@ numpy
 pandas
 rampy
 scipy
-ttkthemes
