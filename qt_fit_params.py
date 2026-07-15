@@ -1,0 +1,241 @@
+"""
+qt_fit_params.py — Qt port of ui_fit_params.py's FitParamWindow (M8): the
+per-component peak-parameter table (shift/FWHM/eta ranges, shape, amplitude)
+used by single-spectrum fitting.
+
+Adds one new capability over the Tk original: an "Auto-find peaks" button
+that seeds component centers from fitting_science.find_peak_candidates()
+(2nd-derivative peak-finder), instead of the user always typing every guess
+by hand — the params_struct schema and save/load-model JSON format are
+otherwise unchanged, so existing saved *.json models remain compatible.
+"""
+from __future__ import annotations
+
+import copy
+import json
+import os
+from typing import Any, Callable, Dict, List, Optional
+
+import numpy as np
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QHBoxLayout,
+    QInputDialog, QLabel, QMessageBox, QPushButton, QScrollArea, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
+)
+
+COLUMNS = [
+    "Comp", "Shift min", "Shift val", "Shift max", "Vary",
+    "FWHM min", "FWHM val", "FWHM max", "Vary",
+    "Eta min", "Eta val", "Eta max", "Vary",
+    "Shape", "Amp val", "Vary",
+]
+
+_DEFAULTS: Dict[str, Any] = {
+    "shift_min": 900.0, "shift_val": 1000.0, "shift_max": 1100.0, "fit_shift": True,
+    "fwhm_min": 1.0, "fwhm_val": 50.0, "fwhm_max": 200.0, "fit_fwhm": True,
+    "eta_min": 0.0, "eta_val": 0.5, "eta_max": 1.0, "fit_eta": True,
+    "shape": "G", "amp_val": 1.0, "fit_amp": True,
+}
+
+_NUMERIC_COLS = {
+    1: "shift_min", 2: "shift_val", 3: "shift_max",
+    5: "fwhm_min", 6: "fwhm_val", 7: "fwhm_max",
+    9: "eta_min", 10: "eta_val", 11: "eta_max",
+    14: "amp_val",
+}
+_VARY_COLS = {4: "fit_shift", 8: "fit_fwhm", 12: "fit_eta", 15: "fit_amp"}
+_SHAPE_COL = 13
+
+
+def _default_model_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "param_models")
+
+
+def list_model_names(model_dir: Optional[str] = None) -> List[str]:
+    """Saved parameter models (== M9's "recipes" — same JSON files, same
+    directory, no separate format) available for batch fitting."""
+    model_dir = model_dir or _default_model_dir()
+    if not os.path.isdir(model_dir):
+        return []
+    return sorted(f[:-5] for f in os.listdir(model_dir) if f.lower().endswith(".json"))
+
+
+def load_model(name: str, model_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+    model_dir = model_dir or _default_model_dir()
+    path = os.path.join(model_dir, name + ".json")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+class FitParamDialog(QDialog):
+    """Edit the peak-component table for one spectrum. Calls on_accept(params)
+    with the collected params_struct list when the user clicks Accept."""
+
+    def __init__(
+        self,
+        parent: Optional[QWidget],
+        params_struct: Optional[List[Dict[str, Any]]],
+        on_accept: Callable[[List[Dict[str, Any]]], None],
+        *,
+        x: Optional[np.ndarray] = None,
+        y: Optional[np.ndarray] = None,
+        model_dir: Optional[str] = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Fit parameters")
+        self.resize(980, 420)
+        self.on_accept = on_accept
+        self.model_dir = model_dir or _default_model_dir()
+        self._x, self._y = x, y
+
+        params_struct = copy.deepcopy(params_struct) if params_struct else []
+        self.rows: List[Dict[str, Any]] = params_struct if params_struct else [dict(_DEFAULTS)]
+
+        layout = QVBoxLayout(self)
+
+        top = QHBoxLayout()
+        add_btn = QPushButton("+ Component")
+        add_btn.clicked.connect(self._add_component)
+        remove_btn = QPushButton("- Component")
+        remove_btn.clicked.connect(self._remove_component)
+        top.addWidget(add_btn)
+        top.addWidget(remove_btn)
+        top.addStretch(1)
+        if x is not None and y is not None:
+            auto_btn = QPushButton("Auto-find peaks")
+            auto_btn.clicked.connect(self._auto_find_peaks)
+            top.addWidget(auto_btn)
+        save_model_btn = QPushButton("Save as model…")
+        save_model_btn.clicked.connect(self._save_model)
+        load_model_btn = QPushButton("Load model…")
+        load_model_btn.clicked.connect(self._load_model)
+        top.addWidget(save_model_btn)
+        top.addWidget(load_model_btn)
+        layout.addLayout(top)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        self.table = QTableWidget()
+        self.table.setColumnCount(len(COLUMNS))
+        self.table.setHorizontalHeaderLabels(COLUMNS)
+        scroll.setWidget(self.table)
+        layout.addWidget(scroll, 1)
+
+        accept_btn = QPushButton("Accept")
+        accept_btn.setObjectName("Primary")
+        accept_btn.clicked.connect(self._on_accept_clicked)
+        layout.addWidget(accept_btn)
+
+        self._rebuild_table()
+
+    # ------------------------------------------------------------------
+    def _rebuild_table(self) -> None:
+        self.table.setRowCount(len(self.rows))
+        for i, row in enumerate(self.rows):
+            label_item = QTableWidgetItem(f"#{i + 1}")
+            label_item.setFlags(label_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(i, 0, label_item)
+
+            for col, key in _NUMERIC_COLS.items():
+                item = QTableWidgetItem(f"{row.get(key, _DEFAULTS.get(key, 0.0)):.4g}")
+                self.table.setItem(i, col, item)
+
+            for col, key in _VARY_COLS.items():
+                cb = QCheckBox()
+                cb.setChecked(bool(row.get(key, True)))
+                self.table.setCellWidget(i, col, cb)
+
+            shape_combo = QComboBox()
+            shape_combo.addItems(["G", "GL"])
+            shape_combo.setCurrentText(row.get("shape", "G"))
+            self.table.setCellWidget(i, _SHAPE_COL, shape_combo)
+
+        self.table.resizeColumnsToContents()
+
+    def _sync_rows_from_table(self) -> None:
+        for i in range(self.table.rowCount()):
+            row = self.rows[i]
+            for col, key in _NUMERIC_COLS.items():
+                item = self.table.item(i, col)
+                try:
+                    row[key] = float(item.text())
+                except (TypeError, ValueError):
+                    row[key] = _DEFAULTS.get(key, 0.0)
+            for col, key in _VARY_COLS.items():
+                cb = self.table.cellWidget(i, col)
+                row[key] = bool(cb.isChecked()) if cb is not None else True
+            combo = self.table.cellWidget(i, _SHAPE_COL)
+            row["shape"] = combo.currentText() if combo is not None else "G"
+
+    # ------------------------------------------------------------------
+    def _add_component(self) -> None:
+        self._sync_rows_from_table()
+        self.rows.append(dict(_DEFAULTS))
+        self._rebuild_table()
+
+    def _remove_component(self) -> None:
+        if len(self.rows) <= 1:
+            return
+        self._sync_rows_from_table()
+        self.rows.pop()
+        self._rebuild_table()
+
+    def _auto_find_peaks(self) -> None:
+        if self._x is None or self._y is None:
+            return
+        from fitting_science import find_peak_candidates
+        centers = find_peak_candidates(self._x, self._y, max_peaks=10)
+        if not centers:
+            QMessageBox.information(self, "Auto-find peaks", "No clear peak candidates were found.")
+            return
+        span = float(np.nanmax(self._x) - np.nanmin(self._x)) if len(self._x) else 100.0
+        half_width = max(span * 0.02, 1.0)
+        new_rows = []
+        for center in centers:
+            row = dict(_DEFAULTS)
+            row["shift_val"] = center
+            row["shift_min"] = center - 10 * half_width
+            row["shift_max"] = center + 10 * half_width
+            new_rows.append(row)
+        self.rows = new_rows
+        self._rebuild_table()
+
+    # ------------------------------------------------------------------
+    def _save_model(self) -> None:
+        self._sync_rows_from_table()
+        name, ok = QInputDialog.getText(self, "Model name", "Name for this parameter model:")
+        if not ok or not name.strip():
+            return
+        os.makedirs(self.model_dir, exist_ok=True)
+        path = os.path.join(self.model_dir, name.strip() + ".json")
+        if os.path.exists(path):
+            resp = QMessageBox.question(self, "Overwrite?", f"'{os.path.basename(path)}' already exists. Overwrite?")
+            if resp != QMessageBox.Yes:
+                return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.rows, f, indent=2)
+            QMessageBox.information(self, "Saved", f"Model '{name}' saved.")
+        except OSError as exc:
+            QMessageBox.critical(self, "Save error", str(exc))
+
+    def _load_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Load model", self.model_dir, "JSON (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                params = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            QMessageBox.critical(self, "Load error", str(exc))
+            return
+        self.rows = params if params else [dict(_DEFAULTS)]
+        self._rebuild_table()
+
+    # ------------------------------------------------------------------
+    def _on_accept_clicked(self) -> None:
+        self._sync_rows_from_table()
+        self.on_accept(copy.deepcopy(self.rows))
+        self.accept()
