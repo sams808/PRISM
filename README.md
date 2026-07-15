@@ -1,68 +1,107 @@
 # Dataapp
 
-A desktop GUI for quickly inspecting and processing Raman/Thermal spectra.  It is built
-on Tkinter and Matplotlib and wraps a universal loader capable of handling simple
-XY text files as well as richer exports such as TA SDT ASCII, SAXS EDF files, and
-thermo-analysis traces used by the DTA/DSC/TGA tooling.
+A desktop application for importing, processing, and analyzing scientific spectra:
+Raman, XAS/XANES/EXAFS, DTA/DSC/TGA thermal analysis, XRD (including
+high-temperature series), and SAXS.
 
-## Features
-- **Quick import** – batch-select files and let the app auto-detect the parser and
-  the best X/Y columns without any prompts.
-- **Custom import** – open the column/type selector dialog for each file so you can
-  override the detected parser or choose different columns.
-- **Processing tools** – rename/reorder imports, baseline subtraction, fitting
-  helpers, multi-spectrum sums and a "Simple plot" workspace with CIF overlays.
-- **Thermal analysis (DTA/DSC/TGA) tools** – pick temperature/time/Y channels, derive
-  dY/dt or dY/dT on the fly, compute Tg using multiple methods, run min/max/integration
-  "Calculs" with dual Y-axes, and batch-process many text exports.
-- **Format-aware defaults** – TA files expose canonical column names so the UI can
-  offer temperature vs heat-flow, TG curves, etc.
+The app has two generations living side by side during the ongoing migration:
 
-## Requirements
-The Python dependencies are listed in `requirements.txt`.  Install them with:
+- **Qt app (current, recommended)** — `python qt_main.py`. PySide6-based, organized
+  as one main window with a left navigation rail of technique workspaces.
+- **Tk app (legacy)** — `python main.py`. The original Tkinter application, kept
+  functional as a fallback until the Qt app has been fully validated in daily use.
+
+## Qt app workspaces
+
+| Workspace | What it does |
+|---|---|
+| **Library** | Import data files (auto-detected parser), browse, and preview them. Feeds the Raman/Fitting/Mineral-ID workspaces. |
+| **Raman** | Simple Plot: multi-spectrum plotting (separate or stacked), smoothing, color schemes, axis controls, CIF Bragg-peak overlays with a per-CIF manager, PNG/SVG/PDF export. |
+| **XAS** | Full XAS/XANES/EXAFS pipeline: EasyXAFS ZIP / CSV / Athena `.prj` import, μ(E) builder (with deglitching), Larch normalization and EXAFS/FT (`pre_edge`, `autobk`, `xftf`), merge/average, difference spectra, linear-combination fitting, edge definer, Athena `.dat`/`.prj` export. Requires `xraylarch` (see `requirements-xas.txt`). |
+| **DTA / Thermal** | Tg determination by three methods (double tangent, parallel tangent, \|dY\| max), integration/extrema "Calculs", batch processing with CSV export. |
+| **Peak Fitting** | Single-spectrum peak fitting (Gaussian / pseudo-Voigt via lmfit): classic one-shot LM or Origin-like stepwise mode, auto peak finding, residual subplot, per-component CSV export, fit reports with R² and peak centroids, save/load parameter models. |
+| **Multi-Fit** | Batch fitting: apply a saved parameter model ("recipe" — the same JSON files Peak Fitting saves) to many spectra at once; results table + CSV export. |
+| **Mineral ID** | RRUFF database match-assist: ranks mineral candidates by Raman peak overlap, shows each candidate's laser excitation wavelength, overlays the reference spectrum — identification is always the user's explicit decision, never automatic. Requires a local RRUFF cache (see below). |
+| **HT-XRD** | High-temperature XRD series: import a folder of patterns (temperature from `.rasx` metadata or a Jana-style `???` filename template), waterfall view colored by temperature, single-peak tracking (center/FWHM/area vs. T), and automatic flagging of candidate phase-transition windows from fit-quality anomalies. |
+
+## Installation
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+# Windows: .venv\Scripts\activate     Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt      # core science stack
+pip install -r requirements-qt.txt   # PySide6, for the Qt app
+pip install -r requirements-xas.txt  # xraylarch, optional — XAS workspace
+pip install -r requirements-dev.txt  # pytest + pytest-qt, for running the tests
 ```
 
-Make sure a Tcl/Tk runtime is available (the Tkinter module bundled with standard
-Python builds already provides it on Windows/macOS; on Linux install `python3-tk`).
-
-## Running the app
-After installing the dependencies, start the GUI with:
+## Running
 
 ```bash
-python main.py
+python qt_main.py    # Qt app (recommended)
+python main.py       # legacy Tk app
 ```
 
-On launch you can use **Quick import** to rapidly load a batch of spectra or
-**Custom import** when you need to select parser/columns manually.  Imported files
-appear in the central list and become available to the processing/plotting tools
-on the right-hand side.
+## Building the RRUFF database cache (Mineral ID workspace)
 
-### Using the DTA processing tool
-1. Import one or more TA text exports (Quick or Custom import).
-2. Open **DTA processing** from the right-hand toolbox. The file name becomes the plot title.
-3. Pick **X** (time or temperature), **Y** (DSC/TGA/TGA derivative), and optional
-   **dY source** columns. Toggle **dY overlay** to see derivatives on a secondary axis.
-4. Adjust Tg method (Double, Parallel, or |dY| max). Use the shaded window to focus
-   on a region; the view lock keeps zoom/pan stable while you tweak parameters.
-5. Under **Calculs**, choose the Y column (or its derivative) to integrate, find min/max,
-   or calculate an average over a custom X-range. Alternate-Y calculations are plotted on
-   a distinct right axis so they do not hide the main trace.
-6. Use **Batch run** for multiple files; optional PNG snapshots help validate results.
+The Mineral ID workspace needs a one-time local ingest of the RRUFF Raman
+database (https://rruff.net — please cite: Lafuente, Downs, Yang & Stone (2015),
+"The power of databases: the RRUFF project"):
+
+1. Download the category ZIPs from https://www.rruff.net/zipped_data_files/raman/
+2. In Python:
+   ```python
+   import rruff_science as rs
+   rs.build_index([
+       ("path/to/excellent_oriented.zip", "excellent_oriented"),
+       ("path/to/excellent_unoriented.zip", "excellent_unoriented"),
+       # ... one entry per downloaded ZIP
+   ])
+   ```
+3. The cache lands in `~/.raman_cache/rruff/` (~1.2 GB for the full database,
+   ~28,000 spectra / ~2,500 minerals) and is loaded automatically by the
+   Mineral ID workspace.
+
+## Running the tests
+
+Two suites (see `pytest.ini` for why they're split — a pytest-qt/Tkinter
+conflict on Windows):
+
+```bash
+# Default suite: science modules, parsers, Tk-safe (currently ~120 tests)
+pytest
+
+# Qt-widget suite (run separately):
+pytest tests/test_qt_shell.py tests/test_qt_dta.py tests/test_qt_simple_plot.py \
+       tests/test_qt_single_fit.py tests/test_qt_multi_fit.py tests/test_qt_xas.py \
+       tests/test_qt_rruff.py tests/test_qt_htxrd.py --override-ini="addopts="
+```
 
 ## Repository layout
-- `main.py` – core Tkinter application and import workflow
-- `io_universal.py` – pluggable parser framework that understands TA/SAXS/XY files
-- `ui_simple_plot.py` – standalone plotting window with CIF overlays
-- `ui_fit_params.py` – fit-parameter management dialogs
-- `cif_tools.py` – CIF parsing + Bragg peak helpers
-- `io_importers.py` – legacy lightweight loader kept for reference
+
+Science layer (framework-agnostic, fully tested — no GUI imports):
+- `io_universal.py` — pluggable parser framework (XY text, TA SDT, SAXS EDF, Rigaku `.rasx`, …)
+- `cif_tools.py` — CIF parsing + Bragg peak generation (disk-cached)
+- `dta_science.py` — Tg/derivative/integration math
+- `fitting_science.py` — lmfit peak models, fitting entry point, peak finding
+- `xas_science.py` — XAS/XANES/EXAFS engine (Larch wrappers, data models, I/O)
+- `rruff_science.py` — RRUFF database ingest + match ranking
+- `htxrd_science.py` — HTXRD series loading + peak tracking + transition flagging
+
+Qt layer:
+- `qt_main.py` — entry point; `qt_shell.py` — main window/navigation
+- `qt_widgets.py` (shared plot widget with debounced redraws), `qt_theme.py`,
+  `qt_models.py` (Spectrum/SpectrumLibrary), `qt_settings_store.py`,
+  `qt_exception_hook.py`
+- One `qt_*.py` per workspace: `qt_simple_plot`, `qt_xas`, `qt_dta`,
+  `qt_single_fit`, `qt_fit_params`, `qt_multi_fit`, `qt_rruff`, `qt_htxrd`
+
+Legacy Tk layer (kept until the Qt app is validated in daily use):
+- `main.py`, `ui_simple_plot.py`, `ui_fit_params.py`, `ui_dta_processing.py`,
+  `ui_xas_processing.py`, `xas_processing_v10.py`
 
 ## Troubleshooting
-If a file fails to import, try the **Custom import** button which will open the
-selector dialog even when the auto-detected columns look confident.  The dialog
-also displays parser hints and available columns to help pinpoint problems.
+
+If a file fails to import in the Library, the parser registry may have
+misdetected the format — check `io_universal.py`'s parser list; every parser
+records its decision in the returned metadata (`selected_parser`).
