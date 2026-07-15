@@ -241,7 +241,65 @@ class DataappMainWindow(QMainWindow):
 
         self.nav.setCurrentRow(0)
 
+        file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction("Open project…", self.open_project)
+        file_menu.addAction("Save project as…", self.save_project)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit", self.close)
+
         self.statusBar().showMessage("Ready.")
+
+    # ------------------------------------------------------------------
+    # Project persistence (M14): everything in the shared Library plus the
+    # shared fit-parameter store, in one .dataapp file. The XAS and HT-XRD
+    # workspaces keep their own session state (different data models) and
+    # are not yet included — the file format is versioned so they can be
+    # added later without breaking old projects.
+    # ------------------------------------------------------------------
+    def save_project(self) -> None:
+        import project_io
+        path, _ = QFileDialog.getSaveFileName(self, "Save project as…", "", "Dataapp project (*.dataapp)")
+        if not path:
+            return
+        if not path.lower().endswith(".dataapp"):
+            path += ".dataapp"
+        fit_params = {sid: params for sid, params in self.fit_param_memory.items()}
+        try:
+            project_io.save_project(path, self.library.all(), fit_params)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save project error", str(exc))
+            return
+        self.statusBar().showMessage(f"Project saved: {path}")
+
+    def open_project(self) -> None:
+        import project_io
+        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", "Dataapp project (*.dataapp);;All files (*.*)")
+        if not path:
+            return
+        if len(self.library) > 0:
+            resp = QMessageBox.question(
+                self, "Open project",
+                "Opening a project replaces the current library contents. Continue?",
+            )
+            if resp != QMessageBox.Yes:
+                return
+        try:
+            spectra, fit_params = project_io.load_project(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open project error", str(exc))
+            return
+
+        self.library.clear()
+        self.fit_param_memory.clear()
+        for sp in spectra:
+            self.library.add(sp)
+        for sid, params in fit_params.items():
+            self.fit_param_memory.set(sid, params)
+
+        self.library_page._refresh_table()
+        # Re-sync whichever workspace is currently visible.
+        self._on_nav_changed(self.nav.currentRow())
+        self.statusBar().showMessage(f"Project loaded: {len(spectra)} spectra from {path}")
 
     def _dta_records_from_library(self):
         records = []
