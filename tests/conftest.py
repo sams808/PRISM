@@ -62,8 +62,16 @@ def isg_series_paths() -> list[Path]:
 
 @pytest.fixture(scope="session")
 def pbi0_map_paths() -> list[Path]:
-    """Real archived multi-file Raman map series."""
-    return sorted((ARCHIVE_DIR / "PBi0-1").glob("*-map*.txt"))
+    """Real archived multi-file Raman map series — RAW map spectra only
+    (`...-mapN.txt`). The same folder also holds derived outputs from past
+    processing runs (`..._bl.txt` baseline-subtracted, `..._bl_fit....txt`
+    fit-parameter tables with ~8 rows) that the old `*-map*.txt` glob
+    silently swept in; a fit-parameter table is not a spectrum."""
+    import re
+    return sorted(
+        p for p in (ARCHIVE_DIR / "PBi0-1").glob("*-map*.txt")
+        if re.search(r"-map\d+\.txt$", p.name)
+    )
 
 
 def larch_available() -> bool:

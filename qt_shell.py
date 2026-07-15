@@ -33,6 +33,7 @@ from qt_multi_fit import MultiFitWorkspace
 from qt_settings_store import PerItemSettingsStore
 from qt_simple_plot import SimplePlotWorkspace
 from qt_single_fit import SingleFitWorkspace
+from qt_cluster import ClusterWorkspace
 from qt_htxrd import HtxrdWorkspace
 from qt_rruff import RruffMatchWorkspace
 from qt_widgets import PlotWidget
@@ -48,12 +49,13 @@ NAV_FITTING = "Peak Fitting"
 NAV_MULTIFIT = "Multi-Fit"
 NAV_RRUFF = "Mineral ID"
 NAV_HTXRD = "HT-XRD"
+NAV_CLUSTER = "Clustering"
 # NAV_FITTING/NAV_MULTIFIT/NAV_RRUFF/NAV_HTXRD are appended at the end (not
 # inserted after Raman) so the DTA page keeps nav row 3 —
 # test_qt_dta.py's test_shell_dta_page_picks_up_library_records hardcodes
 # setCurrentRow(3), and there's no reason to reorder the rail just to churn
 # that index.
-NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD]
+NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER]
 DTA_KINDS = {"ta_sdt", "dta_table"}
 
 
@@ -237,6 +239,8 @@ class DataappMainWindow(QMainWindow):
         self.stack.addWidget(self.rruff_page)
         self.htxrd_page = HtxrdWorkspace()
         self.stack.addWidget(self.htxrd_page)
+        self.cluster_page = ClusterWorkspace(library=self.library)
+        self.stack.addWidget(self.cluster_page)
         outer.addWidget(self.stack, 1)
 
         self.nav.setCurrentRow(0)
@@ -332,3 +336,5 @@ class DataappMainWindow(QMainWindow):
             self.multifit_page._refresh_recipe_list()
         elif self.stack.widget(row) is self.rruff_page:
             self.rruff_page.set_spectra([s.id for s in self.library.all()])
+        elif self.stack.widget(row) is self.cluster_page:
+            self.cluster_page.set_spectra([s.id for s in self.library.all()])

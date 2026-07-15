@@ -3,4 +3,5 @@ matplotlib
 numpy
 pandas
 rampy
+scikit-learn
 scipy
