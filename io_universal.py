@@ -717,6 +717,193 @@ def _clean_float_or_none(val) -> float | None:
         return None
 
 
+# ==============================
+# JCAMP-DX (M15) — the de facto interchange standard across UV/IR/Raman/
+# NMR/MS instrument software; one reader unlocks broad compatibility.
+# Supports ##XYDATA=(X++(Y..Y)) with AFFN/PAC and compressed ASDF
+# (SQZ/DIF/DUP) encodings, plus ##XYPOINTS/##PEAK TABLE=(XY..XY) pairs.
+# Compound/multi-block files: only the first data block is read.
+# ==============================
+
+_JCAMP_SQZ = {c: v for v, c in enumerate("@ABCDEFGHI")}          # absolute, positive first digit
+_JCAMP_SQZ.update({c: -(v + 1) for v, c in enumerate("abcdefghi")})   # absolute, negative
+_JCAMP_DIF = {c: v for v, c in enumerate("%JKLMNOPQR")}          # difference, positive
+_JCAMP_DIF.update({c: -(v + 1) for v, c in enumerate("jklmnopqr")})   # difference, negative
+_JCAMP_DUP = {c: v + 1 for v, c in enumerate("STUVWXYZ")}        # duplicate count 1-8
+_JCAMP_DUP["s"] = 9
+
+
+def _jcamp_tokenize_line(line: str) -> list[tuple[str, str]]:
+    """Split one ASDF data line into (kind, numeric_text) tokens, where kind
+    is 'num' (AFFN/PAC absolute), 'sqz' (absolute), 'dif' (difference), or
+    'dup' (repeat count). The SQZ/DIF/DUP letter encodes the sign and first
+    digit; remaining digits follow it."""
+    tokens: list[tuple[str, str]] = []
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if c in " \t,;":
+            i += 1
+            continue
+        if c in _JCAMP_SQZ or c in _JCAMP_DIF or c in _JCAMP_DUP:
+            j = i + 1
+            while j < n and (line[j].isdigit() or line[j] == "."):
+                j += 1
+            rest = line[i + 1:j]
+            if c in _JCAMP_SQZ:
+                v = _JCAMP_SQZ[c]
+                text = ("-" if v < 0 else "") + str(abs(v)) + rest
+                tokens.append(("sqz", text))
+            elif c in _JCAMP_DIF:
+                v = _JCAMP_DIF[c]
+                text = ("-" if v < 0 else "") + str(abs(v)) + rest
+                tokens.append(("dif", text))
+            else:
+                tokens.append(("dup", str(_JCAMP_DUP[c]) + rest))
+            i = j
+            continue
+        if c.isdigit() or c in "+-.":
+            j = i + 1 if c in "+-" else i
+            k = j
+            while k < n and (line[k].isdigit() or line[k] in ".eE" or (line[k] in "+-" and line[k - 1] in "eE")):
+                k += 1
+            tokens.append(("num", line[i:k]))
+            i = k
+            continue
+        if c == "?":  # JCAMP's explicit missing-value marker
+            tokens.append(("num", "nan"))
+            i += 1
+            continue
+        i += 1  # unknown character: skip
+    return tokens
+
+
+def _jcamp_decode_xydata(data_lines: list[str]) -> list[float]:
+    """Decode ##XYDATA=(X++(Y..Y)) lines into the flat Y sequence. The
+    first token per line is the line's X value (dropped — X is rebuilt from
+    FIRSTX/LASTX/NPOINTS); in DIF mode the FIRST Y of the next line is a
+    check value duplicating the previous line's last Y and must be dropped
+    (per the JCAMP-DX 4.24 spec's Y-value check convention)."""
+    ys: list[float] = []
+    last_was_dif = False
+    for line in data_lines:
+        tokens = _jcamp_tokenize_line(line)
+        if not tokens:
+            continue
+        tokens = tokens[1:]  # drop the leading X token
+        first_y_of_line = True
+        for kind, text in tokens:
+            if kind == "dup":
+                count = int(float(text))
+                if not ys:
+                    continue
+                for _ in range(count - 1):
+                    if last_was_dif and len(ys) >= 2:
+                        ys.append(ys[-1] + (ys[-1] - ys[-2]))
+                    else:
+                        ys.append(ys[-1])
+                first_y_of_line = False
+                continue
+            value = float(text)
+            if kind == "dif":
+                if not ys:
+                    ys.append(value)
+                else:
+                    ys.append(ys[-1] + value)
+                last_was_dif = True
+            else:  # 'num' or 'sqz': absolute value
+                if first_y_of_line and last_was_dif and ys:
+                    # DIF-mode line-start check value: should equal the
+                    # running Y; drop it rather than duplicating the point.
+                    first_y_of_line = False
+                    last_was_dif = False
+                    continue
+                ys.append(value)
+                last_was_dif = False
+            first_y_of_line = False
+    return ys
+
+
+def sniff_jcamp(path: str, head: str) -> bool:
+    return bool(re.search(r"^\s*##\s*JCAMP-?DX\s*=", head, re.M | re.I))
+
+
+def parse_jcamp(path: str) -> tuple[pd.DataFrame, dict]:
+    text, used_encoding = _read_text_with_fallbacks(path)
+    lines = text.splitlines()
+
+    header: dict[str, str] = {}
+    data_mode: str | None = None
+    data_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("##"):
+            if data_mode is not None:
+                break  # first data block only; next LDR ends it
+            key, _, value = stripped[2:].partition("=")
+            key_norm = re.sub(r"[\s_-]", "", key).upper()
+            value = value.split("$$", 1)[0].strip()  # strip inline comments
+            header[key_norm] = value
+            if key_norm == "XYDATA":
+                data_mode = "xydata"
+            elif key_norm in ("XYPOINTS", "PEAKTABLE"):
+                data_mode = "xypoints"
+            continue
+        if data_mode is not None and stripped:
+            data_lines.append(stripped.split("$$", 1)[0])
+
+    if data_mode is None:
+        raise ValueError(f"No ##XYDATA/##XYPOINTS/##PEAK TABLE block found in JCAMP file: {path}")
+
+    xfactor = _clean_float_or_none(header.get("XFACTOR")) or 1.0
+    yfactor = _clean_float_or_none(header.get("YFACTOR")) or 1.0
+
+    if data_mode == "xydata":
+        ys_raw = _jcamp_decode_xydata(data_lines)
+        firstx = _clean_float_or_none(header.get("FIRSTX"))
+        lastx = _clean_float_or_none(header.get("LASTX"))
+        npoints = _clean_float_or_none(header.get("NPOINTS"))
+        n = len(ys_raw)
+        if npoints is not None and int(npoints) != n:
+            # Trust the decoded sequence but record the discrepancy.
+            header["_NPOINTS_MISMATCH"] = f"declared {int(npoints)}, decoded {n}"
+        if firstx is not None and lastx is not None and n > 1:
+            x = np.linspace(firstx, lastx, n)
+        else:
+            deltax = _clean_float_or_none(header.get("DELTAX")) or 1.0
+            x0 = firstx if firstx is not None else 0.0
+            x = x0 + deltax * np.arange(n, dtype=float)
+        y = np.asarray(ys_raw, dtype=float) * yfactor
+    else:
+        xs, ys = [], []
+        for line in data_lines:
+            for pair in re.split(r"[;]", line):
+                nums = re.findall(r"[-+]?\d+\.?\d*(?:[eE][-+]?\d+)?", pair)
+                if len(nums) >= 2:
+                    xs.append(float(nums[0]) * xfactor)
+                    ys.append(float(nums[1]) * yfactor)
+        x = np.asarray(xs, dtype=float)
+        y = np.asarray(ys, dtype=float)
+
+    if len(x) < 2:
+        raise ValueError(f"JCAMP file decoded to fewer than 2 points: {path}")
+
+    df = pd.DataFrame({"x": x, "y": y})
+    data_type = header.get("DATATYPE", "")
+    canonical = {"X": "x", "Y": "y"}
+    meta = {
+        "parser": "jcamp",
+        "used_encoding": used_encoding,
+        "canonical_map": canonical,
+        "path": os.path.abspath(path),
+        "jcamp_title": header.get("TITLE", ""),
+        "jcamp_data_type": data_type,
+        "jcamp_xunits": header.get("XUNITS", ""),
+        "jcamp_yunits": header.get("YUNITS", ""),
+    }
+    return df, meta
+
+
 def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
     header, signals, df = parse_ta_sdt_txt(Path(path))
     canonical = _build_dta_canonical(df)
@@ -738,6 +925,7 @@ def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
 # Register parsers (priority)
 # ==============================
 register_parser(ParserSpec("rasx", sniff_rasx, parse_rasx, priority=5))
+register_parser(ParserSpec("jcamp", sniff_jcamp, parse_jcamp, priority=8))
 register_parser(ParserSpec("ta_sdt", sniff_ta_sdt, parse_ta_sdt, priority=10))
 register_parser(ParserSpec("saxs_edf_ascii", sniff_saxs_edf_ascii, parse_saxs_edf_ascii, priority=20))
 register_parser(ParserSpec("dta_table", sniff_dta_table, parse_dta_table, priority=30))
