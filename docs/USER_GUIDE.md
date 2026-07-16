@@ -1,0 +1,108 @@
+<!-- Generated from qt_help.py (the in-app F1 guide). Edit there, then regenerate. -->
+
+# Dataapp — quick-start guide
+
+**The flow:** bring data in through the **Library**, then switch to the
+workspace for your technique in the left rail. Everything you derive
+(baseline-subtracted, combined, fitted) lands back in the Library as a new
+spectrum. **File > Save project** keeps the whole session in one
+`.dataapp` file.
+
+## Library
+**Import files…** auto-detects the format (plain XY, TA SDT thermal exports,
+SAXS EDF, Rigaku `.rasx`, JCAMP-DX). If it guesses wrong, use
+**Custom import…** (Ctrl+I) to pick the parser and the X/Y columns yourself, with a
+preview. Right-click spectra to rename, duplicate, reorder, export as text
+(Ctrl+E), combine (sum / average / weighted subtraction), or delete —
+deletion is undoable (Ctrl+Z).
+
+## Baseline
+Pick a method — **arPLS** is the automatic default; polynomial / spline /
+rubberband fit *through regions you choose*. Type regions like
+`100-400; 1800-2600` or toggle **Add region by dragging** and sweep them
+on the plot. **Preview** shows raw + baseline + subtracted; **Apply** creates a
+`_bl` spectrum.
+
+**Tip for glasses:** broad bands need a stiff arPLS — use λ around
+**1e7**. At the usual 1e5 the baseline eats the band itself. (Verified against
+the ISG pressure series: λ=1e7 beat a hand-drawn baseline.)
+
+## Raman (Simple Plot)
+Multi-select spectra to overlay them: separate panels or stacked with an
+offset. Load CIF files to overlay predicted Bragg positions (managed per-CIF:
+color, label, visibility). Difference mode shows A−B for exactly two selected
+spectra. Toggle **Annotate on click** to pin peak-position labels.
+
+## Peak Fitting
+Set up components in **Fit param.** (or let **Auto-find peaks** seed them),
+then **Fit !**. Shapes: G (Gaussian), GL (pseudo-Voigt), V (true Voigt),
+EMG (asymmetric, signed skew). The `FWHM=#` column links a component's
+width to another's. Reports include R², ±1σ errors, and peak centroids;
+**Conf. intervals** runs rigorous F-test profiling. Save a configuration as a
+*model* to reuse it — models are also the recipes **Multi-Fit** applies
+across many spectra at once.
+
+**Width convention:** the "FWHM" fields have always been *half*-widths
+(HWHM) — a historical convention kept so old saved models stay valid. Double
+them when quoting true FWHM.
+
+## XAS
+Import EasyXAFS ZIPs, CSVs, or Athena `.prj` from the workspace's own
+buttons. Tabs follow the workflow: Pre-processing (smoothing, Bragg
+angle→energy correction, click-based tie-point alignment) → μ(E) Builder
+(with deglitching) → Normalization / EXAFS (Larch) → Analysis (merge, difference,
+linear-combination fitting, PCA species count) → Export (Athena formats).
+
+## DTA / Thermal
+Pick X/Y/dY channels, compute Tg three ways (double tangent, parallel
+tangent, |dY| max) — the result panel says whether the methods agree.
+"Calculs" integrates or finds extrema over a range; Batch processes a folder.
+
+## Mineral ID (RRUFF)
+Auto-find (or type) your spectrum's peak positions, then **Find matches**:
+candidates are ranked by peak overlap, each showing its **laser wavelength** —
+relative intensities vary between wavelengths, so judge the overlay yourself.
+Nothing is labeled until you click **Accept**. One more click overlays the
+matched mineral's predicted XRD pattern (AMCSD structure) in the Raman
+workspace. Requires the one-time local database build (see the README).
+
+## HT-XRD
+Import a whole folder of patterns; temperatures come from `.rasx`
+metadata or a filename template like `scan_???.xy`. The waterfall is
+colored by temperature. Enter a 2θ window around a peak and **Track**: center /
+width / area vs temperature, with automatic flagging of fit-quality anomalies —
+candidate phase-transition windows.
+
+## Clustering
+Select a series (e.g. a multi-point map), choose KMeans or hierarchical and
+a cluster count: PCA scatter colored by cluster, per-cluster mean spectra, and
+an assignment table.
+
+## Shortcuts
+`Ctrl+O` import · `Ctrl+I` custom import ·
+`Ctrl+E` export · `Ctrl+S` save project ·
+`Ctrl+Shift+O` open project · `Ctrl+Z` undo delete ·
+`Ctrl+Q` quit · `F1` this guide.
+View menu: dark mode, Python console (the live app objects are in scope).
+
+---
+
+## Dataapp
+Import, process, and analyze scientific spectra: Raman, XAS/XANES/EXAFS,
+DTA/DSC/TGA, XRD (including high-temperature series), SAXS.
+
+Source: `github.com/sams808/Dataapp`
+
+### Please cite when the bundled databases contribute to your work
+**RRUFF** (Raman reference spectra): Lafuente B, Downs R T, Yang H,
+Stone N (2015) "The power of databases: the RRUFF project." In: Highlights
+in Mineralogical Crystallography, pp 1–30. Also acknowledge each matched
+sample's owner/source shown in the Mineral ID workspace.
+
+**AMCSD** (crystal structures used for XRD overlays): Downs R T,
+Hall-Wallace M (2003) "The American Mineralogist Crystal Structure
+Database." American Mineralogist 88, 247–250.
+
+### Built on
+numpy · scipy · pandas · matplotlib · lmfit · rampy · scikit-learn ·
+PySide6 · xraylarch (optional, XAS)

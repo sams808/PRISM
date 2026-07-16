@@ -566,6 +566,10 @@ class DataappMainWindow(QMainWindow):
         self.console_action.toggled.connect(self._on_console_toggled)
         self._console_dock = None  # created lazily on first open
 
+        help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction("Quick-start guide", self.show_help, "F1")
+        help_menu.addAction("About Dataapp", self.show_about)
+
         self.statusBar().showMessage("Ready.")
 
         # Restore window geometry + last-used workspace from the previous
@@ -589,6 +593,14 @@ class DataappMainWindow(QMainWindow):
         settings.setValue("geometry", self.saveGeometry())
         settings.setValue("nav_row", self.nav.currentRow())
         super().closeEvent(event)
+
+    def show_help(self) -> None:
+        from qt_help import HelpDialog
+        HelpDialog(self).exec()
+
+    def show_about(self) -> None:
+        from qt_help import ABOUT_HTML, HelpDialog
+        HelpDialog(self, html=ABOUT_HTML, title="About Dataapp").exec()
 
     def _on_rruff_send_cifs(self, cif_paths) -> None:
         """RRUFF→CIF handoff target: add the structures to the Raman
