@@ -235,7 +235,7 @@ class DataappMainWindow(QMainWindow):
         self.stack.addWidget(self.fitting_page)
         self.multifit_page = MultiFitWorkspace(library=self.library, fit_param_memory=self.fit_param_memory)
         self.stack.addWidget(self.multifit_page)
-        self.rruff_page = RruffMatchWorkspace(library=self.library)
+        self.rruff_page = RruffMatchWorkspace(library=self.library, on_send_cifs=self._on_rruff_send_cifs)
         self.stack.addWidget(self.rruff_page)
         self.htxrd_page = HtxrdWorkspace()
         self.stack.addWidget(self.htxrd_page)
@@ -262,6 +262,13 @@ class DataappMainWindow(QMainWindow):
         self._console_dock = None  # created lazily on first open
 
         self.statusBar().showMessage("Ready.")
+
+    def _on_rruff_send_cifs(self, cif_paths) -> None:
+        """RRUFF→CIF handoff target: add the structures to the Raman
+        workspace's CIF overlay and switch to it so the result is visible."""
+        added = self.raman_page.add_cif_files(list(cif_paths))
+        self.nav.setCurrentRow(NAV_ITEMS.index(NAV_RAMAN))
+        self.statusBar().showMessage(f"Added {added} CIF(s) to the Raman CIF overlay.")
 
     def _on_console_toggled(self, visible: bool) -> None:
         if self._console_dock is None:

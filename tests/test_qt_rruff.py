@@ -163,6 +163,94 @@ def test_render_preview_overlays_measured_spectrum(qtbot, tmp_path):
     assert len(ax.lines) >= 2  # query + candidate measured spectrum
 
 
+_MINIMAL_CIF = """\
+data_global
+_chemical_name_mineral 'Quartz'
+_cell_length_a 4.913
+_cell_length_b 4.913
+_cell_length_c 5.405
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 120
+"""
+
+
+def test_send_candidate_cifs_hands_structures_to_callback(qtbot, tmp_path):
+    """RRUFF→CIF handoff: with a local AMCSD cache containing the matched
+    mineral, the button must resolve its CIF(s) and pass them to the
+    shell-provided callback."""
+    import zipfile
+
+    import rruff_science as rs
+
+    amcsd_zip = tmp_path / "cif.zip"
+    with zipfile.ZipFile(amcsd_zip, "w") as zf:
+        zf.writestr("Quartz__0000789.cif", _MINIMAL_CIF)
+    amcsd_cache = tmp_path / "amcsd"
+    rs.ingest_amcsd_cif_zip(str(amcsd_zip), cache_dir=str(amcsd_cache))
+
+    rruff_cache = tmp_path / "rruff_cache"
+    _write_fake_cache(rruff_cache, rruff_cache / "raw")
+
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+
+    received = {}
+    widget = RruffMatchWorkspace(
+        library=library, cache_dir=str(rruff_cache), amcsd_cache_dir=str(amcsd_cache),
+        on_send_cifs=lambda paths: received.update(paths=list(paths)),
+    )
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.find_matches()
+    qtbot.wait(20)
+    assert widget.results_table.item(0, 0).text() == "Quartz"
+
+    widget.send_candidate_cifs()
+    assert "paths" in received
+    assert len(received["paths"]) == 1
+    assert received["paths"][0].endswith(".cif")
+
+
+def test_send_candidate_cifs_without_cache_informs_user(qtbot, tmp_path):
+    rruff_cache = tmp_path / "rruff_cache"
+    _write_fake_cache(rruff_cache, rruff_cache / "raw")
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(
+        library=library, cache_dir=str(rruff_cache),
+        amcsd_cache_dir=str(tmp_path / "no_amcsd"),
+        on_send_cifs=lambda paths: None,
+    )
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    widget.peaks_edit.setText("464.0")
+    widget.find_matches()
+    qtbot.wait(20)
+    widget.send_candidate_cifs()  # info dialog neutralized by conftest fixture; no crash
+
+
+def test_shell_rruff_send_cifs_adds_to_raman_overlay(qtbot, tmp_path, monkeypatch):
+    """Full handoff through the real shell: the callback adds the CIF to
+    the Raman workspace's overlay series and switches nav to it."""
+    cif_path = tmp_path / "Quartz__0000789.cif"
+    cif_path.write_text(_MINIMAL_CIF, encoding="utf-8")
+
+    window = DataappMainWindow()
+    qtbot.addWidget(window)
+    qtbot.wait(20)
+
+    window._on_rruff_send_cifs([str(cif_path)])
+    qtbot.wait(200)  # debounced render
+
+    assert len(window.raman_page.cif_series) == 1
+    assert window.raman_page.cif_series[0]["visible"] is True
+    assert window.stack.currentWidget() is window.raman_page
+
+
 def test_shell_rruff_page_picks_up_library_records(qtbot, raman_example_path):
     from qt_shell import _load_spectrum_from_path
 

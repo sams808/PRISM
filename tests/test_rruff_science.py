@@ -262,3 +262,65 @@ def test_rank_rruff_matches_preserves_original_record_fields():
     ranked = rs.rank_rruff_matches([464.0], index, tolerance=5.0)
     assert ranked[0]["rruff_id"] == "R040031"
     assert ranked[0]["wavelength_nm"] == 532.0
+
+
+# --------------------------------------------------------------------------
+# AMCSD CIF companion cache (RRUFF -> CIF overlay handoff)
+# --------------------------------------------------------------------------
+
+_MINIMAL_CIF = """\
+data_global
+_chemical_name_mineral 'Quartz'
+_cell_length_a 4.913
+_cell_length_b 4.913
+_cell_length_c 5.405
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 120
+"""
+
+
+def test_ingest_amcsd_cif_zip_and_lookup(tmp_path):
+    import zipfile as _zip
+    zip_path = tmp_path / "cif.zip"
+    with _zip.ZipFile(zip_path, "w") as zf:
+        zf.writestr("Quartz__0000789.cif", _MINIMAL_CIF)
+        zf.writestr("Quartz__0000790.cif", _MINIMAL_CIF)
+        zf.writestr("Gysinite-(Ce)__0001234.cif", _MINIMAL_CIF.replace("Quartz", "Gysinite-(Ce)"))
+
+    cache = tmp_path / "amcsd_cache"
+    n = rs.ingest_amcsd_cif_zip(str(zip_path), cache_dir=str(cache))
+    assert n == 3
+
+    quartz = rs.find_cifs_for_mineral("quartz", cache_dir=str(cache))
+    assert len(quartz) == 2
+    assert all(p.endswith(".cif") for p in quartz)
+
+    # Punctuation/case-insensitive lookup for hyphenated/suffixed minerals.
+    gys = rs.find_cifs_for_mineral("GYSINITE-(CE)", cache_dir=str(cache))
+    assert len(gys) == 1
+
+    assert rs.find_cifs_for_mineral("unobtainium", cache_dir=str(cache)) == []
+
+
+def test_find_cifs_for_mineral_missing_cache_returns_empty(tmp_path):
+    assert rs.find_cifs_for_mineral("quartz", cache_dir=str(tmp_path / "nope")) == []
+
+
+def test_ingested_amcsd_cif_feeds_bragg_generation(tmp_path):
+    """End of the handoff chain: an ingested AMCSD CIF must parse through
+    cif_tools and yield Bragg peaks."""
+    import zipfile as _zip
+    from cif_tools import bragg_peaks_from_cif_generic
+
+    zip_path = tmp_path / "cif.zip"
+    with _zip.ZipFile(zip_path, "w") as zf:
+        zf.writestr("Quartz__0000789.cif", _MINIMAL_CIF)
+    cache = tmp_path / "amcsd_cache"
+    rs.ingest_amcsd_cif_zip(str(zip_path), cache_dir=str(cache))
+
+    path = rs.find_cifs_for_mineral("Quartz", cache_dir=str(cache))[0]
+    peaks = bragg_peaks_from_cif_generic(path, two_theta_max=80.0, hkl_max=4, use_cache=False)
+    assert len(peaks) > 5
+    two_thetas = [tt for tt, _hkl, _d in peaks]
+    assert any(25 < tt < 28 for tt in two_thetas)  # quartz (101) ~26.6 deg (Cu Ka)

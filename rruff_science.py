@@ -347,3 +347,66 @@ def rank_rruff_matches(
         scored.append({**rec, "matched_peaks": result["matched"], "match_fraction": result["fraction"]})
     scored.sort(key=lambda r: (r["matched_peaks"], r["match_fraction"]), reverse=True)
     return scored[:top_n]
+
+
+# =============================================================================
+# AMCSD CIF companion database (RRUFF->CIF overlay handoff, backlog item).
+# rruff.net also distributes the American Mineralogist Crystal Structure
+# Database as per-record CIF files named "{Mineral}__{AMCSD_ID}.cif"
+# (https://www.rruff.net/AMS/zipped_files/cif.zip, ~21.7k files) — enough to
+# hand a matched mineral's predicted XRD pattern straight to the CIF
+# overlay, closing the loop from Raman identification to structural
+# verification.
+# =============================================================================
+
+AMCSD_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".raman_cache", "amcsd")
+
+
+def _normalize_mineral(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def ingest_amcsd_cif_zip(zip_path: str, *, cache_dir: str = AMCSD_CACHE_DIR, progress_every: int = 2000) -> int:
+    """Extract every .cif from the AMCSD bulk ZIP into cache_dir/cif/ and
+    build cif_index.json mapping normalized mineral name -> list of cif
+    filenames. Returns the number of CIFs indexed."""
+    cif_dir = os.path.join(cache_dir, "cif")
+    os.makedirs(cif_dir, exist_ok=True)
+    index: Dict[str, List[str]] = {}
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = [n for n in zf.namelist() if n.lower().endswith(".cif")]
+        for i, name in enumerate(names):
+            if progress_every and i and i % progress_every == 0:
+                print(f"  ...{i}/{len(names)} CIFs")
+            base = os.path.basename(name)
+            mineral = base.split("__", 1)[0]
+            key = _normalize_mineral(mineral)
+            if not key:
+                continue
+            out_path = os.path.join(cif_dir, base)
+            try:
+                with open(out_path, "wb") as f:
+                    f.write(zf.read(name))
+            except OSError:
+                continue
+            index.setdefault(key, []).append(base)
+
+    with open(os.path.join(cache_dir, "cif_index.json"), "w", encoding="utf-8") as f:
+        json.dump(index, f)
+    return sum(len(v) for v in index.values())
+
+
+def find_cifs_for_mineral(mineral: str, *, cache_dir: str = AMCSD_CACHE_DIR, max_results: int = 3) -> List[str]:
+    """Absolute paths of cached AMCSD CIFs for a mineral name
+    (case/punctuation-insensitive). Empty list when the cache hasn't been
+    built or the mineral has no AMCSD structure."""
+    index_path = os.path.join(cache_dir, "cif_index.json")
+    if not os.path.isfile(index_path):
+        return []
+    with open(index_path, "r", encoding="utf-8") as f:
+        index = json.load(f)
+    names = index.get(_normalize_mineral(mineral), [])
+    cif_dir = os.path.join(cache_dir, "cif")
+    out = [os.path.join(cif_dir, n) for n in names[:max_results]]
+    return [p for p in out if os.path.isfile(p)]

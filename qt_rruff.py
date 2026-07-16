@@ -38,6 +38,7 @@ from rruff_science import (
     RRUFF_ATTRIBUTION_NOTE,
     RRUFF_CACHE_DIR,
     RRUFF_CITATION,
+    find_cifs_for_mineral,
     index_summary,
     load_index,
     parse_rruff_txt,
@@ -57,11 +58,16 @@ def _to_float(text: str, default: Optional[float] = None) -> Optional[float]:
 class RruffMatchWorkspace(QWidget):
     def __init__(
         self, parent: Optional[QWidget] = None, library: Optional[SpectrumLibrary] = None,
-        cache_dir: Optional[str] = None,
+        cache_dir: Optional[str] = None, amcsd_cache_dir: Optional[str] = None,
+        on_send_cifs=None,
     ):
         super().__init__(parent)
         self.library = library if library is not None else SpectrumLibrary()
         self.cache_dir = cache_dir or RRUFF_CACHE_DIR
+        self.amcsd_cache_dir = amcsd_cache_dir  # None -> rruff_science default
+        # Shell-provided callback taking a list of CIF paths (the RRUFF→CIF
+        # overlay handoff into the Raman workspace).
+        self.on_send_cifs = on_send_cifs
         self._index: Optional[List[Dict[str, Any]]] = None
         self._query_peaks: List[float] = []
         self._results: List[Dict[str, Any]] = []
@@ -113,6 +119,10 @@ class RruffMatchWorkspace(QWidget):
         accept_btn = QPushButton("Accept selected candidate as identification")
         accept_btn.clicked.connect(self.accept_selected_candidate)
         left_layout.addWidget(accept_btn)
+
+        send_cif_btn = QPushButton("Overlay candidate's XRD (CIF) in Raman workspace")
+        send_cif_btn.clicked.connect(self.send_candidate_cifs)
+        left_layout.addWidget(send_cif_btn)
 
         citation_label = QLabel(f"{RRUFF_CITATION}\n\n{RRUFF_ATTRIBUTION_NOTE}")
         citation_label.setWordWrap(True)
@@ -269,6 +279,35 @@ class RruffMatchWorkspace(QWidget):
         self.plot.canvas.draw_idle()
 
     # ------------------------------------------------------------------
+    def send_candidate_cifs(self) -> None:
+        """RRUFF→CIF overlay handoff: look up the selected candidate's
+        mineral in the local AMCSD CIF cache and send its structure(s) to
+        the Raman workspace's CIF overlay — Raman identification to
+        predicted-XRD verification in one click."""
+        rows = self.results_table.selectionModel().selectedRows()
+        if not rows or not self._results:
+            QMessageBox.warning(self, "CIF overlay", "Select a candidate row first.")
+            return
+        candidate = self._results[rows[0].row()]
+        mineral = candidate.get("mineral", "")
+        kwargs = {"cache_dir": self.amcsd_cache_dir} if self.amcsd_cache_dir else {}
+        cif_paths = find_cifs_for_mineral(mineral, **kwargs)
+        if not cif_paths:
+            QMessageBox.information(
+                self, "CIF overlay",
+                f"No AMCSD structure found for '{mineral}' in the local cache.\n"
+                "Build it once with rruff_science.ingest_amcsd_cif_zip() "
+                "(cif.zip from https://www.rruff.net/AMS/zipped_files/).",
+            )
+            return
+        if self.on_send_cifs is None:
+            QMessageBox.information(self, "CIF overlay", "No Raman workspace is wired to receive CIFs here.")
+            return
+        self.on_send_cifs(cif_paths)
+        self.db_status_label.setText(
+            f"Sent {len(cif_paths)} AMCSD structure(s) for '{mineral}' to the Raman workspace CIF overlay."
+        )
+
     def accept_selected_candidate(self) -> None:
         rows = self.results_table.selectionModel().selectedRows()
         spectrum = self._current_spectrum()

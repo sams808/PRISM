@@ -547,6 +547,34 @@ class SimplePlotWorkspace(QWidget):
         })
         self.render()
 
+    def add_cif_files(self, paths: List[str]) -> int:
+        """Programmatic CIF import (used by the RRUFF→CIF overlay handoff):
+        add each CIF as a visible series, skipping ones already loaded.
+        Returns how many were added."""
+        added = 0
+        for path in paths:
+            ap = os.path.abspath(path)
+            existing = next((s for s in self.cif_series if os.path.abspath(s.get("path", "")) == ap), None)
+            if existing is not None:
+                existing["visible"] = True
+                continue
+            try:
+                peaks = bragg_peaks_from_cif_generic(path, two_theta_max=80.0, hkl_max=6)
+            except Exception:
+                continue
+            if not peaks:
+                continue
+            color = CIF_COLORS[len(self.cif_series) % len(CIF_COLORS)]
+            self.cif_series.append({
+                "path": path, "label": os.path.basename(path), "plot_label": "",
+                "peaks": peaks, "visible": True, "color": color, "pad": 0.03,
+            })
+            added += 1
+        if self._cif_manager is not None:
+            self._cif_manager.rebuild()
+        self.plot.request_redraw(self.render)
+        return added
+
     def choose_cif_folder_and_reload(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select CIF folder")
         if not folder:
