@@ -324,3 +324,26 @@ def test_ingested_amcsd_cif_feeds_bragg_generation(tmp_path):
     assert len(peaks) > 5
     two_thetas = [tt for tt, _hkl, _d in peaks]
     assert any(25 < tt < 28 for tt in two_thetas)  # quartz (101) ~26.6 deg (Cu Ka)
+
+
+def test_filter_rruff_index_by_each_criterion():
+    from rruff_science import filter_rruff_index
+    index = [
+        {"mineral": "A", "wavelength_nm": 532.0, "orientation_deg": "90", "scan_type": "Raman", "category": "excellent_oriented"},
+        {"mineral": "B", "wavelength_nm": 532.6, "orientation_deg": None, "scan_type": "Raman", "category": "fair_unoriented"},
+        {"mineral": "C", "wavelength_nm": 785.0, "orientation_deg": "", "scan_type": "Broad_Scan", "category": "lr_broad_scan"},
+        {"mineral": "D", "wavelength_nm": None, "orientation_deg": None, "scan_type": "Raman", "category": "unrated_unoriented"},
+    ]
+    # wavelength with the default ±2 nm tolerance groups 532 and 532.6;
+    # records with no recorded λ are excluded when a λ filter is active
+    assert [r["mineral"] for r in filter_rruff_index(index, wavelength_nm=532.0)] == ["A", "B"]
+    assert [r["mineral"] for r in filter_rruff_index(index, wavelength_nm=785.0)] == ["C"]
+    # orientation: empty string counts as unoriented
+    assert [r["mineral"] for r in filter_rruff_index(index, oriented=True)] == ["A"]
+    assert [r["mineral"] for r in filter_rruff_index(index, oriented=False)] == ["B", "C", "D"]
+    # scan type exact, quality by prefix
+    assert [r["mineral"] for r in filter_rruff_index(index, scan_type="Broad_Scan")] == ["C"]
+    assert [r["mineral"] for r in filter_rruff_index(index, quality="excellent")] == ["A"]
+    # no constraints = everything; combined constraints intersect
+    assert len(filter_rruff_index(index)) == 4
+    assert [r["mineral"] for r in filter_rruff_index(index, wavelength_nm=532.0, oriented=False)] == ["B"]

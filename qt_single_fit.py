@@ -40,14 +40,14 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QSplitter,
-    QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QCheckBox, QFileDialog, QHBoxLayout, QLabel,
+    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
+    QSplitter, QVBoxLayout, QWidget,
 )
 
 from fitting_science import (
     build_lmfit_parameters, compute_chi2, compute_model, compute_r_squared,
-    fit_spectrum, peak_centroid,
+    fit_spectrum, origin_lm_iteration, peak_centroid,
 )
 from qt_fit_params import FitParamDialog
 from qt_models import SpectrumLibrary
@@ -129,6 +129,15 @@ class SingleFitWorkspace(QWidget):
         param_btn.clicked.connect(self.open_param_window)
         left_layout.addWidget(param_btn)
 
+        self.pick_peaks_btn = QPushButton("Pick peaks on plot")
+        self.pick_peaks_btn.setCheckable(True)
+        self.pick_peaks_btn.setToolTip(
+            "Toggle on, then click peak apexes on the plot — each click adds a fit component "
+            "centered at the clicked position with its amplitude read from the data. Toggle off when done."
+        )
+        self.pick_peaks_btn.toggled.connect(self._on_pick_peaks_toggled)
+        left_layout.addWidget(self.pick_peaks_btn)
+
         fit_btn = QPushButton("Fit !")
         fit_btn.setObjectName("Primary")
         fit_btn.clicked.connect(self.run_fit)
@@ -156,27 +165,31 @@ class SingleFitWorkspace(QWidget):
 
         tol_row = QHBoxLayout()
         tol_row.addWidget(QLabel("Δχ² tol:"))
-        self.origin_tol_edit = QLineEdit("1e-6")
+        self.origin_tol_edit = QLineEdit("1e-9")
+        self.origin_tol_edit.setToolTip("Relative χ² change below which the fit counts as converged (Origin's default is 1e-9).")
         tol_row.addWidget(self.origin_tol_edit)
+        tol_row.addWidget(QLabel("Max iter:"))
+        self.origin_max_iter_edit = QLineEdit("200")
+        self.origin_max_iter_edit.setMaximumWidth(50)
+        tol_row.addWidget(self.origin_max_iter_edit)
         origin_layout.addLayout(tol_row)
 
         step_row = QHBoxLayout()
-        step_row.addWidget(QLabel("Step:"))
+        step_row.addWidget(QLabel("Iterate:"))
         for n in (1, 2, 5, 10):
-            btn = QPushButton(str(n))
+            btn = QPushButton(f"{n}×" if n > 1 else "1 iteration")
+            btn.setToolTip("One Levenberg-Marquardt parameter update per iteration — watch the curve move, like Origin's NLFit.")
             btn.clicked.connect(lambda _checked=False, n=n: self.run_fit_origin_stepwise(n))
             step_row.addWidget(btn)
         origin_layout.addLayout(step_row)
 
-        full_btn = QPushButton("Fit full (until converge)")
+        full_btn = QPushButton("Fit until converged")
         full_btn.clicked.connect(self.run_fit_origin_full)
         origin_layout.addWidget(full_btn)
 
-        alpha_row = QHBoxLayout()
-        alpha_row.addWidget(QLabel("Step blend α:"))
-        self.origin_alpha_edit = QLineEdit("0.25")
-        alpha_row.addWidget(self.origin_alpha_edit)
-        origin_layout.addLayout(alpha_row)
+        self.origin_status_label = QLabel("λ = 1e-3 (damping resets when parameters change)")
+        self.origin_status_label.setObjectName("SectionNote")
+        origin_layout.addWidget(self.origin_status_label)
 
         left_layout.addWidget(self.origin_panel)
         self.origin_panel.setVisible(False)
@@ -269,6 +282,7 @@ class SingleFitWorkspace(QWidget):
         self._current_fit = None
         self._current_yfit = None
         self._current_peaks = None
+        self._origin_reset_damping()
         self.render()
 
     def _current_spectrum(self):
@@ -344,7 +358,59 @@ class SingleFitWorkspace(QWidget):
 
     def _on_params_saved(self, spectrum_id: str, params: List[Dict[str, Any]]) -> None:
         self.fit_param_memory.set(spectrum_id, params)
+        self._origin_reset_damping()  # new starting point → restart LM damping
         self.render()
+
+    # ------------------------------------------------------------------
+    # Manual peak picking (user request): click apexes on the plot to add
+    # components — the intuitive complement to typing centers in the table
+    # or trusting the auto-finder. Same click plumbing as Simple Plot's
+    # annotations and XAS's Mode C tie-points.
+    # ------------------------------------------------------------------
+    def _on_pick_peaks_toggled(self, checked: bool) -> None:
+        if checked:
+            if self._current_spectrum() is None:
+                self.pick_peaks_btn.setChecked(False)
+                QMessageBox.information(self, "Pick peaks", "Select a spectrum first.")
+                return
+            self._pick_cid = self.plot.canvas.mpl_connect("button_press_event", self._on_pick_click)
+            self._append_log("[Pick peaks] ON — click peak apexes; each click adds a component.")
+        else:
+            if getattr(self, "_pick_cid", None) is not None:
+                self.plot.canvas.mpl_disconnect(self._pick_cid)
+                self._pick_cid = None
+            n = len(self.get_current_params())
+            self._append_log(f"[Pick peaks] OFF — model now has {n} component(s); open Fit param. to refine.")
+
+    def _on_pick_click(self, event) -> None:
+        if event.inaxes is None or event.xdata is None:
+            return
+        if self.plot.toolbar.mode:  # zoom/pan tool active — don't hijack the click
+            return
+        x, y = self.get_xy()
+        if not len(x):
+            return
+        span = float(np.nanmax(x) - np.nanmin(x))
+        half_width = max(span * 0.02, 1.0)
+        center = float(event.xdata)
+        # Amplitude from the data around the click, not the raw click y
+        # (the user aims at the apex but rarely lands exactly on it).
+        near = np.abs(np.asarray(x, float) - center) <= half_width
+        amp = float(np.nanmax(np.asarray(y, float)[near])) if np.any(near) else float(event.ydata)
+
+        from qt_fit_params import _DEFAULTS
+        row = dict(_DEFAULTS)
+        row["shift_val"] = center
+        row["shift_min"] = center - 10 * half_width
+        row["shift_max"] = center + 10 * half_width
+        row["amp_val"] = amp
+
+        sid = self._current_spectrum_id
+        params = list(self.fit_param_memory.get(sid)) if self.fit_param_memory.has(sid) else []
+        params.append(row)
+        self.fit_param_memory.set(sid, params)
+        self._append_log(f"[Pick peaks] + component {len(params)} at {center:.2f} (amp≈{amp:.3g})")
+        self._request_render()
 
     # ------------------------------------------------------------------
     # Rendering — dashed fit line + residual subplot (M8 item 11)
@@ -447,25 +513,17 @@ class SingleFitWorkspace(QWidget):
         lm_params = build_lmfit_parameters(params_struct)
         return x, y, params_struct, lm_params
 
-    def _append_origin_log(self, tag, step, chisq, chi2_red=None, drel=None) -> None:
-        parts = [f"[Origin {tag}]"]
-        if step is not None:
-            parts.append(f"step={step}")
-        parts.append(f"chisq={chisq:.6g}")
-        if chi2_red is not None:
-            parts.append(f"chi2_red={chi2_red:.6g}")
-        if drel is not None:
-            parts.append(f"Δrel={drel:.3g}")
-        self._append_log(" ".join(parts))
+    def _origin_reset_damping(self) -> None:
+        self._origin_lambda = 1e-3
+        self._origin_iter_count = 0
 
-    def run_fit_origin_stepwise(self, step_iters: int = 1) -> None:
-        if not self.mode_origin.isChecked():
-            QMessageBox.information(self, "Info", "Select 'Origin-like' mode to use stepwise buttons.")
-            return
+    def _run_origin_iterations(self, max_iters: int, *, stop_on_converge: bool) -> None:
+        """Shared engine for the Iterate-N buttons and Fit-until-converged:
+        one true LM parameter update per iteration (origin_lm_iteration),
+        redrawn after every step so the curve visibly walks toward the data —
+        the Origin NLFit behavior the first implementation only imitated."""
         self._snapshot_current_params()
-
-        tol = _to_float(self.origin_tol_edit.text(), 1e-6)
-        alpha = _to_float(self.origin_alpha_edit.text(), 0.25)
+        tol = _to_float(self.origin_tol_edit.text(), 1e-9)
 
         try:
             x, y, params_struct, lm_params = self._origin_common()
@@ -473,65 +531,73 @@ class SingleFitWorkspace(QWidget):
             QMessageBox.warning(self, "No parameters", str(exc))
             return
 
-        current_params = lm_params
-        prev_chisq = getattr(self._current_fit, "chisqr", None)
-        last_result = None
+        if not hasattr(self, "_origin_lambda"):
+            self._origin_reset_damping()
 
-        for s in range(step_iters):
-            fr = fit_spectrum(x, y, params_struct, mode="origin_step", lm_params=current_params, alpha=alpha)
-            result = fr.lmfit_result
-            current_params = fr.params
-            last_result = result
+        current = lm_params
+        for _ in range(max_iters):
+            try:
+                step = origin_lm_iteration(x, y, params_struct, current, lambda_lm=self._origin_lambda)
+            except ValueError as exc:
+                QMessageBox.warning(self, "Origin-like fit", str(exc))
+                return
+            current = step.params
+            self._origin_lambda = step.next_lambda
+            self._origin_iter_count += 1
 
-            chisq = result.chisqr
-            rel_drop = None if prev_chisq is None else (prev_chisq - chisq) / max(prev_chisq, 1e-30)
-            self._append_origin_log("step", s + 1, chisq, chi2_red=fr.chi2_red, drel=rel_drop)
+            rel_drop = (step.chisq_before - step.chisq_after) / max(step.chisq_before, 1e-30)
+            self._append_log(
+                f"[Origin iter {self._origin_iter_count}] chisq {step.chisq_before:.6g} → {step.chisq_after:.6g} "
+                f"(Δrel={rel_drop:.3g}, λ={step.lambda_used:.1e}{'' if step.accepted else ', no improving step'})"
+            )
+            self.origin_status_label.setText(
+                f"iter {self._origin_iter_count}: χ²={step.chisq_after:.6g}, λ={self._origin_lambda:.1e}"
+            )
 
-            self._current_fit = result
-            self._current_yfit, self._current_peaks = fr.y_fit, fr.peaks
+            self._current_yfit, self._current_peaks = step.y_fit, step.peaks
             self._current_x, self._current_y = x, y
+            self.chi2_label.setText(f"{step.chi2_red:.6g}")
             self.render()
+            QApplication.processEvents()  # let each step actually paint
 
-            if rel_drop is not None and rel_drop < tol:
-                self._append_origin_log("converge", None, chisq, chi2_red=fr.chi2_red, drel=rel_drop)
+            self._writeback_params_from_struct_values(current, params_struct)
+
+            if not step.accepted:
+                self._append_log("[Origin] no damping level improves χ² — at a (local) minimum.")
                 break
-            prev_chisq = chisq
+            if stop_on_converge and rel_drop < tol:
+                self._append_log(f"[Origin] converged: Δrel={rel_drop:.3g} < tol={tol:g} after {self._origin_iter_count} iterations.")
+                break
 
-        if last_result is not None:
-            self._writeback_params_from_result(last_result, params_struct)
+    def run_fit_origin_stepwise(self, step_iters: int = 1) -> None:
+        if not self.mode_origin.isChecked():
+            QMessageBox.information(self, "Info", "Select 'Origin-like' mode to use stepwise buttons.")
+            return
+        self._run_origin_iterations(step_iters, stop_on_converge=False)
 
     def run_fit_origin_full(self) -> None:
         if not self.mode_origin.isChecked():
             QMessageBox.information(self, "Info", "Select 'Origin-like' mode first.")
             return
-        self._snapshot_current_params()
-        tol = _to_float(self.origin_tol_edit.text(), 1e-6)
-
-        for b in range(100):
-            before = None if self._current_fit is None else self._current_fit.chisqr
-            self.run_fit_origin_stepwise(10)
-            after = None if self._current_fit is None else self._current_fit.chisqr
-            if before is not None and after is not None:
-                rel_drop = (before - after) / max(before, 1e-30)
-                self._append_origin_log("block", b + 1, after, drel=rel_drop)
-                if rel_drop < tol:
-                    break
-            else:
-                break
+        max_iters = int(_to_float(self.origin_max_iter_edit.text(), 200) or 200)
+        self._run_origin_iterations(max_iters, stop_on_converge=True)
 
     # ------------------------------------------------------------------
     def _writeback_params_from_result(self, result, params_struct: List[Dict[str, Any]]) -> None:
+        self._writeback_params_from_struct_values(result.params, params_struct)
+
+    def _writeback_params_from_struct_values(self, params, params_struct: List[Dict[str, Any]]) -> None:
         if self._current_spectrum_id is None:
             return
         for i, d in enumerate(params_struct):
-            d["shift_val"] = float(result.params[f"f{i}"].value)
-            d["fwhm_val"] = float(result.params[f"l{i}"].value)
-            if f"a{i}" in result.params:
-                d["amp_val"] = float(result.params[f"a{i}"].value)
-            if d.get("shape", "G") in ("GL", "V") and f"eta{i}" in result.params:
-                d["eta_val"] = float(result.params[f"eta{i}"].value)
-            if d.get("shape", "G") == "EMG" and f"s{i}" in result.params:
-                d["skew_val"] = float(result.params[f"s{i}"].value)
+            d["shift_val"] = float(params[f"f{i}"].value)
+            d["fwhm_val"] = float(params[f"l{i}"].value)
+            if f"a{i}" in params:
+                d["amp_val"] = float(params[f"a{i}"].value)
+            if d.get("shape", "G") in ("GL", "V") and f"eta{i}" in params:
+                d["eta_val"] = float(params[f"eta{i}"].value)
+            if d.get("shape", "G") == "EMG" and f"s{i}" in params:
+                d["skew_val"] = float(params[f"s{i}"].value)
         self.fit_param_memory.set(self._current_spectrum_id, params_struct)
 
     # ------------------------------------------------------------------

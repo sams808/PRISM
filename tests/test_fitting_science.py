@@ -73,32 +73,78 @@ def test_fit_spectrum_on_real_raman_example_is_physically_sane(raman_example_pat
 
 
 # --------------------------------------------------------------------------
-# origin_step mode: one relaxation step, callable repeatedly (the GUI's own
-# convergence-checking loop lives in main.py, not here).
+# origin_lm_iteration: ONE true Levenberg-Marquardt parameter update per
+# call (the Origin NLFit behavior — user feedback said the old relax-blend
+# scheme converged in one click, nothing like Origin's visible stepping).
+# The GUI's convergence-checking loop lives in qt_single_fit, not here.
 # --------------------------------------------------------------------------
 
-def test_fit_spectrum_origin_step_reduces_chi2_toward_truth():
+def _origin_setup(center=480.0, fwhm=40.0, amp=60.0):
     x = np.linspace(400, 600, 400)
-    true_center, true_fwhm, true_amp = 505.0, 25.0, 80.0
-    y = rp.gaussian(x, true_amp, true_center, true_fwhm)
-
-    comp = _gaussian_component(center=480.0, fwhm=40.0, amp=60.0, shape="G")
+    y = rp.gaussian(x, 80.0, 505.0, 25.0)  # truth: amp 80, center 505, HWHM 25
+    comp = _gaussian_component(center=center, fwhm=fwhm, amp=amp, shape="G")
     params_struct = [comp]
     lm_params = fs.build_lmfit_parameters(params_struct)
-
-    y_fit_before, _ = fs.compute_model(x, lm_params, params_struct)
-    chi2_before = fs.compute_chi2(y, y_fit_before, lm_params)
-
-    result = fs.fit_spectrum(x, y, params_struct, mode="origin_step", lm_params=lm_params, alpha=0.5)
-    assert result.chi2_red < chi2_before
+    return x, y, params_struct, lm_params
 
 
-def test_fit_spectrum_origin_step_requires_lm_params():
+def test_origin_lm_iteration_single_step_improves_but_does_not_converge():
+    x, y, params_struct, lm_params = _origin_setup()
+    step = fs.origin_lm_iteration(x, y, params_struct, lm_params)
+
+    assert step.accepted
+    assert step.chisq_after < step.chisq_before
+    # ONE iteration must be a step, not the answer: still measurably away
+    # from the global minimum a classic full fit reaches.
+    full = fs.fit_spectrum(x, y, params_struct, mode="classic")
+    assert step.chisq_after > 10 * full.lmfit_result.chisqr + 1e-12
+    # λ shrinks after an accepted step
+    assert step.next_lambda < step.lambda_used
+
+
+def test_origin_lm_iterations_converge_to_truth_when_looped():
+    x, y, params_struct, lm_params = _origin_setup()
+    current, lam = lm_params, 1e-3
+    for _ in range(200):
+        step = fs.origin_lm_iteration(x, y, params_struct, current, lambda_lm=lam)
+        current, lam = step.params, step.next_lambda
+        rel = (step.chisq_before - step.chisq_after) / max(step.chisq_before, 1e-30)
+        if not step.accepted or rel < 1e-12:
+            break
+    assert float(current["f0"].value) == pytest.approx(505.0, abs=0.1)
+    assert float(current["a0"].value) == pytest.approx(80.0, rel=0.01)
+
+
+def test_origin_lm_iteration_respects_vary_and_bounds():
+    x, y, params_struct, lm_params = _origin_setup()
+    params_struct[0]["fit_fwhm"] = False
+    lm_params = fs.build_lmfit_parameters(params_struct)
+    fixed_width = float(lm_params["l0"].value)
+    lm_params["f0"].set(max=490.0)  # bound blocks the true center at 505
+
+    current, lam = lm_params, 1e-3
+    for _ in range(50):
+        step = fs.origin_lm_iteration(x, y, params_struct, current, lambda_lm=lam)
+        current, lam = step.params, step.next_lambda
+        if not step.accepted:
+            break
+    assert float(current["l0"].value) == fixed_width  # vary=False untouched
+    assert float(current["f0"].value) <= 490.0 + 1e-9  # bound respected
+
+
+def test_origin_lm_iteration_no_varying_params_raises():
+    x, y, params_struct, lm_params = _origin_setup()
+    for p in lm_params.values():
+        p.set(vary=False)
+    with pytest.raises(ValueError, match="No varying parameters"):
+        fs.origin_lm_iteration(x, y, params_struct, lm_params)
+
+
+def test_fit_spectrum_rejects_removed_origin_step_mode():
     x = np.linspace(400, 600, 10)
     y = np.ones_like(x)
-    comp = _gaussian_component()
-    with pytest.raises(ValueError):
-        fs.fit_spectrum(x, y, [comp], mode="origin_step", lm_params=None)
+    with pytest.raises(ValueError, match="Unknown fit mode"):
+        fs.fit_spectrum(x, y, [_gaussian_component()], mode="origin_step")
 
 
 # --------------------------------------------------------------------------
@@ -308,3 +354,22 @@ def test_link_ignores_self_and_out_of_range():
     lm_params = fs.build_lmfit_parameters(comps)
     assert lm_params["l0"].expr in (None, "")
     assert lm_params["l1"].expr in (None, "")
+
+
+def test_find_peak_candidates_detection_limit_filters_weak_peaks():
+    """min_prominence_sigma is the user-facing detection limit: raising it
+    drops weaker candidates; lowering it keeps them."""
+    rng = np.random.default_rng(42)
+    x = np.linspace(0, 1000, 2000)
+    strong = 100.0 * np.exp(-0.5 * ((x - 300.0) / 8.0) ** 2)
+    weak = 4.0 * np.exp(-0.5 * ((x - 700.0) / 8.0) ** 2)
+    y = strong + weak + rng.normal(0.0, 0.5, x.size)
+
+    permissive = fs.find_peak_candidates(x, y, max_peaks=10, min_prominence_sigma=0.3)
+    strict = fs.find_peak_candidates(x, y, max_peaks=10, min_prominence_sigma=8.0)
+
+    assert any(abs(p - 300.0) < 15 for p in permissive)
+    assert any(abs(p - 700.0) < 15 for p in permissive)
+    assert any(abs(p - 300.0) < 15 for p in strict)
+    assert not any(abs(p - 700.0) < 15 for p in strict)
+    assert len(strict) < len(permissive)

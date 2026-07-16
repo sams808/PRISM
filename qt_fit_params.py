@@ -20,8 +20,8 @@ import numpy as np
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout,
-    QInputDialog, QMessageBox, QPushButton, QScrollArea, QTableWidget,
+    QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QHBoxLayout,
+    QInputDialog, QLabel, QMessageBox, QPushButton, QScrollArea, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -115,6 +115,17 @@ class FitParamDialog(QDialog):
             auto_btn = QPushButton("Auto-find peaks")
             auto_btn.clicked.connect(self._auto_find_peaks)
             top.addWidget(auto_btn)
+            top.addWidget(QLabel("detection limit (×σ)"))
+            self.detection_limit_spin = QDoubleSpinBox()
+            self.detection_limit_spin.setRange(0.0, 20.0)
+            self.detection_limit_spin.setSingleStep(0.1)
+            self.detection_limit_spin.setDecimals(1)
+            self.detection_limit_spin.setValue(0.5)
+            self.detection_limit_spin.setToolTip(
+                "Curvature prominence a candidate needs, in units of the noise σ.\n"
+                "Lower finds weaker/broader peaks (and more noise); higher keeps only the strongest; 0 disables the threshold."
+            )
+            top.addWidget(self.detection_limit_spin)
         save_model_btn = QPushButton("Save as model…")
         save_model_btn.clicked.connect(self._save_model)
         load_model_btn = QPushButton("Load model…")
@@ -209,9 +220,15 @@ class FitParamDialog(QDialog):
         if self._x is None or self._y is None:
             return
         from fitting_science import find_peak_candidates
-        centers = find_peak_candidates(self._x, self._y, max_peaks=10)
+        centers = find_peak_candidates(
+            self._x, self._y, max_peaks=10,
+            min_prominence_sigma=float(self.detection_limit_spin.value()),
+        )
         if not centers:
-            QMessageBox.information(self, "Auto-find peaks", "No clear peak candidates were found.")
+            QMessageBox.information(
+                self, "Auto-find peaks",
+                "No clear peak candidates were found — try lowering the detection limit.",
+            )
             return
         span = float(np.nanmax(self._x) - np.nanmin(self._x)) if len(self._x) else 100.0
         half_width = max(span * 0.02, 1.0)

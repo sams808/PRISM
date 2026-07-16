@@ -266,7 +266,7 @@ def peak_centroid(x: np.ndarray, y_component: np.ndarray) -> float:
 
 def find_peak_candidates(
     x: np.ndarray, y: np.ndarray, *, max_peaks: int = 10, smooth_window: int = 9,
-    edge_margin_frac: float = 0.02,
+    edge_margin_frac: float = 0.02, min_prominence_sigma: float = 0.5,
 ) -> List[float]:
     """2nd-derivative peak-finder (M8 layer-6 item, GSAS-II/PeakFit-style
     automated initial-guess placement): smooth y, take the discrete 2nd
@@ -321,8 +321,12 @@ def find_peak_candidates(
     # docstring above) inflate the threshold and silently suppress genuine
     # interior peaks that would otherwise have qualified — caught directly by
     # test_find_peak_candidates_excludes_edge_artifact.
+    # min_prominence_sigma is the user-facing detection limit: the curvature
+    # prominence a candidate needs, in units of the interior curvature noise
+    # (σ). Lower finds weaker/broader peaks (and more noise); higher keeps
+    # only the strongest. 0 disables the threshold entirely.
     threshold_source = neg_d2[interior] if np.any(interior) else neg_d2
-    prominence = float(np.std(threshold_source)) * 0.5 if len(threshold_source) else None
+    prominence = float(np.std(threshold_source)) * float(min_prominence_sigma) if len(threshold_source) else None
     peak_idx, props = find_peaks(neg_d2, prominence=prominence if prominence and prominence > 0 else None)
     if len(peak_idx) == 0:
         return []
@@ -342,35 +346,117 @@ def find_peak_candidates(
     return centers
 
 
-def relax_params(old_params: "lmfit.Parameters", new_params: "lmfit.Parameters", alpha: float = 0.25) -> "lmfit.Parameters":
-    """Blend parameter values: old <- old + alpha * (new - old)."""
-    blended = old_params.copy()
-    for name, par in blended.items():
-        if name in new_params and par.vary:
-            try:
-                old_v = float(par.value)
-                new_v = float(new_params[name].value)
-                par.set(value=old_v + alpha * (new_v - old_v))
-            except Exception:
-                pass
-    return blended
+# =============================================================================
+# Origin-style stepwise Levenberg-Marquardt (user feedback: the first
+# "Origin-like" mode ran a nearly-converged lmfit minimize per click and then
+# blended parameters — "1 iteration" jumped almost straight to the answer,
+# nothing like Origin. Origin's NLFit "1 Iteration" button performs exactly
+# ONE damped Gauss-Newton (LM) parameter update, visibly moving the curve;
+# "Fit until converged" repeats those updates until the reduced-chi² change
+# drops below the tolerance. This is that algorithm, implemented directly.)
+# =============================================================================
+
+@dataclass
+class OriginStepResult:
+    params: "lmfit.Parameters"   # parameter state AFTER the iteration
+    accepted: bool               # False if no damping level improved chi²
+    chisq_before: float
+    chisq_after: float
+    lambda_used: float           # damping that produced the accepted step
+    next_lambda: float           # damping to seed the next iteration with
+    y_fit: np.ndarray
+    peaks: List[np.ndarray]
+    chi2_red: float
+    n_free: int
 
 
-def origin_residual(params: "lmfit.Parameters", x: np.ndarray, y: np.ndarray, params_struct: List[Dict[str, Any]], soft_penalty: bool = False) -> np.ndarray:
-    model, _ = compute_model(x, params, params_struct)
-    res = model - y
-    if soft_penalty:
-        pen = []
-        for name, par in params.items():
-            if not par.vary:
-                continue
-            if (par.min is not None) and (par.value < par.min):
-                pen.append((par.min - par.value) * 1e4)
-            if (par.max is not None) and (par.value > par.max):
-                pen.append((par.value - par.max) * 1e4)
-        if pen:
-            res = np.r_[res, np.array(pen)]
-    return res
+def _free_param_names(params: "lmfit.Parameters") -> List[str]:
+    return [name for name, p in params.items() if p.vary and not p.expr]
+
+
+def _set_free_values(params: "lmfit.Parameters", names: List[str], values: np.ndarray) -> None:
+    for name, v in zip(names, values):
+        p = params[name]
+        lo = p.min if p.min is not None else -np.inf
+        hi = p.max if p.max is not None else np.inf
+        p.set(value=float(np.clip(v, lo, hi)))
+    params.update_constraints()  # re-evaluate linked (expr) parameters
+
+
+def origin_lm_iteration(
+    x: np.ndarray, y: np.ndarray, params_struct: List[Dict[str, Any]],
+    lm_params: "lmfit.Parameters", *, lambda_lm: float = 1e-3,
+    lambda_up: float = 10.0, lambda_down: float = 10.0, max_retries: int = 8,
+) -> OriginStepResult:
+    """One Levenberg-Marquardt iteration, the way Origin's NLFit does it:
+
+    1. residual r and finite-difference Jacobian J at the current parameters
+       (free = varying, non-linked parameters; linked ones follow via their
+       constraint expressions),
+    2. solve (JᵀJ + λ·diag(JᵀJ)) δ = -Jᵀ r  (Marquardt scaling),
+    3. if χ² improves at the trial parameters (clipped to their bounds):
+       accept and shrink λ for the next iteration; otherwise grow λ and
+       retry — up to max_retries — and report accepted=False if nothing
+       improves (the caller shows that as "converged/stuck", like Origin).
+    """
+    x, y = _ensure_numeric(x, y)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+
+    params = lm_params.copy()
+    params.update_constraints()
+    names = _free_param_names(params)
+    if not names:
+        raise ValueError("No varying parameters — nothing to iterate.")
+
+    def residual_at(p: "lmfit.Parameters") -> np.ndarray:
+        model, _ = compute_model(x, p, params_struct)
+        return model - y
+
+    r0 = residual_at(params)
+    chisq0 = float(np.dot(r0, r0))
+    v0 = np.array([float(params[n].value) for n in names])
+
+    # Forward-difference Jacobian over the free parameters.
+    J = np.empty((len(r0), len(names)))
+    for j, name in enumerate(names):
+        h = 1e-8 * max(abs(v0[j]), 1e-4)
+        trial = params.copy()
+        _set_free_values(trial, [name], np.array([v0[j] + h]))
+        J[:, j] = (residual_at(trial) - r0) / h
+
+    JtJ = J.T @ J
+    Jtr = J.T @ r0
+    diag = np.diag(JtJ).copy()
+    diag[diag <= 0] = 1e-12
+
+    lam = max(float(lambda_lm), 1e-12)
+    for _ in range(max_retries):
+        try:
+            delta = np.linalg.solve(JtJ + lam * np.diag(diag), -Jtr)
+        except np.linalg.LinAlgError:
+            delta = np.linalg.lstsq(JtJ + lam * np.diag(diag), -Jtr, rcond=None)[0]
+        trial = params.copy()
+        _set_free_values(trial, names, v0 + delta)
+        r1 = residual_at(trial)
+        chisq1 = float(np.dot(r1, r1))
+        if np.isfinite(chisq1) and chisq1 < chisq0:
+            y_fit, peaks = compute_model(x, trial, params_struct)
+            return OriginStepResult(
+                params=trial, accepted=True, chisq_before=chisq0, chisq_after=chisq1,
+                lambda_used=lam, next_lambda=max(lam / lambda_down, 1e-12),
+                y_fit=y_fit, peaks=peaks, chi2_red=compute_chi2(y, y_fit, trial),
+                n_free=len(names),
+            )
+        lam *= lambda_up
+
+    y_fit, peaks = compute_model(x, params, params_struct)
+    return OriginStepResult(
+        params=params, accepted=False, chisq_before=chisq0, chisq_after=chisq0,
+        lambda_used=lam, next_lambda=lam,
+        y_fit=y_fit, peaks=peaks, chi2_red=compute_chi2(y, y_fit, params),
+        n_free=len(names),
+    )
 
 
 # =============================================================================
@@ -414,21 +500,15 @@ def fit_spectrum(
     *,
     mode: str = "classic",
     lm_params: Optional["lmfit.Parameters"] = None,
-    alpha: float = 0.25,
-    soft_penalty: bool = False,
 ) -> FitResult:
-    """Fit (or take one relaxation step toward fitting) a set of peak
-    components to (x, y).
+    """Fit a set of peak components to (x, y).
 
     mode="classic": one-shot Levenberg-Marquardt fit (leastsq), starting from
         build_lmfit_parameters(params_struct) unless lm_params is given.
-    mode="origin_step": ONE stepwise iteration of the "Origin-like" mode —
-        fit, then relax old params toward the new fit by `alpha`, returning
-        the relaxed parameters as the result. lm_params (the current
-        parameter state) is required; call this repeatedly in a loop,
-        checking FitResult.chi2_red / lmfit_result.chisqr for convergence
-        between calls — that looping/convergence-check responsibility stays
-        with the caller (the GUI draws and logs between steps).
+
+    For Origin-style stepwise fitting (one visible LM parameter update per
+    call), use origin_lm_iteration() instead — the looping/convergence check
+    stays with the caller so the GUI can draw and log between steps.
     """
     x, y = _ensure_numeric(x, y)
     mask = np.isfinite(x) & np.isfinite(y)
@@ -452,19 +532,10 @@ def fit_spectrum(
         return FitResult(lmfit_result=result, params=result.params, y_fit=y_fit, peaks=peaks, chi2_red=chi2,
                          minimizer=minimizer)
 
-    if mode == "origin_step":
-        if lm_params is None:
-            raise ValueError("mode='origin_step' requires lm_params (the current parameter state).")
-        minimizer = lmfit.Minimizer(
-            origin_residual, lm_params, fcn_args=(x, y, params_struct), fcn_kws={"soft_penalty": soft_penalty},
-        )
-        result = minimizer.minimize(method="leastsq", ftol=1e-12, xtol=1e-12, gtol=1e-12, max_nfev=100)
-        relaxed = relax_params(lm_params, result.params, alpha=alpha)
-        y_fit, peaks = compute_model(x, relaxed, params_struct)
-        chi2 = compute_chi2(y, y_fit, relaxed)
-        return FitResult(lmfit_result=result, params=relaxed, y_fit=y_fit, peaks=peaks, chi2_red=chi2)
-
-    raise ValueError(f"Unknown fit mode: {mode!r} (expected 'classic' or 'origin_step')")
+    raise ValueError(
+        f"Unknown fit mode: {mode!r} (expected 'classic'; the old 'origin_step' "
+        "relax-blend mode was replaced by origin_lm_iteration())"
+    )
 
 
 def compute_confidence_intervals(fit_result: FitResult, sigmas=(1, 2)) -> str:

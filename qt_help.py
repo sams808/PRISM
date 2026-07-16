@@ -48,13 +48,21 @@ color, label, visibility). Difference mode shows A−B for exactly two selected
 spectra. Toggle <b>Annotate on click</b> to pin peak-position labels.</p>
 
 <h2>Peak Fitting</h2>
-<p>Set up components in <b>Fit param.</b> (or let <b>Auto-find peaks</b> seed them),
-then <b>Fit&nbsp;!</b>. Shapes: G (Gaussian), GL (pseudo-Voigt), V (true Voigt),
+<p>Set up components three ways: in the <b>Fit param.</b> table, with
+<b>Auto-find peaks</b> (its <i>detection limit</i> spinner sets how strong a
+candidate must be, in units of the noise — lower it to catch weak peaks), or
+with <b>Pick peaks on plot</b> — toggle it and click each peak apex.
+Then <b>Fit&nbsp;!</b>. Shapes: G (Gaussian), GL (pseudo-Voigt), V (true Voigt),
 EMG (asymmetric, signed skew). The <code>FWHM=#</code> column links a component's
 width to another's. Reports include R², ±1σ errors, and peak centroids;
 <b>Conf. intervals</b> runs rigorous F-test profiling. Save a configuration as a
 <i>model</i> to reuse it — models are also the recipes <b>Multi-Fit</b> applies
 across many spectra at once.</p>
+<p><b>Origin-like mode</b> is a faithful stepwise Levenberg-Marquardt:
+<i>1 iteration</i> performs exactly one damped parameter update (watch the
+curve move), and <i>Fit until converged</i> repeats until the relative χ²
+change drops below the tolerance — the same behavior as Origin's NLFit
+dialog.</p>
 <p><b>Width convention:</b> the "FWHM" fields have always been <i>half</i>-widths
 (HWHM) — a historical convention kept so old saved models stay valid. Double
 them when quoting true FWHM.</p>
@@ -75,6 +83,9 @@ tangent, |dY| max) — the result panel says whether the methods agree.
 <p>Auto-find (or type) your spectrum's peak positions, then <b>Find matches</b>:
 candidates are ranked by peak overlap, each showing its <b>laser wavelength</b> —
 relative intensities vary between wavelengths, so judge the overlay yourself.
+The <b>Database filters</b> restrict candidates before ranking: laser λ
+(matched ±2 nm, so 532 also covers 532.6), oriented/unoriented, high-res vs
+broad-scan, and quality category.
 Nothing is labeled until you click <b>Accept</b>. One more click overlays the
 matched mineral's predicted XRD pattern (AMCSD structure) in the Raman
 workspace. Requires the one-time local database build (see the README).</p>

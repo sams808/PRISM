@@ -37,6 +37,7 @@ from rruff_science import (
     RRUFF_ATTRIBUTION_NOTE,
     RRUFF_CACHE_DIR,
     RRUFF_CITATION,
+    filter_rruff_index,
     find_cifs_for_mineral,
     index_summary,
     load_index,
@@ -104,6 +105,43 @@ class RruffMatchWorkspace(QWidget):
         self.tolerance_edit = QLineEdit("10.0")
         tol_row.addWidget(self.tolerance_edit)
         left_layout.addLayout(tol_row)
+
+        # Database filters (user request): restrict candidates by laser
+        # wavelength / orientation / scan type / quality before ranking.
+        filters_label = QLabel("Database filters")
+        filters_label.setObjectName("SectionTitle")
+        left_layout.addWidget(filters_label)
+
+        wl_row = QHBoxLayout()
+        wl_row.addWidget(QLabel("Laser λ (nm)"))
+        self.wavelength_combo = QComboBox()
+        self.wavelength_combo.addItem("Any", None)  # real values fill in once the index loads
+        wl_row.addWidget(self.wavelength_combo, 1)
+        left_layout.addLayout(wl_row)
+
+        orient_row = QHBoxLayout()
+        orient_row.addWidget(QLabel("Orientation"))
+        self.orientation_combo = QComboBox()
+        for label, value in (("Any", None), ("Oriented", True), ("Unoriented", False)):
+            self.orientation_combo.addItem(label, value)
+        orient_row.addWidget(self.orientation_combo, 1)
+        left_layout.addLayout(orient_row)
+
+        scan_row = QHBoxLayout()
+        scan_row.addWidget(QLabel("Scan type"))
+        self.scan_type_combo = QComboBox()
+        for label, value in (("Any", None), ("Raman (high-res)", "Raman"), ("Broad scan (LR survey)", "Broad_Scan")):
+            self.scan_type_combo.addItem(label, value)
+        scan_row.addWidget(self.scan_type_combo, 1)
+        left_layout.addLayout(scan_row)
+
+        quality_row = QHBoxLayout()
+        quality_row.addWidget(QLabel("Quality"))
+        self.quality_combo = QComboBox()
+        for label, value in (("Any", None), ("Excellent", "excellent"), ("Fair", "fair"), ("Poor", "poor"), ("Unrated", "unrated")):
+            self.quality_combo.addItem(label, value)
+        quality_row.addWidget(self.quality_combo, 1)
+        left_layout.addLayout(quality_row)
 
         find_btn = QPushButton("Find matches")
         find_btn.setObjectName("Primary")
@@ -186,6 +224,19 @@ class RruffMatchWorkspace(QWidget):
             f"RRUFF database: {summary['n_spectra']} spectra, {summary['n_minerals']} minerals, "
             f"{len(summary['wavelengths_nm'])} wavelengths (loaded in {elapsed:.2f}s)."
         )
+        # Fill the λ filter with the wavelengths actually present, keeping
+        # any selection the user already made.
+        current = self.wavelength_combo.currentData()
+        self.wavelength_combo.blockSignals(True)
+        self.wavelength_combo.clear()
+        self.wavelength_combo.addItem("Any", None)
+        for wl in summary["wavelengths_nm"]:
+            self.wavelength_combo.addItem(f"{wl:g} nm", float(wl))
+        if current is not None:
+            idx = self.wavelength_combo.findData(current)
+            if idx >= 0:
+                self.wavelength_combo.setCurrentIndex(idx)
+        self.wavelength_combo.blockSignals(False)
         return True
 
     # ------------------------------------------------------------------
@@ -220,7 +271,23 @@ class RruffMatchWorkspace(QWidget):
             return
         tolerance = _to_float(self.tolerance_edit.text(), 10.0)
         self._query_peaks = peaks
-        self._results = rank_rruff_matches(peaks, self._index, tolerance=tolerance, top_n=25)
+        searchable = filter_rruff_index(
+            self._index,
+            wavelength_nm=self.wavelength_combo.currentData(),
+            oriented=self.orientation_combo.currentData(),
+            scan_type=self.scan_type_combo.currentData(),
+            quality=self.quality_combo.currentData(),
+        )
+        if not searchable:
+            QMessageBox.information(self, "Find matches", "No database spectra pass the current filters — relax them and retry.")
+            self._results = []
+            self._populate_results_table()
+            return
+        if len(searchable) < len(self._index):
+            self.db_status_label.setText(
+                f"Filters keep {len(searchable)} of {len(self._index)} database spectra."
+            )
+        self._results = rank_rruff_matches(peaks, searchable, tolerance=tolerance, top_n=25)
         self._populate_results_table()
         self._render_preview(candidate=self._results[0] if self._results else None)
 

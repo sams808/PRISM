@@ -288,3 +288,41 @@ def test_shell_rruff_page_picks_up_library_records(qtbot, raman_example_path):
     qtbot.wait(20)
 
     assert window.rruff_page.spec_combo.count() == 1
+
+
+def test_wavelength_filter_restricts_candidates(qtbot, tmp_path):
+    """User request: choose the laser wavelength (and orientation/scan-type/
+    quality) instead of matching against the whole corpus."""
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    widget.peaks_edit.setText("464.0, 1085.0")
+
+    # Unfiltered: Quartz (532) and Calcite (785) both match
+    widget.find_matches()
+    qtbot.wait(20)
+    assert widget.results_table.rowCount() == 2
+    # The λ combo filled itself from the loaded index (Any + 3 wavelengths)
+    assert widget.wavelength_combo.count() == 4
+
+    # λ = 785 keeps only Calcite
+    widget.wavelength_combo.setCurrentIndex(widget.wavelength_combo.findData(785.0))
+    widget.find_matches()
+    qtbot.wait(20)
+    assert widget.results_table.rowCount() == 1
+    assert widget.results_table.item(0, 0).text() == "Calcite"
+    assert "Filters keep" in widget.db_status_label.text()
+
+    # quality = excellent keeps only Quartz (dialog-free: back to Any λ first)
+    widget.wavelength_combo.setCurrentIndex(0)
+    widget.quality_combo.setCurrentIndex(widget.quality_combo.findData("excellent"))
+    widget.find_matches()
+    qtbot.wait(20)
+    assert widget.results_table.rowCount() == 1
+    assert widget.results_table.item(0, 0).text() == "Quartz"

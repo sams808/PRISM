@@ -35,13 +35,22 @@ color, label, visibility). Difference mode shows A−B for exactly two selected
 spectra. Toggle **Annotate on click** to pin peak-position labels.
 
 ## Peak Fitting
-Set up components in **Fit param.** (or let **Auto-find peaks** seed them),
-then **Fit !**. Shapes: G (Gaussian), GL (pseudo-Voigt), V (true Voigt),
+Set up components three ways: in the **Fit param.** table, with
+**Auto-find peaks** (its *detection limit* spinner sets how strong a
+candidate must be, in units of the noise — lower it to catch weak peaks), or
+with **Pick peaks on plot** — toggle it and click each peak apex.
+Then **Fit !**. Shapes: G (Gaussian), GL (pseudo-Voigt), V (true Voigt),
 EMG (asymmetric, signed skew). The `FWHM=#` column links a component's
 width to another's. Reports include R², ±1σ errors, and peak centroids;
 **Conf. intervals** runs rigorous F-test profiling. Save a configuration as a
 *model* to reuse it — models are also the recipes **Multi-Fit** applies
 across many spectra at once.
+
+**Origin-like mode** is a faithful stepwise Levenberg-Marquardt:
+*1 iteration* performs exactly one damped parameter update (watch the
+curve move), and *Fit until converged* repeats until the relative χ²
+change drops below the tolerance — the same behavior as Origin's NLFit
+dialog.
 
 **Width convention:** the "FWHM" fields have always been *half*-widths
 (HWHM) — a historical convention kept so old saved models stay valid. Double
@@ -63,6 +72,9 @@ tangent, |dY| max) — the result panel says whether the methods agree.
 Auto-find (or type) your spectrum's peak positions, then **Find matches**:
 candidates are ranked by peak overlap, each showing its **laser wavelength** —
 relative intensities vary between wavelengths, so judge the overlay yourself.
+The **Database filters** restrict candidates before ranking: laser λ
+(matched ±2 nm, so 532 also covers 532.6), oriented/unoriented, high-res vs
+broad-scan, and quality category.
 Nothing is labeled until you click **Accept**. One more click overlays the
 matched mineral's predicted XRD pattern (AMCSD structure) in the Raman
 workspace. Requires the one-time local database build (see the README).

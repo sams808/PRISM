@@ -211,3 +211,89 @@ def test_shell_fitting_page_picks_up_library_records(qtbot, raman_example_path):
     qtbot.wait(20)
 
     assert window.fitting_page.spec_combo.count() == 1
+
+
+def test_pick_peaks_on_plot_adds_components(qtbot):
+    """User request: manual peak picking — clicking the plot in pick mode
+    adds a component at the clicked x with amplitude read from the data."""
+    from types import SimpleNamespace
+
+    library = SpectrumLibrary()
+    spectrum = _synthetic_gaussian_spectrum()  # apex at x=505, height 80
+    library.add(spectrum)
+    widget = SingleFitWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([spectrum.id])
+    widget.norm_check.setChecked(False)  # picked amp is read in the fit's own scale
+    qtbot.wait(20)
+
+    widget.pick_peaks_btn.setChecked(True)
+    assert widget._pick_cid is not None
+
+    # Click slightly off-apex — amplitude must still come from the data max
+    # near the click, not the raw click y.
+    event = SimpleNamespace(inaxes=widget.plot.figure.gca(), xdata=503.0, ydata=12.3)
+    widget._on_pick_click(event)
+    qtbot.wait(20)
+
+    params = widget.fit_param_memory.get(spectrum.id)
+    assert len(params) == 1
+    assert params[0]["shift_val"] == pytest.approx(503.0)
+    assert params[0]["amp_val"] == pytest.approx(80.0, rel=0.05)
+    assert params[0]["shift_min"] < 503.0 < params[0]["shift_max"]
+
+    # A second click appends rather than replaces.
+    widget._on_pick_click(SimpleNamespace(inaxes=widget.plot.figure.gca(), xdata=450.0, ydata=5.0))
+    qtbot.wait(20)
+    assert len(widget.fit_param_memory.get(spectrum.id)) == 2
+
+    # Toggling off disconnects: further clicks add nothing.
+    widget.pick_peaks_btn.setChecked(False)
+    assert widget._pick_cid is None
+
+
+def test_pick_peaks_ignores_clicks_while_toolbar_zooming(qtbot):
+    from types import SimpleNamespace
+
+    library = SpectrumLibrary()
+    spectrum = _synthetic_gaussian_spectrum()
+    library.add(spectrum)
+    widget = SingleFitWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([spectrum.id])
+    qtbot.wait(20)
+
+    widget.pick_peaks_btn.setChecked(True)
+    widget.plot.toolbar.zoom()  # activate the zoom tool
+    try:
+        widget._on_pick_click(SimpleNamespace(inaxes=widget.plot.figure.gca(), xdata=505.0, ydata=80.0))
+    finally:
+        widget.plot.toolbar.zoom()  # deactivate again
+    assert widget.fit_param_memory.get(spectrum.id) == []
+
+
+def test_origin_stepwise_button_takes_visible_incremental_steps(qtbot):
+    """User feedback: '1 iteration' used to jump almost straight to the
+    converged answer. Each click must now be ONE LM update — progress, but
+    multiple clicks still needed to converge."""
+    library = SpectrumLibrary()
+    spectrum = _synthetic_gaussian_spectrum()  # truth: center 505
+    library.add(spectrum)
+    widget = SingleFitWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([spectrum.id])
+    widget.norm_check.setChecked(False)
+    widget.mode_origin.setChecked(True)
+    widget.fit_param_memory.set(spectrum.id, [_component(center=480.0, fwhm=40.0, amp=60.0)])
+
+    widget.run_fit_origin_stepwise(1)
+    qtbot.wait(20)
+    after_one = widget.fit_param_memory.get(spectrum.id)[0]["shift_val"]
+    assert after_one != 480.0  # it moved…
+    assert abs(after_one - 505.0) > 0.5  # …but did not converge in one click
+
+    for _ in range(30):
+        widget.run_fit_origin_stepwise(1)
+    qtbot.wait(20)
+    after_many = widget.fit_param_memory.get(spectrum.id)[0]["shift_val"]
+    assert after_many == pytest.approx(505.0, abs=0.5)  # repeated clicks converge

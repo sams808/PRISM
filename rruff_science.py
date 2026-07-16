@@ -328,6 +328,44 @@ def score_match(query_peaks: List[float], candidate_peaks: List[float], toleranc
     return {"matched": matched, "fraction": matched / len(query_peaks)}
 
 
+def filter_rruff_index(
+    index: List[Dict[str, Any]], *,
+    wavelength_nm: Optional[float] = None, wavelength_tol: float = 2.0,
+    oriented: Optional[bool] = None,
+    scan_type: Optional[str] = None,
+    quality: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Restrict the searchable index before ranking (user request: choose
+    the laser wavelength, orientation, etc. instead of matching everything).
+    Every argument is an optional constraint; None means "any".
+
+    - wavelength_nm: keep records within wavelength_tol of the requested λ
+      (the default ±2 nm groups the corpus's near-duplicates like 532/532.6,
+      632.8/633; records with no recorded λ are excluded when filtering).
+    - oriented: True keeps only records with an orientation angle, False
+      only those without one.
+    - scan_type: exact match ("Raman" high-res or "Broad_Scan" LR survey).
+    - quality: prefix match on the ingest category ("excellent", "fair",
+      "poor", "unrated" — categories look like "excellent_oriented").
+    """
+    out = []
+    for rec in index:
+        if wavelength_nm is not None:
+            wl = rec.get("wavelength_nm")
+            if wl is None or abs(float(wl) - float(wavelength_nm)) > wavelength_tol:
+                continue
+        if oriented is not None:
+            has_orientation = rec.get("orientation_deg") not in (None, "")
+            if has_orientation != oriented:
+                continue
+        if scan_type is not None and rec.get("scan_type") != scan_type:
+            continue
+        if quality is not None and not str(rec.get("category", "")).startswith(quality):
+            continue
+        out.append(rec)
+    return out
+
+
 def rank_rruff_matches(
     query_peaks: List[float], index: List[Dict[str, Any]], *, tolerance: float = 10.0, top_n: int = 25,
 ) -> List[Dict[str, Any]]:
