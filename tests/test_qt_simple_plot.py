@@ -229,6 +229,44 @@ def test_annotate_click_ignored_when_toggle_off(qtbot, raman_example_path):
     assert widget.annotations == []
 
 
+def test_rapid_axis_typing_coalesces_into_one_render(qtbot, raman_example_path, cif_path, monkeypatch):
+    """Regression guard for THE historical performance bug (multi-second
+    per-keystroke redraws with several CIF overlays loaded) — its original
+    Tk-era test was deleted with the Tk app, restored here for the Qt
+    architecture: a burst of axis-title keystrokes must produce ONE
+    debounced render, not one per keystroke."""
+    library = _library_with_raman(raman_example_path)
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()
+
+    from cif_tools import bragg_peaks_from_cif_generic
+    peaks = bragg_peaks_from_cif_generic(str(cif_path), two_theta_max=80.0, hkl_max=6)
+    for i in range(5):  # several CIF overlays, like the original report
+        widget.cif_series.append({
+            "path": f"{cif_path}#{i}", "label": f"cif{i}", "plot_label": "",
+            "peaks": peaks, "visible": True, "color": "crimson", "pad": 0.03,
+        })
+    qtbot.wait(250)  # flush the selection-triggered render
+
+    calls = {"n": 0}
+    real_render = widget.render
+
+    def counting_render(*a, **k):
+        calls["n"] += 1
+        return real_render(*a, **k)
+
+    monkeypatch.setattr(widget, "render", counting_render)
+
+    # Simulate typing a 12-character axis title as 12 rapid setText events.
+    for i in range(12):
+        widget.x_title_edit.setText("Raman shift"[: i + 1])
+    qtbot.wait(400)  # > debounce interval; let the single coalesced render run
+
+    assert calls["n"] <= 2, f"expected coalesced redraws, got {calls['n']} renders for 12 keystrokes"
+
+
 def test_plot_widget_mouse_readout_label_exists(qtbot):
     from qt_widgets import PlotWidget
     widget = PlotWidget()
