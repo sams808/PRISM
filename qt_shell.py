@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import os
-import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +22,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
-    QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
     QWidget,
 )
 
@@ -654,10 +653,17 @@ class DataappMainWindow(QMainWindow):
             path += ".dataapp"
         fit_params = {sid: params for sid, params in self.fit_param_memory.items()}
         try:
+            cif_overlays = [
+                {k: s.get(k) for k in ("path", "label", "plot_label", "visible", "color", "pad")}
+                for s in self.raman_page.cif_series
+            ]
+            baseline_settings = {sid: dict(val) for sid, val in self.baseline_page.settings.items()}
             project_io.save_project(
                 path, self.library.all(), fit_params,
                 xas_spectra=self.xas_page.store.all(),
                 htxrd_patterns=self.htxrd_page.series,
+                cif_overlays=cif_overlays,
+                baseline_settings=baseline_settings,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Save project error", str(exc))
@@ -697,6 +703,12 @@ class DataappMainWindow(QMainWindow):
 
         if project.htxrd_patterns:
             self.htxrd_page.set_series(project.htxrd_patterns)
+
+        if project.cif_overlays:
+            self.raman_page.restore_cif_overlays(project.cif_overlays)
+        self.baseline_page.settings.clear()
+        for sid, val in project.baseline_settings.items():
+            self.baseline_page.settings.set(sid, val)
 
         self.library_page._refresh_table()
         # Re-sync whichever workspace is currently visible.

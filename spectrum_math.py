@@ -9,7 +9,7 @@ extrapolated fiction), with optional per-spectrum area normalization first.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 

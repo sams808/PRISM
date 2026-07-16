@@ -11,7 +11,7 @@ No tkinter/matplotlib dependency — pure numpy.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 

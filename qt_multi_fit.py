@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import copy
 import csv
-import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -37,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from fitting_science import (
-    build_lmfit_parameters, compute_chi2, compute_model, compute_r_squared,
+    compute_r_squared,
     fit_spectrum, peak_centroid,
 )
 from qt_fit_params import FitParamDialog, list_model_names, load_model, _default_model_dir

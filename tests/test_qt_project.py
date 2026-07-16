@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import rampy as rp
 
 from qt_models import Spectrum
@@ -56,6 +55,58 @@ def test_save_project_appends_extension(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr("qt_shell.QFileDialog.getSaveFileName", staticmethod(lambda *a, **k: (str(bare_path), "")))
     window.save_project()
     assert (tmp_path / "noext.dataapp").exists()
+
+
+_MINIMAL_CIF = """\
+data_test
+_chemical_name_mineral 'Quartz'
+_cell_length_a 4.913
+_cell_length_b 4.913
+_cell_length_c 5.405
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 120
+"""
+
+
+def test_project_v3_round_trips_cif_overlays_and_baseline_settings(qtbot, tmp_path, monkeypatch):
+    """Session-persistence promise: CIF overlays (recomputed from their
+    paths on load) and per-spectrum Baseline settings survive save/open."""
+    cif_path = tmp_path / "Quartz__0001.cif"
+    cif_path.write_text(_MINIMAL_CIF, encoding="utf-8")
+
+    window = DataappMainWindow()
+    qtbot.addWidget(window)
+    qtbot.wait(20)
+
+    sp = _spectrum("with_settings")
+    window.library.add(sp)
+    window.raman_page.add_cif_files([str(cif_path)])
+    qtbot.wait(200)
+    window.raman_page.cif_series[0]["plot_label"] = "my quartz"
+    window.raman_page.cif_series[0]["color"] = "royalblue"
+    window.baseline_page.settings.set(sp.id, {"method": "poly", "roi_text": "100-400", "p0": "2", "p1": ""})
+
+    project_path = tmp_path / "v3.dataapp"
+    monkeypatch.setattr("qt_shell.QFileDialog.getSaveFileName", staticmethod(lambda *a, **k: (str(project_path), "")))
+    window.save_project()
+
+    window2 = DataappMainWindow()
+    qtbot.addWidget(window2)
+    qtbot.wait(20)
+    monkeypatch.setattr("qt_shell.QFileDialog.getOpenFileName", staticmethod(lambda *a, **k: (str(project_path), "")))
+    window2.open_project()
+    qtbot.wait(250)  # restore_cif_overlays renders via the debounce
+
+    assert len(window2.raman_page.cif_series) == 1
+    restored = window2.raman_page.cif_series[0]
+    assert restored["plot_label"] == "my quartz"
+    assert restored["color"] == "royalblue"
+    assert len(restored["peaks"]) > 0  # recomputed from the CIF path
+
+    bl = window2.baseline_page.settings.get(sp.id)
+    assert bl["method"] == "poly"
+    assert bl["roi_text"] == "100-400"
 
 
 def test_open_project_replaces_existing_library(qtbot, tmp_path, monkeypatch):

@@ -4,7 +4,6 @@ first Qt pass dropped, restored on user request."""
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from qt_models import Spectrum
 from qt_shell import CombineDialog, DataappMainWindow

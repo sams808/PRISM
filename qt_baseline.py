@@ -11,11 +11,10 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-import numpy as np
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QSplitter, QVBoxLayout,
     QWidget,
 )

@@ -547,6 +547,36 @@ class SimplePlotWorkspace(QWidget):
         })
         self.render()
 
+    def restore_cif_overlays(self, records: List[Dict[str, Any]]) -> int:
+        """Project-restore path: rebuild the overlay series from saved
+        display fields, recomputing Bragg peaks from each CIF path (cheap —
+        cif_tools disk-caches them). Overlays whose CIF file no longer
+        exists are skipped rather than erroring."""
+        restored = 0
+        self.cif_series = []
+        for rec in records:
+            path = rec.get("path", "")
+            if not path or not os.path.isfile(path):
+                continue
+            try:
+                peaks = bragg_peaks_from_cif_generic(path, two_theta_max=80.0, hkl_max=6)
+            except Exception:
+                continue
+            self.cif_series.append({
+                "path": path,
+                "label": rec.get("label", os.path.basename(path)),
+                "plot_label": rec.get("plot_label", ""),
+                "peaks": peaks,
+                "visible": bool(rec.get("visible", True)),
+                "color": rec.get("color", "crimson"),
+                "pad": float(rec.get("pad", 0.03)),
+            })
+            restored += 1
+        if self._cif_manager is not None:
+            self._cif_manager.rebuild()
+        self.plot.request_redraw(self.render)
+        return restored
+
     def add_cif_files(self, paths: List[str]) -> int:
         """Programmatic CIF import (used by the RRUFF→CIF overlay handoff):
         add each CIF as a visible series, skipping ones already loaded.

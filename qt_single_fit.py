@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 
 from fitting_science import (
     build_lmfit_parameters, compute_chi2, compute_model, compute_r_squared,
-    fit_spectrum, peak_centroid, relax_params,
+    fit_spectrum, peak_centroid,
 )
 from qt_fit_params import FitParamDialog
 from qt_models import SpectrumLibrary

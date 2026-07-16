@@ -14,7 +14,7 @@ the functions themselves raise a clear ImportError when actually called.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 

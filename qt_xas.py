@@ -37,8 +37,6 @@ PCA, self-absorption correction, the CSV Builder export tool.
 """
 from __future__ import annotations
 
-import json
-import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -53,7 +51,6 @@ from PySide6.QtWidgets import (
 
 from qt_widgets import PlotWidget
 from xas_science import (
-    LARCH_AVAILABLE,
     _SCIPY_AVAILABLE,
     Operation,
     Spectrum,

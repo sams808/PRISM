@@ -6,7 +6,6 @@ for why): `pytest tests/test_qt_htxrd.py --override-ini="addopts="`
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import rampy as rp
 
 from qt_htxrd import HtxrdWorkspace

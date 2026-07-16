@@ -4,7 +4,6 @@ manage the QApplication/event loop.
 """
 from __future__ import annotations
 
-import pytest
 
 from qt_shell import NAV_ITEMS, DataappMainWindow, _load_spectrum_from_path
 from qt_widgets import PlotWidget

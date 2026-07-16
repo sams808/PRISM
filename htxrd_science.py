@@ -167,7 +167,7 @@ def track_peak(
     an error, never abort the rest of the series (a peak legitimately
     vanishing above a phase transition is an expected outcome, not an
     exceptional one)."""
-    from fitting_science import fit_spectrum, peak_centroid
+    from fitting_science import fit_spectrum
 
     if window_hi <= window_lo:
         raise ValueError("window_hi must be greater than window_lo")

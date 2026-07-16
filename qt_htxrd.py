@@ -12,12 +12,10 @@ and flag candidate phase-transition windows from fit-quality jumps.
 from __future__ import annotations
 
 import csv
-import os
 from typing import List, Optional
 
 import numpy as np
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMessageBox, QPushButton, QSplitter, QTabWidget,

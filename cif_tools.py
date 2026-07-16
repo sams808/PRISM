@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os, json, math, hashlib
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 # ------------------------------- parsing helpers -------------------------------
 

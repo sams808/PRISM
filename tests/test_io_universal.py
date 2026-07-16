@@ -7,8 +7,6 @@ the old (pre-fix) pipeline's output.
 """
 from __future__ import annotations
 
-import numpy as np
-import pytest
 
 import io_universal as iou
 

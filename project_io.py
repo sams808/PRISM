@@ -32,7 +32,7 @@ import json
 import time
 import zipfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -40,7 +40,7 @@ import pandas as pd
 from qt_models import Spectrum
 
 PROJECT_FORMAT = "dataapp-project"
-PROJECT_VERSION = 2
+PROJECT_VERSION = 3  # v3 added cif_overlays.json + baseline_settings.json
 
 
 @dataclass
@@ -49,6 +49,8 @@ class ProjectData:
     fit_params: Dict[str, list] = field(default_factory=dict)
     xas_spectra: list = field(default_factory=list)      # xas_science.Spectrum
     htxrd_patterns: list = field(default_factory=list)   # htxrd_science.HtxrdPattern
+    cif_overlays: list = field(default_factory=list)     # Simple Plot CIF series (paths + display fields; peaks recomputed on load)
+    baseline_settings: Dict[str, dict] = field(default_factory=dict)  # per-spectrum Baseline workspace settings
 
 
 def _json_safe(obj: Any) -> Any:
@@ -70,6 +72,7 @@ def _json_safe(obj: Any) -> Any:
 def save_project(
     path: str, spectra: List[Spectrum], fit_params: Dict[str, list],
     *, xas_spectra: Optional[list] = None, htxrd_patterns: Optional[list] = None,
+    cif_overlays: Optional[list] = None, baseline_settings: Optional[Dict[str, dict]] = None,
 ) -> None:
     records = []
     arrays: Dict[str, np.ndarray] = {}
@@ -142,6 +145,10 @@ def save_project(
             zf.writestr("xas_spectra.json", json.dumps(xas_records, indent=2))
         if ht_records:
             zf.writestr("htxrd.json", json.dumps(ht_records, indent=2))
+        if cif_overlays:
+            zf.writestr("cif_overlays.json", json.dumps(_json_safe(cif_overlays), indent=2))
+        if baseline_settings:
+            zf.writestr("baseline_settings.json", json.dumps(_json_safe(baseline_settings), indent=2))
         for sid, df in dfs.items():
             zf.writestr(f"df/{sid}.csv", df.to_csv(index=False))
 
@@ -223,5 +230,13 @@ def load_project(path: str) -> ProjectData:
                     meta=rec.get("meta", {}) or {},
                 ))
 
+        cif_overlays = []
+        if "cif_overlays.json" in names:
+            cif_overlays = json.loads(zf.read("cif_overlays.json").decode("utf-8"))
+        baseline_settings = {}
+        if "baseline_settings.json" in names:
+            baseline_settings = json.loads(zf.read("baseline_settings.json").decode("utf-8"))
+
     return ProjectData(spectra=spectra, fit_params=fit_params,
-                       xas_spectra=xas_spectra, htxrd_patterns=htxrd_patterns)
+                       xas_spectra=xas_spectra, htxrd_patterns=htxrd_patterns,
+                       cif_overlays=cif_overlays, baseline_settings=baseline_settings)
