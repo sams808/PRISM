@@ -603,6 +603,14 @@ class DtaWorkspace(QWidget):
                 hp = self.res_parallel.high_used
                 lines.append(f"HIGH: point x={hp[0]:.6g}" if self.res_parallel.high_mode == "point" else f"HIGH: {hp[0]:.6g}..{hp[1]:.6g}")
 
+            from dta_science import tg_agreement
+            agreement = tg_agreement({"Double": td, "Parallel": tp, "|dY| max": tx}, threshold=5.0)
+            if agreement["agree"] is True:
+                lines.append(f"✓ Methods agree (spread {agreement['spread']:.2f} {unit})")
+            elif agreement["agree"] is False:
+                lo, hi = agreement["extremes"]
+                lines.append(f"⚠ Methods disagree: spread {agreement['spread']:.2f} {unit} ({lo} vs {hi}) — inspect the baselines")
+
             self.result_label.setText("\n".join(lines))
             self._refresh_plot()
         except Exception as exc:

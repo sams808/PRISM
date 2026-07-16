@@ -555,3 +555,36 @@ def resolve_baseline_params(
         manual_slope = tuple(sorted((float(slope_min), float(slope_max))))
 
     return BaselineParams(low_range, low_point, high_range, high_point, manual_slope)
+
+
+# =============================================================================
+# Multi-method Tg agreement (cross-technique backlog item): the tool computes
+# Tg three independent ways (double tangent, parallel tangent, |dY| max);
+# instead of leaving the user to eyeball-compare, quantify the spread and
+# flag when the methods disagree beyond a threshold.
+# =============================================================================
+
+def tg_agreement(values: "dict[str, float | None]", threshold: float = 5.0) -> "dict":
+    """Compare Tg values from multiple methods.
+
+    values: {method_name: tg_or_None}; non-finite/None entries are ignored.
+    threshold: max acceptable spread (same units as the Tg values, typically
+    deg C). Returns {"n": usable-method count, "spread": max-min (nan if
+    n < 2), "agree": bool or None (None when fewer than 2 methods produced
+    a value — agreement is then undefined, not vacuously true), "extremes":
+    (low_method, high_method) or None}.
+    """
+    finite = {name: float(v) for name, v in values.items()
+              if v is not None and np.isfinite(v)}
+    n = len(finite)
+    if n < 2:
+        return {"n": n, "spread": float("nan"), "agree": None, "extremes": None}
+    lo_name = min(finite, key=finite.get)
+    hi_name = max(finite, key=finite.get)
+    spread = finite[hi_name] - finite[lo_name]
+    return {
+        "n": n,
+        "spread": float(spread),
+        "agree": bool(spread <= float(threshold)),
+        "extremes": (lo_name, hi_name),
+    }

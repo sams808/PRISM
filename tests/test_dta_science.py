@@ -168,3 +168,32 @@ def test_resolve_baseline_params_identical_inputs_give_identical_output():
     b = ds.resolve_baseline_params(manual_enabled=False, **kwargs)
     assert a == b
     assert a.low_range is None and a.low_point is None and a.high_range is None
+
+
+# --------------------------------------------------------------------------
+# Multi-method Tg agreement (cross-technique backlog item)
+# --------------------------------------------------------------------------
+
+def test_tg_agreement_within_threshold():
+    from dta_science import tg_agreement
+    out = tg_agreement({"Double": 354.47, "Parallel": 354.51, "|dY| max": 357.62}, threshold=5.0)
+    assert out["n"] == 3
+    assert out["agree"] is True
+    assert out["spread"] == pytest.approx(357.62 - 354.47, abs=1e-9)
+    assert out["extremes"] == ("Double", "|dY| max")
+
+
+def test_tg_agreement_flags_disagreement():
+    from dta_science import tg_agreement
+    out = tg_agreement({"Double": 350.0, "Parallel": 362.0, "|dY| max": 351.0}, threshold=5.0)
+    assert out["agree"] is False
+    assert out["extremes"] == ("Double", "Parallel")
+
+
+def test_tg_agreement_undefined_below_two_methods():
+    from dta_science import tg_agreement
+    import numpy as np
+    out = tg_agreement({"Double": 350.0, "Parallel": None, "|dY| max": float("nan")})
+    assert out["n"] == 1
+    assert out["agree"] is None
+    assert np.isnan(out["spread"])

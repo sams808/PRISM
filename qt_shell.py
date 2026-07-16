@@ -256,7 +256,32 @@ class DataappMainWindow(QMainWindow):
         self.dark_mode_action.setCheckable(True)
         self.dark_mode_action.toggled.connect(self._on_dark_mode_toggled)
 
+        self.console_action = view_menu.addAction("Python console")
+        self.console_action.setCheckable(True)
+        self.console_action.toggled.connect(self._on_console_toggled)
+        self._console_dock = None  # created lazily on first open
+
         self.statusBar().showMessage("Ready.")
+
+    def _on_console_toggled(self, visible: bool) -> None:
+        if self._console_dock is None:
+            import numpy as np
+            import pandas as pd
+            from qt_console import ConsoleDock
+            self._console_dock = ConsoleDock({
+                "window": self,
+                "library": self.library,
+                "xas_store": self.xas_page.store,
+                "htxrd_series": self.htxrd_page.series,
+                "fit_params": self.fit_param_memory,
+                "np": np,
+                "pd": pd,
+            }, parent=self)
+            self.addDockWidget(Qt.BottomDockWidgetArea, self._console_dock)
+            # Keep the menu checkbox honest when the user closes the dock
+            # via its own title-bar X instead of the menu.
+            self._console_dock.visibilityChanged.connect(self.console_action.setChecked)
+        self._console_dock.setVisible(visible)
 
     def _on_dark_mode_toggled(self, enabled: bool) -> None:
         """Dark mode restyles the Qt chrome only — matplotlib plot areas

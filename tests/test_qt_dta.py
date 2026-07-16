@@ -47,6 +47,17 @@ def test_dta_workspace_compute_matches_known_good_values(qtbot, dta_example_path
     assert widget.tg_deriv == pytest.approx(357.6214, abs=1e-3)
 
 
+def test_compute_shows_method_agreement_line(qtbot, dta_example_path):
+    """The three Tg methods land within ~3.2 units of each other on the
+    bundled example, so the agreement line must say the methods agree."""
+    widget = DtaWorkspace(records=[_dta_record(dta_example_path)])
+    qtbot.addWidget(widget)
+    widget._compute()
+    text = widget.result_label.text()
+    assert "Methods agree" in text
+    assert "spread" in text
+
+
 def test_manual_toggle_off_ignores_typed_ranges(qtbot, dta_example_path):
     """Regression guard for the M2 bug fix: leftover typed manual ranges must
     not affect the result when Manual is unchecked."""
