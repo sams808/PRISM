@@ -1184,7 +1184,7 @@ class XasWorkspace(QWidget):
         try:
             ok = export_athena_prj_best_effort(path, [s for s in self.store.all() if s.kind in ("mu", "norm", "flat")])
             if not ok:
-                QMessageBox.warning(self, "Export .prj", "Could not find write_athena in this Larch install. Export .dat instead.")
+                QMessageBox.warning(self, "Export .prj", "This Larch install exposes neither write_athena nor create_athena. Export .dat instead.")
             else:
                 self._set_status(f"Saved .prj: {path}")
         except Exception as exc:

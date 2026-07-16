@@ -119,7 +119,12 @@ def require_larch():
 
         return Group, xraydb_mod, find_e0, pre_edge, autobk, xftf
     except Exception as exc:
-        raise ImportError(f"Larch required for advanced processing.\nImport error: {exc}") from exc
+        raise ImportError(
+            "Larch is required for this step (normalization/EXAFS).\n"
+            "Note: the portable Dataapp.exe deliberately does not bundle Larch — "
+            "run the app via Dataapp.bat (Python install) for Larch-based steps.\n"
+            f"Import error: {exc}"
+        ) from exc
 
 
 def _call_larch_func(func, group, **kwargs):
@@ -747,26 +752,101 @@ def read_csv_dataset(csv_path: Union[str, Path]) -> Dict[str, Any]:
     return {"name": p.stem, "df": df, "scan_def": scan_def, "metadata": metadata, "source": str(p)}
 
 
-def read_athena_prj(prj_path: Union[str, Path]) -> List[Spectrum]:
-    Group, xraydb, find_e0, pre_edge, autobk, xftf = require_larch()
-    p = Path(prj_path)
+def _read_prj_text(path: Path) -> str:
+    """Athena .prj files may be gzipped or plain text."""
+    import gzip
     try:
-        from larch.io import read_athena as reader
-    except Exception:
-        try:
-            from larch.io.athena import read_athena as reader
-        except Exception:
-            raise ImportError("Your larch install does not expose read_athena for .prj import.")
+        with gzip.open(path, "rb") as fh:
+            return fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return path.read_text(encoding="utf-8", errors="replace")
 
-    groups = reader(str(p))
+
+def _perl_value(line: str):
+    """Evaluate the right-hand side of one Athena perl-format line
+    (`@x = (1.0, 2.0, ...);` or `%args = ('label' => 'scan1', ...);`).
+    Perl fat commas become plain commas, flattening hashes into the same
+    alternating key/value list larch's own parser produces."""
+    import ast
+    txt = line.split("=", 1)[1].strip().rstrip(";").strip()
+    txt = txt.replace("=>", ",")
+    return ast.literal_eval(txt)
+
+
+def parse_athena_prj_no_larch(prj_path: Union[str, Path]) -> List[Dict[str, Any]]:
+    """Pure-Python Athena .prj reader (no larch dependency) — ported from
+    larch.io.athena_project's essential read path so the portable exe (which
+    excludes larch) can still IMPORT projects. Handles both the perl-style
+    format (Demeter/Athena, larch's writer) and larch's JSON-style format.
+    Returns [{name, label, energy, mu, i0?, signal?, e0?}, ...]."""
+    p = Path(prj_path)
+    text = _read_prj_text(p)
+    if "Athena project file -- " not in text[:500]:
+        raise ValueError(f"'{p.name}' is not an Athena project file.")
+
+    records: List[Dict[str, Any]] = []
+    if "____header" in text[:500]:  # JSON-style (larch's default save)
+        import json
+        jsdict = json.loads(text)
+        order = next((v for k, v in jsdict.items() if k.startswith("_____order")), [])
+        for name in order:
+            dat = jsdict.get(name)
+            if not isinstance(dat, dict) or "x" not in dat or "y" not in dat:
+                continue
+            rec = {"name": name, "args": dict(dat.get("args", {})),
+                   "energy": np.asarray(dat["x"], float), "mu": np.asarray(dat["y"], float)}
+            for extra in ("i0", "signal"):
+                if extra in dat:
+                    rec[extra] = np.asarray(dat[extra], float)
+            records.append(rec)
+    else:  # perl-style
+        raw: Dict[str, Any] = {}
+        for line in text.split("\n"):
+            if line.startswith("#") or len(line) < 2 or "undef" in line:
+                continue
+            key = line.split()[0].strip().lstrip("$@%")
+            try:
+                if key == "old_group":
+                    raw["name"] = _perl_value(line)
+                elif key == "args":
+                    flat = list(_perl_value(line))
+                    raw["args"] = {flat[2 * i]: flat[2 * i + 1] for i in range(len(flat) // 2)}
+                elif key in ("x", "y", "i0", "signal"):
+                    raw[{"x": "energy", "y": "mu"}.get(key, key)] = np.asarray(_perl_value(line), float)
+                elif key == "[record]":
+                    if "energy" in raw and "mu" in raw:
+                        records.append(raw)
+                    raw = {}
+            except (ValueError, SyntaxError):
+                continue  # journal/plot_features lines that don't literal-eval
+
+    for rec in records:
+        args = rec.get("args", {})
+        rec["label"] = str(args.get("label", rec.get("name", "athena_group")))
+        try:
+            rec["e0"] = float(args["bkg_e0"])
+        except (KeyError, TypeError, ValueError):
+            rec["e0"] = None
+    return records
+
+
+def read_athena_prj(prj_path: Union[str, Path]) -> List[Spectrum]:
+    """Import an Athena .prj via the pure-Python parser — always, not just
+    when larch is absent. (The old larch-reader path iterated read_athena's
+    return value as if it were a dict/list; modern larch returns a Group, so
+    the import silently yielded ZERO spectra. One tested code path now, and
+    the portable exe gets .prj import for free; only normalization/EXAFS
+    still need larch.)"""
+    p = Path(prj_path)
     out: List[Spectrum] = []
-    it = groups.items() if isinstance(groups, dict) else [(getattr(g, "label", getattr(g, "filename", "athena_group")), g) for g in groups]
-    for name, g in it:
-        if not hasattr(g, "energy") or not hasattr(g, "mu"):
-            continue
+    for rec in parse_athena_prj_no_larch(p):
+        energy, mu = rec["energy"], rec["mu"]
+        order = np.argsort(energy)
+        energy, mu = energy[order], mu[order]
+        keep = np.concatenate([[True], np.diff(energy) > 0])  # drop duplicate energies
         out.append(Spectrum(
-            sid=_uid("sp"), name=str(name), kind="mu", energy=np.array(getattr(g, "energy"), float), y=np.array(getattr(g, "mu"), float),
-            angle=None, units="a.u.", label="XAS(Imported)", e0=float(getattr(g, "e0", np.nan)) if hasattr(g, "e0") else None, meta={"source": str(p)},
+            sid=_uid("sp"), name=rec["label"], kind="mu", energy=energy[keep], y=mu[keep],
+            angle=None, units="a.u.", label="XAS(Imported)", e0=rec["e0"], meta={"source": str(p)},
         ))
     return out
 
@@ -779,13 +859,6 @@ def export_athena_column(path: Union[str, Path], energy: np.ndarray, y: np.ndarr
 
 def export_athena_prj_best_effort(path: Union[str, Path], spectra: List[Spectrum]) -> bool:
     Group, xraydb, find_e0, pre_edge, autobk, xftf = require_larch()
-    try:
-        from larch.io import write_athena as writer
-    except Exception:
-        try:
-            from larch.io.athena import write_athena as writer
-        except Exception:
-            return False
 
     groups = []
     for sp in spectra:
@@ -793,7 +866,29 @@ def export_athena_prj_best_effort(path: Union[str, Path], spectra: List[Spectrum
         if sp.e0 is not None and np.isfinite(sp.e0):
             g.e0 = float(sp.e0)
         groups.append(g)
-    writer(str(path), groups)
+
+    writer = None
+    try:
+        from larch.io import write_athena as writer
+    except Exception:
+        try:
+            from larch.io.athena import write_athena as writer
+        except Exception:
+            writer = None
+    if writer is not None:
+        writer(str(path), groups)
+        return True
+
+    # Modern larch (e.g. 2025.x) dropped write_athena in favor of the
+    # AthenaProject API — without this branch export silently failed.
+    try:
+        from larch.io import create_athena
+    except Exception:
+        return False
+    project = create_athena(str(path))
+    for g in groups:
+        project.add_group(g)
+    project.save(str(path))
     return True
 
 

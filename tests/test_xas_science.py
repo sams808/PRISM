@@ -327,3 +327,96 @@ def test_infer_xas_edge_from_spectrum_wraps_label_correctly():
     out = xs.infer_xas_edge_from_spectrum(energy, mu)
     if "element" in out:  # only asserted structurally; Larch presence covered above
         assert out["label"] == f"{out['element']} {out['edge']}"
+
+
+# --------------------------------------------------------------------------
+# Athena .prj import/export. The user's real bug report ("Import error: no
+# module named 'larch'" from the portable exe) led to three fixes at once:
+# a pure-Python .prj parser, an export writer that supports modern larch's
+# create_athena API (write_athena was dropped upstream — export silently
+# returned False), and the discovery that the old larch-reader import path
+# iterated a Group as if it were a dict and yielded ZERO spectra.
+# --------------------------------------------------------------------------
+
+def _two_prj_spectra():
+    e = np.linspace(7000.0, 7300.0, 60)
+    mk = lambda name, e0, off: xs.Spectrum(
+        sid=xs._uid("sp"), name=name, kind="mu", energy=e,
+        y=np.tanh((e - e0) / 10.0) + off, angle=None, units="a.u.",
+        label="XAS", e0=e0, meta={})
+    return mk("scanA", 7112.0, 1.0), mk("scanB", 7115.0, 1.1)
+
+
+@requires_larch
+def test_athena_prj_export_then_reimport_round_trips(tmp_path):
+    sp1, sp2 = _two_prj_spectra()
+    path = tmp_path / "roundtrip.prj"
+    assert xs.export_athena_prj_best_effort(path, [sp1, sp2])  # was False on larch>=2025
+
+    back = xs.read_athena_prj(path)
+    assert [s.name for s in back] == ["scanA", "scanB"]  # was [] via the old larch path
+    assert all(s.kind == "mu" for s in back)
+    assert np.allclose(back[0].energy, sp1.energy)
+    assert np.allclose(back[0].y, sp1.y)
+    assert back[1].e0 == pytest.approx(7115.0, abs=6.0)  # larch snaps e0 to the grid
+
+
+@requires_larch
+def test_parse_athena_prj_no_larch_reads_perl_format(tmp_path):
+    sp1, sp2 = _two_prj_spectra()
+    path = tmp_path / "perlstyle.prj"
+    assert xs.export_athena_prj_best_effort(path, [sp1, sp2])
+
+    recs = xs.parse_athena_prj_no_larch(path)
+    assert [r["label"] for r in recs] == ["scanA", "scanB"]
+    assert np.allclose(recs[1]["mu"], sp2.y)
+    assert recs[0]["e0"] == pytest.approx(7112.0, abs=6.0)
+
+
+def test_parse_athena_prj_no_larch_reads_json_format(tmp_path):
+    """larch's other on-disk flavor: gzipped JSON with _____-prefixed keys."""
+    import gzip, json
+    e = [7000.0, 7001.0, 7002.0]
+    doc = {
+        "_____header1": "# Athena project file -- Demeter version 0.9.26",
+        "_____order": ["grpA"],
+        "grpA": {"x": e, "y": [0.1, 0.2, 0.3], "args": {"label": "My Sample", "bkg_e0": "7001.0"}},
+    }
+    path = tmp_path / "jsonstyle.prj"
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(doc))
+    # JSON detection keys off '____header' appearing early in the text;
+    # the validity check finds "Athena project file -- " inside the header value
+    recs = xs.parse_athena_prj_no_larch(path)
+    assert len(recs) == 1
+    assert recs[0]["label"] == "My Sample"
+    assert recs[0]["e0"] == 7001.0
+    assert np.allclose(recs[0]["energy"], e)
+
+
+def test_read_athena_prj_works_without_larch(tmp_path, monkeypatch):
+    """The portable-exe scenario: no larch importable at all."""
+    import gzip, json
+    doc = {
+        "_____header1": "# Athena project file -- Demeter version 0.9.26",
+        "_____order": ["g1"],
+        "g1": {"x": [7002.0, 7000.0, 7001.0, 7001.0], "y": [3.0, 1.0, 2.0, 2.5],
+               "args": {"label": "unsorted", "bkg_e0": "7001.0"}},
+    }
+    path = tmp_path / "nolarch.prj"
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(doc))
+
+    monkeypatch.setattr(xs, "LARCH_AVAILABLE", False)
+    out = xs.read_athena_prj(path)
+    assert len(out) == 1
+    assert out[0].name == "unsorted"
+    assert list(out[0].energy) == [7000.0, 7001.0, 7002.0]  # sorted, duplicate dropped
+    assert list(out[0].y) == [1.0, 2.0, 3.0]
+
+
+def test_parse_athena_prj_rejects_non_athena_file(tmp_path):
+    path = tmp_path / "nope.prj"
+    path.write_text("just some text")
+    with pytest.raises(ValueError, match="not an Athena project"):
+        xs.parse_athena_prj_no_larch(path)
