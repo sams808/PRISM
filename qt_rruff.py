@@ -58,10 +58,13 @@ class RruffMatchWorkspace(QWidget):
     def __init__(
         self, parent: Optional[QWidget] = None, library: Optional[SpectrumLibrary] = None,
         cache_dir: Optional[str] = None, amcsd_cache_dir: Optional[str] = None,
-        on_send_cifs=None,
+        on_send_cifs=None, on_accept=None,
     ):
         super().__init__(parent)
         self.library = library if library is not None else SpectrumLibrary()
+        # Shell-provided callback (spectrum_id, previous_match_or_None) fired
+        # when an identification is accepted, so Accept joins the undo stack.
+        self.on_accept = on_accept
         self.cache_dir = cache_dir or RRUFF_CACHE_DIR
         self.amcsd_cache_dir = amcsd_cache_dir  # None -> rruff_science default
         # Shell-provided callback taking a list of CIF paths (the RRUFF→CIF
@@ -314,6 +317,7 @@ class RruffMatchWorkspace(QWidget):
             QMessageBox.warning(self, "Accept identification", "Select a query spectrum and a candidate row first.")
             return
         candidate = self._results[rows[0].row()]
+        previous_match = spectrum.meta.get("rruff_match")
         spectrum.meta["rruff_match"] = {
             "mineral": candidate.get("mineral"),
             "rruff_id": candidate.get("rruff_id"),
@@ -322,6 +326,8 @@ class RruffMatchWorkspace(QWidget):
             "match_fraction": candidate.get("match_fraction"),
             "accepted_at": time.time(),
         }
+        if self.on_accept is not None:
+            self.on_accept(spectrum.id, previous_match)
         QMessageBox.information(
             self, "Accepted",
             f"Recorded '{candidate.get('mineral')}' ({candidate.get('rruff_id')}) as the accepted identification "

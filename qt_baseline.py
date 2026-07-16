@@ -30,9 +30,13 @@ def _default_settings() -> Dict[str, str]:
 
 
 class BaselineWorkspace(QWidget):
-    def __init__(self, parent: Optional[QWidget] = None, library: Optional[SpectrumLibrary] = None):
+    def __init__(self, parent: Optional[QWidget] = None, library: Optional[SpectrumLibrary] = None,
+                 on_derived_added=None):
         super().__init__(parent)
         self.library = library if library is not None else SpectrumLibrary()
+        # Shell-provided callback taking the list of newly created spectrum
+        # ids, so batch-applied baselines join the Library's undo stack.
+        self.on_derived_added = on_derived_added
         self.settings: PerItemSettingsStore[Dict[str, str]] = PerItemSettingsStore(_default_settings)
         self._current_id: Optional[str] = None
         self._last_preview = None  # (x, y_sub, base)
@@ -298,7 +302,7 @@ class BaselineWorkspace(QWidget):
             QMessageBox.critical(self, "Baseline error", str(exc))
             return
 
-        created, errors = 0, []
+        created_ids, errors = [], []
         for sp in selected:
             try:
                 x, y_sub, base = compute_baseline(sp.x, sp.y, method=method, roi=roi, params=params)
@@ -309,16 +313,19 @@ class BaselineWorkspace(QWidget):
                 "method": method, "roi_text": self.roi_edit.text(),
                 "p0": self.param_edits[0].text(), "p1": self.param_edits[1].text(),
             })
-            self.library.add(Spectrum(
+            derived = Spectrum(
                 id=Spectrum.new_id(), title=f"{sp.title}_bl", path=sp.path, kind=sp.kind,
                 x=x, y=y_sub, df=None,
                 meta={"derived": f"baseline_{method}", "baseline_params": dict(params), "source": sp.title},
                 status="derived",
-            ))
-            created += 1
+            )
+            self.library.add(derived)
+            created_ids.append(derived.id)
 
+        if created_ids and self.on_derived_added is not None:
+            self.on_derived_added(created_ids)
         self.set_spectra([s.id for s in self.library.all()])
-        msg = f"Created {created} baseline-subtracted spectrum/spectra (suffix _bl)."
+        msg = f"Created {len(created_ids)} baseline-subtracted spectrum/spectra (suffix _bl)."
         if errors:
             msg += "\nFailed: " + "; ".join(errors)
         self.status_label.setText(msg)

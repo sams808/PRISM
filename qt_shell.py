@@ -231,11 +231,17 @@ class LibraryPage(QWidget):
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         left_layout.addWidget(self.table, 1)
 
-        self.undo_btn = QPushButton("Undo delete")
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setToolTip("Undo the last library change: delete, rename, duplicate, combine result, applied baseline, or accepted mineral ID.")
         self.undo_btn.setEnabled(False)
-        self.undo_btn.clicked.connect(self._undo_delete)
+        self.undo_btn.clicked.connect(self._undo)
         left_layout.addWidget(self.undo_btn)
-        self._undo_stack: list = []  # each entry: list of (position, Spectrum)
+        # Typed actions, most recent last:
+        #   ("delete", [(position, Spectrum), ...])   undo re-adds at position
+        #   ("add", [spectrum_id, ...])               undo removes (derived spectra)
+        #   ("rename", spectrum_id, old_title)        undo restores the title
+        #   ("ident", spectrum_id, old_match|None)    undo restores meta["rruff_match"]
+        self._undo_stack: list = []
 
         root.addWidget(left)
 
@@ -360,9 +366,15 @@ class LibraryPage(QWidget):
         batch = [(i, sp) for i, sp in enumerate(self.library.all())]
         for _, sp in batch:
             self.library.remove(sp.id)
-        self._undo_stack.append(batch)
-        self.undo_btn.setEnabled(True)
+        self.push_undo(("delete", batch))
         self._refresh_table()
+
+    def push_undo(self, action: tuple) -> None:
+        """Record an undoable library action (see _undo_stack's format).
+        Also the entry point for other workspaces' undoable effects on the
+        library (applied baselines, accepted mineral IDs), via the shell."""
+        self._undo_stack.append(action)
+        self.undo_btn.setEnabled(True)
 
     def _rename_selected(self) -> None:
         selected = self._selected_spectra()
@@ -371,7 +383,8 @@ class LibraryPage(QWidget):
         from PySide6.QtWidgets import QInputDialog
         sp = selected[0]
         new_title, ok = QInputDialog.getText(self, "Rename", "New name:", text=sp.title)
-        if ok and new_title.strip():
+        if ok and new_title.strip() and new_title.strip() != sp.title:
+            self.push_undo(("rename", sp.id, sp.title))
             sp.title = new_title.strip()
             self._refresh_table()
 
@@ -386,6 +399,7 @@ class LibraryPage(QWidget):
             df=sp.df, meta=dict(sp.meta), status="derived",
         )
         self.library.add(copy_sp)
+        self.push_undo(("add", [copy_sp.id]))
         self._refresh_table()
 
     def _move_selected(self, delta: int) -> None:
@@ -410,24 +424,46 @@ class LibraryPage(QWidget):
         batch = [(order.index(sp.id), sp) for sp in selected]
         for _, sp in batch:
             self.library.remove(sp.id)
-        self._undo_stack.append(batch)
-        self.undo_btn.setEnabled(True)
+        self.push_undo(("delete", batch))
         self._refresh_table()
 
-    def _undo_delete(self) -> None:
+    def _undo(self) -> None:
         if not self._undo_stack:
             return
-        batch = self._undo_stack.pop()
-        for position, sp in sorted(batch, key=lambda t: t[0]):
-            self.library.add(sp)
-        # Restore the original ordering as closely as possible.
-        order = [s.id for s in self.library.all()]
-        for position, sp in sorted(batch, key=lambda t: t[0]):
-            order.remove(sp.id)
-            order.insert(min(position, len(order)), sp.id)
-        self.library.reorder(order)
+        action = self._undo_stack.pop()
+        kind = action[0]
+        if kind == "delete":
+            batch = action[1]
+            for position, sp in sorted(batch, key=lambda t: t[0]):
+                self.library.add(sp)
+            # Restore the original ordering as closely as possible.
+            order = [s.id for s in self.library.all()]
+            for position, sp in sorted(batch, key=lambda t: t[0]):
+                order.remove(sp.id)
+                order.insert(min(position, len(order)), sp.id)
+            self.library.reorder(order)
+        elif kind == "add":
+            for sid in action[1]:
+                if self.library.get(sid) is not None:
+                    self.library.remove(sid)
+        elif kind == "rename":
+            sp = self.library.get(action[1])
+            if sp is not None:
+                sp.title = action[2]
+        elif kind == "ident":
+            sp = self.library.get(action[1])
+            if sp is not None:
+                old_match = action[2]
+                if old_match is None:
+                    sp.meta.pop("rruff_match", None)
+                else:
+                    sp.meta["rruff_match"] = old_match
         self.undo_btn.setEnabled(bool(self._undo_stack))
         self._refresh_table()
+
+    # Kept as an alias: the File-menu wiring and older tests used this name
+    # when deletion was the only undoable action.
+    _undo_delete = _undo
 
     def _on_custom_import_clicked(self) -> None:
         from qt_custom_import import CustomImportDialog
@@ -453,6 +489,7 @@ class LibraryPage(QWidget):
             result = dlg.result_spectrum
             if result is not None:
                 self.library.add(result)
+                self.push_undo(("add", [result.id]))
                 self._refresh_table()
                 self.table.selectRow(self.table.rowCount() - 1)
 
@@ -531,13 +568,19 @@ class DataappMainWindow(QMainWindow):
         self.stack.addWidget(self.fitting_page)
         self.multifit_page = MultiFitWorkspace(library=self.library, fit_param_memory=self.fit_param_memory)
         self.stack.addWidget(self.multifit_page)
-        self.rruff_page = RruffMatchWorkspace(library=self.library, on_send_cifs=self._on_rruff_send_cifs)
+        self.rruff_page = RruffMatchWorkspace(
+            library=self.library, on_send_cifs=self._on_rruff_send_cifs,
+            on_accept=lambda sid, old: self.library_page.push_undo(("ident", sid, old)),
+        )
         self.stack.addWidget(self.rruff_page)
         self.htxrd_page = HtxrdWorkspace()
         self.stack.addWidget(self.htxrd_page)
         self.cluster_page = ClusterWorkspace(library=self.library)
         self.stack.addWidget(self.cluster_page)
-        self.baseline_page = BaselineWorkspace(library=self.library)
+        self.baseline_page = BaselineWorkspace(
+            library=self.library,
+            on_derived_added=lambda ids: self.library_page.push_undo(("add", list(ids))),
+        )
         self.stack.addWidget(self.baseline_page)
         outer.addWidget(self.stack, 1)
 
@@ -552,7 +595,7 @@ class DataappMainWindow(QMainWindow):
         file_menu.addAction("Save project as…", self.save_project, "Ctrl+S")
         file_menu.addSeparator()
         file_menu.addAction("Clear imports…", self.library_page.clear_all)
-        file_menu.addAction("Undo delete", self.library_page._undo_delete, "Ctrl+Z")
+        file_menu.addAction("Undo", self.library_page._undo, "Ctrl+Z")
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close, "Ctrl+Q")
 

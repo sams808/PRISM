@@ -27,8 +27,9 @@ spectrum. <b>File &rsaquo; Save project</b> keeps the whole session in one
 SAXS EDF, Rigaku <code>.rasx</code>, JCAMP-DX). If it guesses wrong, use
 <b>Custom import…</b> (Ctrl+I) to pick the parser and the X/Y columns yourself, with a
 preview. Right-click spectra to rename, duplicate, reorder, export as text
-(Ctrl+E), combine (sum / average / weighted subtraction), or delete —
-deletion is undoable (Ctrl+Z).</p>
+(Ctrl+E), combine (sum / average / weighted subtraction), or delete.
+<b>Undo (Ctrl+Z)</b> steps back through library changes: deletes, renames,
+duplicates, combine results, applied baselines, and accepted mineral IDs.</p>
 
 <h2>Baseline</h2>
 <p>Pick a method — <b>arPLS</b> is the automatic default; polynomial / spline /
@@ -93,7 +94,7 @@ an assignment table.</p>
 <h2>Shortcuts</h2>
 <p><code>Ctrl+O</code> import · <code>Ctrl+I</code> custom import ·
 <code>Ctrl+E</code> export · <code>Ctrl+S</code> save project ·
-<code>Ctrl+Shift+O</code> open project · <code>Ctrl+Z</code> undo delete ·
+<code>Ctrl+Shift+O</code> open project · <code>Ctrl+Z</code> undo ·
 <code>Ctrl+Q</code> quit · <code>F1</code> this guide.
 View menu: dark mode, Python console (the live app objects are in scope).</p>
 """

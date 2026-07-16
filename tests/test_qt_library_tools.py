@@ -112,6 +112,97 @@ def test_clear_all_is_undoable(qtbot):
     assert [s.title for s in window.library.all()] == ["a", "b", "c"]
 
 
+def test_rename_is_undoable(qtbot, monkeypatch):
+    window = _window_with(qtbot, [("old_name", 1.0)])
+    page = window.library_page
+    page.table.selectRow(0)
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText",
+                        staticmethod(lambda *a, **k: ("new_name", True)))
+    page._rename_selected()
+    assert window.library.all()[0].title == "new_name"
+    assert page.undo_btn.isEnabled()
+
+    page._undo()
+    assert window.library.all()[0].title == "old_name"
+    assert not page.undo_btn.isEnabled()
+
+
+def test_duplicate_is_undoable(qtbot):
+    window = _window_with(qtbot, [("orig", 5.0)])
+    page = window.library_page
+    page.table.selectRow(0)
+    page._duplicate_selected()
+    assert len(window.library) == 2
+
+    page._undo()
+    assert [s.title for s in window.library.all()] == ["orig"]
+
+
+def test_undo_add_tolerates_already_deleted_spectrum(qtbot):
+    window = _window_with(qtbot, [("orig", 5.0)])
+    page = window.library_page
+    page.table.selectRow(0)
+    page._duplicate_selected()
+    copy_id = window.library.all()[1].id
+    window.library.remove(copy_id)  # user deletes the copy by other means
+    page._undo()  # must not raise; nothing left to remove
+    assert [s.title for s in window.library.all()] == ["orig"]
+
+
+def test_accepted_identification_is_undoable(qtbot):
+    window = _window_with(qtbot, [("query", 1.0)])
+    page = window.library_page
+    sp = window.library.all()[0]
+    # Simulate what the shell's on_accept callback records, then the
+    # workspace's own meta write.
+    page.push_undo(("ident", sp.id, None))
+    sp.meta["rruff_match"] = {"mineral": "Quartz", "rruff_id": "R040031"}
+
+    page._undo()
+    assert "rruff_match" not in sp.meta
+
+    # A re-identification restores the PREVIOUS match on undo, not nothing.
+    old = {"mineral": "Calcite", "rruff_id": "R040070"}
+    sp.meta["rruff_match"] = dict(old)
+    page.push_undo(("ident", sp.id, dict(old)))
+    sp.meta["rruff_match"] = {"mineral": "Quartz", "rruff_id": "R040031"}
+    page._undo()
+    assert sp.meta["rruff_match"] == old
+
+
+def test_applied_baseline_is_undoable_through_shell(qtbot):
+    window = _window_with(qtbot, [("raw", 1.0)])
+    page = window.library_page
+    bl_page = window.baseline_page
+    bl_page.set_spectra([s.id for s in window.library.all()])
+    bl_page.file_list.item(0).setSelected(True)
+    bl_page.method_combo.setCurrentText("poly")
+    bl_page.param_edits[0].setText("1")
+    bl_page.roi_edit.setText("0-100")
+    bl_page.apply_selected()
+    qtbot.wait(20)
+    assert [s.title for s in window.library.all()] == ["raw", "raw_bl"]
+    assert page.undo_btn.isEnabled()
+
+    page._undo()
+    assert [s.title for s in window.library.all()] == ["raw"]
+
+
+def test_mixed_undo_stack_unwinds_in_reverse_order(qtbot):
+    window = _window_with(qtbot, [("a", 1), ("b", 2)])
+    page = window.library_page
+    page.table.selectRow(0)
+    page._delete_selected()  # a gone
+    page.table.selectRow(0)
+    page._duplicate_selected()  # b_copy added
+    assert [s.title for s in window.library.all()] == ["b", "b_copy"]
+
+    page._undo()  # undoes the duplicate first
+    assert [s.title for s in window.library.all()] == ["b"]
+    page._undo()  # then the delete
+    assert [s.title for s in window.library.all()] == ["a", "b"]
+
+
 def test_combine_dialog_sum(qtbot):
     a = _spectrum("a", 2.0)
     b = _spectrum("b", 3.0)

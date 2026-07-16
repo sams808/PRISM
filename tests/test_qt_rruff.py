@@ -145,6 +145,31 @@ def test_accept_selected_candidate_writes_spectrum_metadata(qtbot, tmp_path):
     assert sp.meta["rruff_match"]["wavelength_nm"] == 532.0
 
 
+def test_accept_fires_on_accept_callback_with_previous_match(qtbot, tmp_path):
+    """The shell hooks on_accept to the Library undo stack — it must receive
+    the spectrum id and whatever match was recorded BEFORE this accept."""
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    old_match = {"mineral": "Calcite", "rruff_id": "R040070"}
+    sp.meta["rruff_match"] = dict(old_match)
+    library.add(sp)
+    calls = []
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir),
+                                 on_accept=lambda sid, prev: calls.append((sid, prev)))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.find_matches()
+    qtbot.wait(20)
+
+    widget.accept_selected_candidate()
+    assert calls == [(sp.id, old_match)]
+    assert sp.meta["rruff_match"]["mineral"] == "Quartz"
+
+
 def test_render_preview_overlays_measured_spectrum(qtbot, tmp_path):
     cache_dir = tmp_path / "rruff_cache"
     _write_fake_cache(cache_dir, cache_dir / "raw")
