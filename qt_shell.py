@@ -283,7 +283,11 @@ class DataappMainWindow(QMainWindow):
             path += ".dataapp"
         fit_params = {sid: params for sid, params in self.fit_param_memory.items()}
         try:
-            project_io.save_project(path, self.library.all(), fit_params)
+            project_io.save_project(
+                path, self.library.all(), fit_params,
+                xas_spectra=self.xas_page.store.all(),
+                htxrd_patterns=self.htxrd_page.series,
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Save project error", str(exc))
             return
@@ -302,22 +306,34 @@ class DataappMainWindow(QMainWindow):
             if resp != QMessageBox.Yes:
                 return
         try:
-            spectra, fit_params = project_io.load_project(path)
+            project = project_io.load_project(path)
         except Exception as exc:
             QMessageBox.critical(self, "Open project error", str(exc))
             return
 
         self.library.clear()
         self.fit_param_memory.clear()
-        for sp in spectra:
+        for sp in project.spectra:
             self.library.add(sp)
-        for sid, params in fit_params.items():
+        for sid, params in project.fit_params.items():
             self.fit_param_memory.set(sid, params)
+
+        self.xas_page.store.clear()
+        for sp in project.xas_spectra:
+            self.xas_page.store.add(sp)
+        self.xas_page.selected_sid = None
+        self.xas_page._refresh_all()
+
+        if project.htxrd_patterns:
+            self.htxrd_page.set_series(project.htxrd_patterns)
 
         self.library_page._refresh_table()
         # Re-sync whichever workspace is currently visible.
         self._on_nav_changed(self.nav.currentRow())
-        self.statusBar().showMessage(f"Project loaded: {len(spectra)} spectra from {path}")
+        self.statusBar().showMessage(
+            f"Project loaded: {len(project.spectra)} spectra, {len(project.xas_spectra)} XAS objects, "
+            f"{len(project.htxrd_patterns)} HT-XRD patterns from {path}"
+        )
 
     def _dta_records_from_library(self):
         records = []

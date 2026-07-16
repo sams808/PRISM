@@ -173,13 +173,17 @@ class HtxrdWorkspace(QWidget):
 
     def _load(self, paths: List[str]) -> None:
         template = self.template_edit.text().strip()
-        errors = []
         try:
-            self.series = load_series(paths, filename_template=template)
+            series = load_series(paths, filename_template=template)
         except Exception as exc:
             QMessageBox.critical(self, "Import series error", str(exc))
             return
+        self.set_series(series)
 
+    def set_series(self, series: List[HtxrdPattern]) -> None:
+        """Adopt an already-loaded series (fresh import or project restore)
+        and refresh the list + waterfall."""
+        self.series = list(series)
         self.series_list.clear()
         sources = set()
         for pat in self.series:

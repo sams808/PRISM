@@ -207,6 +207,77 @@ def test_linear_combination_fit_recovers_known_weights(qtbot):
     assert "R²" in widget.analysis_result_text.toPlainText()
 
 
+def test_preproc_smoothing_apply_creates_new_object(qtbot):
+    widget = XasWorkspace()
+    qtbot.addWidget(widget)
+    energy = np.linspace(7000, 7300, 300)
+    rng = np.random.default_rng(0)
+    sp = Spectrum(sid=_uid("sp"), name="noisy", kind="It", energy=energy,
+                  y=np.sin(energy / 30) + rng.normal(0, 0.1, energy.shape))
+    widget.store.add(sp)
+    widget._refresh_all()
+
+    widget.sm_target_combo.setCurrentText("noisy")
+    widget.sm_method_combo.setCurrentText("Savitzky-Golay")
+    widget.apply_smoothing()
+    qtbot.wait(20)
+
+    sp2 = widget.store.find_by_name("noisy_sm")
+    assert sp2 is not None
+    # Smoothed variance of the residual to the clean signal must drop.
+    clean = np.sin(energy / 30)
+    assert np.std(sp2.y - clean) < np.std(sp.y - clean)
+    assert sp2.history[-1].name == "smooth"
+
+
+def test_preproc_mode_c_tiepoint_alignment_via_simulated_clicks(qtbot):
+    """Full Mode C flow: overlay, pick a BEFORE/AFTER pair via simulated
+    canvas clicks (snapping to nearest data point), apply shift alignment,
+    and confirm the corrected object's energy axis moved by the tie-point
+    difference."""
+    widget = XasWorkspace()
+    qtbot.addWidget(widget)
+    energy = np.linspace(7000, 7300, 301)  # 1 eV grid
+    y = np.exp(-((energy - 7112.0) ** 2) / 50.0)
+    before = Spectrum(sid=_uid("sp"), name="ref", kind="mu", energy=energy, y=y)
+    after = Spectrum(sid=_uid("sp"), name="shifted", kind="mu", energy=energy + 5.0, y=y.copy())
+    widget.store.add(before)
+    widget.store.add(after)
+    widget._refresh_all()
+
+    widget.ang_before_combo.setCurrentText("ref")
+    widget.ang_after_combo.setCurrentText("shifted")
+    widget.plot_mode_c_overlay()
+    qtbot.wait(20)
+    widget.start_picking_pair()
+
+    ax = widget.preproc_plot.figure.get_axes()[0]
+
+    class _Click:
+        def __init__(self, x):
+            self.inaxes = ax
+            self.xdata = x
+            self.ydata = 0.5
+
+    widget._on_preproc_click(_Click(7112.0))   # BEFORE feature
+    widget._on_preproc_click(_Click(7117.0))   # AFTER feature (shifted +5)
+    qtbot.wait(20)
+    assert len(widget.tiepoints) == 1
+    assert widget.tiepoints[0].e_before == pytest.approx(7112.0, abs=0.6)
+    assert widget.tiepoints[0].e_after == pytest.approx(7117.0, abs=0.6)
+
+    widget.ang_mode_combo.setCurrentText("C: Feature alignment (click)")
+    widget.mode_c_model_combo.setCurrentText("shift")
+    widget.apply_angle_correction()
+    qtbot.wait(20)
+
+    corrected = widget.store.find_by_name("shifted_Ealign")
+    assert corrected is not None
+    # Shift model: corrected energy = after energy + (before - after) = -5 eV
+    assert corrected.energy[0] == pytest.approx(after.energy[0] - 5.0, abs=0.6)
+    assert corrected.history[-1].name == "align_mode_c"
+
+
 def test_pca_selected_reports_species_count(qtbot):
     """M21: PCA across a synthetic 2-species series must attribute the
     dominant variance to PC1 and report a small species count."""

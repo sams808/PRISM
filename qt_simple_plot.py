@@ -137,8 +137,10 @@ class SimplePlotWorkspace(QWidget):
         self.cif_label_pos = "right_out"
         self.bragg_height_scale = 1.0
         self._cif_manager: Optional[CifManagerDialog] = None
+        self.annotations: List[Dict[str, float]] = []  # persists across re-renders
 
         self._build_ui()
+        self.plot.canvas.mpl_connect("button_press_event", self._on_plot_click)
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -169,6 +171,15 @@ class SimplePlotWorkspace(QWidget):
         self.diff_check = QCheckBox("Difference (1st − 2nd selected)")
         self.diff_check.toggled.connect(lambda: self.plot.request_redraw(self.render))
         left_layout.addWidget(self.diff_check)
+
+        annotate_row = QHBoxLayout()
+        self.annotate_check = QCheckBox("Annotate on click")
+        annotate_row.addWidget(self.annotate_check)
+        clear_annot_btn = QPushButton("Clear")
+        clear_annot_btn.setMaximumWidth(60)
+        clear_annot_btn.clicked.connect(self._clear_annotations)
+        annotate_row.addWidget(clear_annot_btn)
+        left_layout.addLayout(annotate_row)
 
         smooth_row = QHBoxLayout()
         smooth_row.addWidget(QLabel("Smoothing"))
@@ -330,6 +341,44 @@ class SimplePlotWorkspace(QWidget):
         return LINE_COLORS[i % len(LINE_COLORS)]
 
     # ------------------------------------------------------------------
+    # Click-to-annotate (deferred M7 item). Annotations are stored as data
+    # coordinates on the workspace (not as matplotlib artists), so they
+    # survive every debounced fig.clf()+render cycle and are re-drawn by
+    # render() until explicitly cleared.
+    # ------------------------------------------------------------------
+
+    def _on_plot_click(self, event) -> None:
+        if not self.annotate_check.isChecked():
+            return
+        if event.inaxes is None or event.xdata is None:
+            return
+        if self.plot.toolbar.mode:  # zoom/pan tool active — don't hijack the click
+            return
+        self.annotations.append({"x": float(event.xdata), "y": float(event.ydata)})
+        self.plot.request_redraw(self.render)
+
+    def _clear_annotations(self) -> None:
+        self.annotations.clear()
+        self.plot.request_redraw(self.render)
+
+    def _draw_annotations(self) -> None:
+        axes = self.plot.figure.get_axes()
+        if not axes or not self.annotations:
+            return
+        for ann in self.annotations:
+            for ax in axes:
+                xlo, xhi = sorted(ax.get_xlim())
+                if not (xlo <= ann["x"] <= xhi):
+                    continue
+                ax.annotate(
+                    f"{ann['x']:.1f}", xy=(ann["x"], ann["y"]),
+                    xytext=(0, 12), textcoords="offset points",
+                    ha="center", fontsize=8, color="#8a3033",
+                    arrowprops=dict(arrowstyle="-", color="#8a3033", lw=0.8),
+                )
+                break  # annotate in the first axes whose x-range contains it
+
+    # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
 
@@ -382,6 +431,7 @@ class SimplePlotWorkspace(QWidget):
                 ax.grid(True, alpha=0.3) if self.grid_check.isChecked() else ax.grid(False)
                 self._draw_cif_bragg_markers()
                 self._apply_axis_limits(skip_redraw=True)
+                self._draw_annotations()
                 fig.tight_layout()
                 self.plot.canvas.draw_idle()
                 return
@@ -438,6 +488,7 @@ class SimplePlotWorkspace(QWidget):
 
         self._draw_cif_bragg_markers()
         self._apply_axis_limits(skip_redraw=True)
+        self._draw_annotations()
         fig.tight_layout()
         self.plot.canvas.draw_idle()
 

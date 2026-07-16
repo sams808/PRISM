@@ -177,6 +177,58 @@ def test_difference_mode_with_wrong_selection_count_falls_back(qtbot, raman_exam
     assert len(widget.plot.figure.get_axes()[0].lines) >= 1
 
 
+def test_click_to_annotate_adds_and_clears_annotations(qtbot, raman_example_path):
+    library = _library_with_raman(raman_example_path)
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()
+    qtbot.wait(200)
+
+    widget.annotate_check.setChecked(True)
+
+    class _FakeClick:
+        inaxes = widget.plot.figure.get_axes()[0]
+        xdata = 981.4
+        ydata = 100.0
+
+    widget._on_plot_click(_FakeClick())
+    qtbot.wait(200)  # debounced re-render
+    assert len(widget.annotations) == 1
+
+    ax = widget.plot.figure.get_axes()[0]
+    assert any("981.4" in t.get_text() for t in ax.texts)
+
+    # Annotations persist across an unrelated re-render (the whole point of
+    # storing them as data, not artists).
+    widget.render()
+    ax = widget.plot.figure.get_axes()[0]
+    assert any("981.4" in t.get_text() for t in ax.texts)
+
+    widget._clear_annotations()
+    qtbot.wait(200)
+    assert widget.annotations == []
+    ax = widget.plot.figure.get_axes()[0]
+    assert not any("981.4" in t.get_text() for t in ax.texts)
+
+
+def test_annotate_click_ignored_when_toggle_off(qtbot, raman_example_path):
+    library = _library_with_raman(raman_example_path)
+    widget = SimplePlotWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()
+    qtbot.wait(200)
+
+    class _FakeClick:
+        inaxes = widget.plot.figure.get_axes()[0]
+        xdata = 500.0
+        ydata = 1.0
+
+    widget._on_plot_click(_FakeClick())  # annotate_check is unchecked
+    assert widget.annotations == []
+
+
 def test_plot_widget_mouse_readout_label_exists(qtbot):
     from qt_widgets import PlotWidget
     widget = PlotWidget()

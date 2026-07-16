@@ -5,19 +5,25 @@ The starkest gap versus every reference tool (Origin .opju, Spectragryph
 sessions): until now, closing Dataapp lost every imported spectrum, fit
 parameter set, and accepted RRUFF identification. A .dataapp file is a ZIP:
 
-    manifest.json   {"format": "dataapp-project", "version": 1, ...}
-    spectra.json    ordered list of Spectrum records (id/title/path/kind/
-                    meta/status) — everything except the arrays
-    data.npz        x/y arrays for every spectrum, keyed "{id}_x"/"{id}_y"
-    fit_params.json {spectrum_id: params_struct} from the shared
-                    PerItemSettingsStore (Peak Fitting / Multi-Fit)
-    df/{id}.csv     full imported DataFrame per spectrum, when present
-                    (needed by e.g. the DTA workspace's column pickers)
+    manifest.json     {"format": "dataapp-project", "version": 2, ...}
+    spectra.json      ordered list of Library Spectrum records (id/title/
+                      path/kind/meta/status) — everything except the arrays
+    data.npz          all arrays: library "{id}_x"/"{id}_y", XAS
+                      "xas_{sid}_energy"/"xas_{sid}_y"(/"xas_{sid}_angle"),
+                      HT-XRD "ht_{i}_x"/"ht_{i}_y"
+    fit_params.json   {spectrum_id: params_struct} from the shared
+                      PerItemSettingsStore (Peak Fitting / Multi-Fit)
+    df/{id}.csv       full imported DataFrame per spectrum, when present
+                      (needed by e.g. the DTA workspace's column pickers)
+    xas_spectra.json  XAS workspace SpectrumStore records incl. e0/label/
+                      units/parents and the full Operation history  (v2)
+    htxrd.json        HT-XRD series records (name/ramp value/source/path) (v2)
 
-Arrays are stored in the project itself rather than re-read from the
-original source paths on load — source files move, network shares
-disappear; a project must stand alone. The original path is still kept as
-provenance metadata.
+Version 2 added the XAS and HT-XRD sections; v1 files load fine (the new
+sections are simply absent -> empty). Arrays are stored in the project
+itself rather than re-read from the original source paths on load — source
+files move, network shares disappear; a project must stand alone. The
+original path is still kept as provenance metadata.
 """
 from __future__ import annotations
 
@@ -25,7 +31,8 @@ import io
 import json
 import time
 import zipfile
-from typing import Any, Dict, List, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -33,7 +40,15 @@ import pandas as pd
 from qt_models import Spectrum
 
 PROJECT_FORMAT = "dataapp-project"
-PROJECT_VERSION = 1
+PROJECT_VERSION = 2
+
+
+@dataclass
+class ProjectData:
+    spectra: List[Spectrum] = field(default_factory=list)
+    fit_params: Dict[str, list] = field(default_factory=dict)
+    xas_spectra: list = field(default_factory=list)      # xas_science.Spectrum
+    htxrd_patterns: list = field(default_factory=list)   # htxrd_science.HtxrdPattern
 
 
 def _json_safe(obj: Any) -> Any:
@@ -52,7 +67,10 @@ def _json_safe(obj: Any) -> Any:
     return str(obj)
 
 
-def save_project(path: str, spectra: List[Spectrum], fit_params: Dict[str, list]) -> None:
+def save_project(
+    path: str, spectra: List[Spectrum], fit_params: Dict[str, list],
+    *, xas_spectra: Optional[list] = None, htxrd_patterns: Optional[list] = None,
+) -> None:
     records = []
     arrays: Dict[str, np.ndarray] = {}
     dfs: Dict[str, pd.DataFrame] = {}
@@ -71,6 +89,38 @@ def save_project(path: str, spectra: List[Spectrum], fit_params: Dict[str, list]
         if sp.df is not None:
             dfs[sp.id] = sp.df
 
+    xas_records = []
+    for sp in (xas_spectra or []):
+        xas_records.append({
+            "sid": sp.sid,
+            "name": sp.name,
+            "kind": sp.kind,
+            "units": sp.units,
+            "label": sp.label,
+            "e0": None if sp.e0 is None or not np.isfinite(sp.e0) else float(sp.e0),
+            "meta": _json_safe(sp.meta),
+            "parents": list(sp.parents),
+            "history": [{"name": op.name, "params": _json_safe(op.params), "when": op.when} for op in sp.history],
+            "has_angle": sp.angle is not None,
+        })
+        arrays[f"xas_{sp.sid}_energy"] = np.asarray(sp.energy, dtype=float)
+        arrays[f"xas_{sp.sid}_y"] = np.asarray(sp.y, dtype=float)
+        if sp.angle is not None:
+            arrays[f"xas_{sp.sid}_angle"] = np.asarray(sp.angle, dtype=float)
+
+    ht_records = []
+    for i, pat in enumerate(htxrd_patterns or []):
+        ht_records.append({
+            "index": i,
+            "path": pat.path,
+            "name": pat.name,
+            "ramp_value": pat.ramp_value,
+            "ramp_source": pat.ramp_source,
+            "meta": _json_safe(pat.meta),
+        })
+        arrays[f"ht_{i}_x"] = np.asarray(pat.x, dtype=float)
+        arrays[f"ht_{i}_y"] = np.asarray(pat.y, dtype=float)
+
     npz_buf = io.BytesIO()
     np.savez_compressed(npz_buf, **arrays)
 
@@ -79,6 +129,8 @@ def save_project(path: str, spectra: List[Spectrum], fit_params: Dict[str, list]
         "version": PROJECT_VERSION,
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "n_spectra": len(records),
+        "n_xas_spectra": len(xas_records),
+        "n_htxrd_patterns": len(ht_records),
     }
 
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -86,11 +138,15 @@ def save_project(path: str, spectra: List[Spectrum], fit_params: Dict[str, list]
         zf.writestr("spectra.json", json.dumps(records, indent=2))
         zf.writestr("data.npz", npz_buf.getvalue())
         zf.writestr("fit_params.json", json.dumps(_json_safe(fit_params), indent=2))
+        if xas_records:
+            zf.writestr("xas_spectra.json", json.dumps(xas_records, indent=2))
+        if ht_records:
+            zf.writestr("htxrd.json", json.dumps(ht_records, indent=2))
         for sid, df in dfs.items():
             zf.writestr(f"df/{sid}.csv", df.to_csv(index=False))
 
 
-def load_project(path: str) -> Tuple[List[Spectrum], Dict[str, list]]:
+def load_project(path: str) -> ProjectData:
     with zipfile.ZipFile(path, "r") as zf:
         manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
         if manifest.get("format") != PROJECT_FORMAT:
@@ -101,12 +157,13 @@ def load_project(path: str) -> Tuple[List[Spectrum], Dict[str, list]]:
                 f"{manifest.get('version')}, this build reads up to {PROJECT_VERSION})."
             )
 
+        names = set(zf.namelist())
         records = json.loads(zf.read("spectra.json").decode("utf-8"))
         with np.load(io.BytesIO(zf.read("data.npz"))) as data:
             arrays = {k: data[k] for k in data.files}
         fit_params = json.loads(zf.read("fit_params.json").decode("utf-8"))
 
-        df_names = {n for n in zf.namelist() if n.startswith("df/") and n.endswith(".csv")}
+        df_names = {n for n in names if n.startswith("df/") and n.endswith(".csv")}
 
         spectra: List[Spectrum] = []
         for rec in records:
@@ -130,4 +187,41 @@ def load_project(path: str) -> Tuple[List[Spectrum], Dict[str, list]]:
                 status=rec.get("status", "imported"),
             ))
 
-    return spectra, fit_params
+        xas_spectra = []
+        if "xas_spectra.json" in names:
+            from xas_science import Operation as XasOperation, Spectrum as XasSpectrum
+            for rec in json.loads(zf.read("xas_spectra.json").decode("utf-8")):
+                sid = rec["sid"]
+                xas_spectra.append(XasSpectrum(
+                    sid=sid,
+                    name=rec.get("name", sid),
+                    kind=rec.get("kind", "mu"),
+                    energy=arrays.get(f"xas_{sid}_energy", np.array([])),
+                    y=arrays.get(f"xas_{sid}_y", np.array([])),
+                    angle=arrays.get(f"xas_{sid}_angle") if rec.get("has_angle") else None,
+                    units=rec.get("units", "a.u."),
+                    label=rec.get("label", "XAS(Unknown)"),
+                    e0=rec.get("e0"),
+                    meta=rec.get("meta", {}) or {},
+                    parents=list(rec.get("parents", [])),
+                    history=[XasOperation(name=op.get("name", "?"), params=op.get("params", {}) or {}, when=op.get("when", 0.0))
+                             for op in rec.get("history", [])],
+                ))
+
+        htxrd_patterns = []
+        if "htxrd.json" in names:
+            from htxrd_science import HtxrdPattern
+            for rec in json.loads(zf.read("htxrd.json").decode("utf-8")):
+                i = rec["index"]
+                htxrd_patterns.append(HtxrdPattern(
+                    path=rec.get("path", ""),
+                    name=rec.get("name", f"pattern_{i}"),
+                    x=arrays.get(f"ht_{i}_x", np.array([])),
+                    y=arrays.get(f"ht_{i}_y", np.array([])),
+                    ramp_value=rec.get("ramp_value"),
+                    ramp_source=rec.get("ramp_source", "none"),
+                    meta=rec.get("meta", {}) or {},
+                ))
+
+    return ProjectData(spectra=spectra, fit_params=fit_params,
+                       xas_spectra=xas_spectra, htxrd_patterns=htxrd_patterns)
