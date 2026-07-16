@@ -488,7 +488,8 @@ class PlaceholderPage(QWidget):
 class DataappMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Dataapp")
+        from qt_help import APP_VERSION
+        self.setWindowTitle(f"Dataapp {APP_VERSION}")
         self.resize(1280, 820)
 
         self.library = SpectrumLibrary()

@@ -9,6 +9,10 @@ from typing import Optional
 
 from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 
+# Single source of the app version: shown in the window title and About,
+# and matched by the git tag (v2.0.0 marks the completed Qt rebuild).
+APP_VERSION = "2.0.0"
+
 HELP_HTML = """
 <h1>Dataapp — quick-start guide</h1>
 
@@ -94,8 +98,8 @@ an assignment table.</p>
 View menu: dark mode, Python console (the live app objects are in scope).</p>
 """
 
-ABOUT_HTML = """
-<h2>Dataapp</h2>
+ABOUT_HTML = f"""
+<h2>Dataapp {APP_VERSION}</h2>
 <p>Import, process, and analyze scientific spectra: Raman, XAS/XANES/EXAFS,
 DTA/DSC/TGA, XRD (including high-temperature series), SAXS.</p>
 <p>Source: <code>github.com/sams808/Dataapp</code></p>

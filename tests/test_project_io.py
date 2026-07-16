@@ -116,6 +116,20 @@ def test_xas_state_round_trips(tmp_path):
     assert loaded.history[1].params["log"] == "ln"
 
 
+def test_bundled_demo_project_loads():
+    """EXAMPLES/demo_project.dataapp is the onboarding demo (File > Open
+    project) — it must always load with the shipped format version."""
+    from conftest import EXAMPLES_DIR
+
+    demo = EXAMPLES_DIR / "demo_project.dataapp"
+    assert demo.is_file()
+    project = project_io.load_project(str(demo))
+    assert len(project.spectra) == 3
+    kinds = {sp.kind for sp in project.spectra}
+    assert "ta_sdt" in kinds  # the DTA example came through typed
+    assert len(project.fit_params) == 1  # the seeded Raman fit model
+
+
 def test_htxrd_state_round_trips(tmp_path):
     """Project v2: an HT-XRD series survives with ramp values/sources and
     arrays — independent of whether the original .rasx files still exist."""
