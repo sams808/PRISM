@@ -74,6 +74,45 @@ def test_delete_and_undo_restores_order(qtbot):
     assert not page.undo_btn.isEnabled()
 
 
+def test_export_selected_single_writes_two_column_txt(qtbot, tmp_path, monkeypatch):
+    window = _window_with(qtbot, [("expo", 2.5)])
+    page = window.library_page
+    page.table.selectRow(0)
+
+    out = tmp_path / "expo.txt"
+    monkeypatch.setattr("qt_shell.QFileDialog.getSaveFileName", staticmethod(lambda *a, **k: (str(out), "")))
+    page._export_selected_txt()
+
+    assert out.exists()
+    data = np.loadtxt(out)
+    assert data.shape == (50, 2)
+    assert np.allclose(data[:, 1], 2.5)
+
+
+def test_export_selected_multi_writes_into_folder(qtbot, tmp_path, monkeypatch):
+    window = _window_with(qtbot, [("one", 1.0), ("two", 2.0)])
+    page = window.library_page
+    page.table.selectAll()
+
+    monkeypatch.setattr("qt_shell.QFileDialog.getExistingDirectory", staticmethod(lambda *a, **k: str(tmp_path)))
+    page._export_selected_txt()
+
+    assert (tmp_path / "one.txt").exists()
+    assert (tmp_path / "two.txt").exists()
+    assert np.allclose(np.loadtxt(tmp_path / "two.txt")[:, 1], 2.0)
+
+
+def test_clear_all_is_undoable(qtbot):
+    window = _window_with(qtbot, [("a", 1), ("b", 2), ("c", 3)])
+    page = window.library_page
+    page.clear_all()  # confirmation auto-answered Yes by conftest fixture
+    assert len(window.library) == 0
+    assert page.undo_btn.isEnabled()
+
+    page._undo_delete()
+    assert [s.title for s in window.library.all()] == ["a", "b", "c"]
+
+
 def test_combine_dialog_sum(qtbot):
     a = _spectrum("a", 2.0)
     b = _spectrum("b", 3.0)

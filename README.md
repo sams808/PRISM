@@ -12,14 +12,21 @@ the Qt migration completed; it remains available in git history.)
 
 | Workspace | What it does |
 |---|---|
-| **Library** | Import data files (auto-detected parser), browse, and preview them. Feeds the Raman/Fitting/Mineral-ID workspaces. |
+| **Library** | Import data files (auto-detected parser, or Custom Import with parser/column override), browse, preview, rename/duplicate/reorder, delete with Undo, Combine/scale (sum, average, weighted subtraction), export as text. Feeds the other workspaces. |
+| **Baseline** | Baseline subtraction (arPLS, ALS, polynomial, spline, rubberband) with live preview, drag-to-pick fit regions, per-spectrum settings memory, and batch apply producing `_bl` spectra. |
 | **Raman** | Simple Plot: multi-spectrum plotting (separate or stacked), smoothing, color schemes, axis controls, CIF Bragg-peak overlays with a per-CIF manager, PNG/SVG/PDF export. |
 | **XAS** | Full XAS/XANES/EXAFS pipeline: EasyXAFS ZIP / CSV / Athena `.prj` import, μ(E) builder (with deglitching), Larch normalization and EXAFS/FT (`pre_edge`, `autobk`, `xftf`), merge/average, difference spectra, linear-combination fitting, edge definer, Athena `.dat`/`.prj` export. Requires `xraylarch` (see `requirements-xas.txt`). |
 | **DTA / Thermal** | Tg determination by three methods (double tangent, parallel tangent, \|dY\| max), integration/extrema "Calculs", batch processing with CSV export. |
-| **Peak Fitting** | Single-spectrum peak fitting (Gaussian / pseudo-Voigt via lmfit): classic one-shot LM or Origin-like stepwise mode, auto peak finding, residual subplot, per-component CSV export, fit reports with R² and peak centroids, save/load parameter models. |
+| **Peak Fitting** | Single-spectrum peak fitting (Gaussian, pseudo-Voigt, true Voigt, EMG via lmfit): classic one-shot LM or Origin-like stepwise mode, auto peak finding, parameter linking, residual subplot, F-test confidence intervals, per-component CSV export, fit reports with R², ±1σ errors and peak centroids, save/load parameter models. |
 | **Multi-Fit** | Batch fitting: apply a saved parameter model ("recipe" — the same JSON files Peak Fitting saves) to many spectra at once; results table + CSV export. |
 | **Mineral ID** | RRUFF database match-assist: ranks mineral candidates by Raman peak overlap, shows each candidate's laser excitation wavelength, overlays the reference spectrum — identification is always the user's explicit decision, never automatic. Requires a local RRUFF cache (see below). |
 | **HT-XRD** | High-temperature XRD series: import a folder of patterns (temperature from `.rasx` metadata or a Jana-style `???` filename template), waterfall view colored by temperature, single-peak tracking (center/FWHM/area vs. T), and automatic flagging of candidate phase-transition windows from fit-quality anomalies. |
+| **Clustering** | KMeans / hierarchical clustering of spectral series with PCA scatter, per-cluster mean spectra, and assignment table. |
+
+Cross-cutting: `.dataapp` project files (everything survives closing the app),
+a Python console (View menu) with the live app objects in scope, dark mode,
+background threading for batch operations, and keyboard shortcuts
+(Ctrl+O import, Ctrl+S save project, Ctrl+E export, Ctrl+Z undo delete).
 
 ## Installation
 
@@ -37,6 +44,11 @@ pip install -r requirements-dev.txt  # pytest + pytest-qt, for running the tests
 ```bash
 python qt_main.py
 ```
+
+Or double-click `Dataapp.bat`. A standalone `Dataapp.exe` (no Python needed)
+can be built with PyInstaller — see the exclusion list in the plan/commit
+history; the built `dist/Dataapp/` folder is portable (~350 MB; the
+Larch-dependent XAS steps require the Python route).
 
 ## Building the RRUFF database cache (Mineral ID workspace)
 

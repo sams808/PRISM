@@ -312,8 +312,58 @@ class LibraryPage(QWidget):
         if len(selected) >= 2:
             menu.addAction("Combine / scale…", self._on_combine_clicked)
             menu.addSeparator()
+        menu.addAction(f"Export {len(selected)} item(s) as text…", self._export_selected_txt)
+        menu.addSeparator()
         menu.addAction(f"Delete {len(selected)} item(s)", self._delete_selected)
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _export_selected_txt(self) -> None:
+        """Write each selected spectrum as a two-column tab-separated .txt —
+        the way derived spectra (baseline-subtracted, combined, …) get back
+        OUT of the app for use elsewhere (Origin, notebooks, colleagues)."""
+        selected = self._selected_spectra()
+        if not selected:
+            return
+        if len(selected) == 1:
+            sp = selected[0]
+            path, _ = QFileDialog.getSaveFileName(self, "Export spectrum as…", f"{sp.title}.txt", "Text (*.txt);;CSV (*.csv)")
+            if not path:
+                return
+            targets = [(sp, path)]
+        else:
+            folder = QFileDialog.getExistingDirectory(self, "Export selected spectra into folder…")
+            if not folder:
+                return
+            targets = [(sp, os.path.join(folder, f"{sp.title}.txt")) for sp in selected]
+
+        written, errors = 0, []
+        for sp, path in targets:
+            try:
+                sep = "," if path.lower().endswith(".csv") else "\t"
+                data = np.column_stack([np.asarray(sp.x, float), np.asarray(sp.y, float)])
+                np.savetxt(path, data, delimiter=sep, header=f"{sp.title} (exported from Dataapp)", comments="# ")
+                written += 1
+            except OSError as exc:
+                errors.append(f"{sp.title}: {exc}")
+        msg = f"Exported {written} file(s)."
+        if errors:
+            msg += "\nFailed: " + "; ".join(errors)
+            QMessageBox.warning(self, "Export", msg)
+
+    def clear_all(self) -> None:
+        """Clear the whole library (the old app's 'Clear imports') — done
+        through the same delete path, so it's undoable."""
+        if len(self.library) == 0:
+            return
+        resp = QMessageBox.question(self, "Clear imports", f"Remove all {len(self.library)} spectra from the library? (Undo is available.)")
+        if resp != QMessageBox.Yes:
+            return
+        batch = [(i, sp) for i, sp in enumerate(self.library.all())]
+        for _, sp in batch:
+            self.library.remove(sp.id)
+        self._undo_stack.append(batch)
+        self.undo_btn.setEnabled(True)
+        self._refresh_table()
 
     def _rename_selected(self) -> None:
         selected = self._selected_spectra()
@@ -494,10 +544,17 @@ class DataappMainWindow(QMainWindow):
         self.nav.setCurrentRow(0)
 
         file_menu = self.menuBar().addMenu("&File")
-        file_menu.addAction("Open project…", self.open_project)
-        file_menu.addAction("Save project as…", self.save_project)
+        file_menu.addAction("Import files…", self.library_page._on_import_clicked, "Ctrl+O")
+        file_menu.addAction("Custom import…", self.library_page._on_custom_import_clicked, "Ctrl+I")
+        file_menu.addAction("Export selected as text…", self.library_page._export_selected_txt, "Ctrl+E")
         file_menu.addSeparator()
-        file_menu.addAction("Exit", self.close)
+        file_menu.addAction("Open project…", self.open_project, "Ctrl+Shift+O")
+        file_menu.addAction("Save project as…", self.save_project, "Ctrl+S")
+        file_menu.addSeparator()
+        file_menu.addAction("Clear imports…", self.library_page.clear_all)
+        file_menu.addAction("Undo delete", self.library_page._undo_delete, "Ctrl+Z")
+        file_menu.addSeparator()
+        file_menu.addAction("Exit", self.close, "Ctrl+Q")
 
         view_menu = self.menuBar().addMenu("&View")
         self.dark_mode_action = view_menu.addAction("Dark mode")
@@ -510,6 +567,28 @@ class DataappMainWindow(QMainWindow):
         self._console_dock = None  # created lazily on first open
 
         self.statusBar().showMessage("Ready.")
+
+        # Restore window geometry + last-used workspace from the previous
+        # session (QSettings, per-user registry on Windows).
+        from PySide6.QtCore import QSettings
+        settings = QSettings("Dataapp", "Dataapp")
+        geometry = settings.value("geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        nav_row = settings.value("nav_row", 0, type=int)
+        if 0 <= nav_row < self.nav.count():
+            self.nav.setCurrentRow(nav_row)
+            # setCurrentRow doesn't fire currentRowChanged when the row is
+            # unchanged, and the per-workspace refresh hook must still run
+            # for whatever page we restored into.
+            self._on_nav_changed(self.nav.currentRow())
+
+    def closeEvent(self, event) -> None:
+        from PySide6.QtCore import QSettings
+        settings = QSettings("Dataapp", "Dataapp")
+        settings.setValue("geometry", self.saveGeometry())
+        settings.setValue("nav_row", self.nav.currentRow())
+        super().closeEvent(event)
 
     def _on_rruff_send_cifs(self, cif_paths) -> None:
         """RRUFF→CIF handoff target: add the structures to the Raman

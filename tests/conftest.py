@@ -101,6 +101,33 @@ def _synchronous_workers():
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_qsettings(monkeypatch):
+    """Tests must not read or write the real per-user QSettings (Windows
+    registry): the shell restores window geometry and the last-used nav row
+    from there, so a REAL value left by the developer's own app launches
+    would leak into tests (it did — a restored nav row broke two shell
+    tests until this fixture). Replace QSettings with an in-memory no-op."""
+    import sys
+    if "PySide6.QtCore" not in sys.modules:
+        yield
+        return
+
+    class _FakeQSettings:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def value(self, key, default=None, type=None):  # noqa: A002 - Qt's own kwarg name
+            return default
+
+        def setValue(self, key, value):
+            pass
+
+    import PySide6.QtCore
+    monkeypatch.setattr(PySide6.QtCore, "QSettings", _FakeQSettings)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _prevent_blocking_qt_dialogs(monkeypatch):
     """Autouse safety net for Qt tests: an accidental REAL (unmocked)
     QMessageBox.information/warning/critical/question call opens a real
