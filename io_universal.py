@@ -936,6 +936,12 @@ register_parser(ParserSpec("generic_xy", sniff_generic_xy, parse_generic_xy, pri
 # ==============================
 # Public API
 # ==============================
+def available_parsers() -> list[str]:
+    """Registered parser names in priority order — for UI parser-override
+    dropdowns (the Custom Import dialog)."""
+    return [spec.name for spec in _REGISTRY]
+
+
 def load_any(path: str, *, x_key: str | None = None, y_key: str | None = None,
              prefer: str | None = None, return_meta: bool = False):
     """

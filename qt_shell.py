@@ -212,6 +212,11 @@ class LibraryPage(QWidget):
         import_btn.clicked.connect(self._on_import_clicked)
         left_layout.addWidget(import_btn)
 
+        custom_import_btn = QPushButton("Custom import…")
+        custom_import_btn.setToolTip("Pick the parser and X/Y columns manually — for files the auto-detection guesses wrong on.")
+        custom_import_btn.clicked.connect(self._on_custom_import_clicked)
+        left_layout.addWidget(custom_import_btn)
+
         combine_btn = QPushButton("Combine / scale selected…")
         combine_btn.clicked.connect(self._on_combine_clicked)
         left_layout.addWidget(combine_btn)
@@ -374,6 +379,20 @@ class LibraryPage(QWidget):
         self.library.reorder(order)
         self.undo_btn.setEnabled(bool(self._undo_stack))
         self._refresh_table()
+
+    def _on_custom_import_clicked(self) -> None:
+        from qt_custom_import import CustomImportDialog
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Custom import", "", "All files (*.*)",
+        )
+        added = 0
+        for path in paths:
+            dlg = CustomImportDialog(self, path)
+            if dlg.exec() and dlg.spectrum is not None:
+                self.library.add(dlg.spectrum)
+                added += 1
+        if added:
+            self._refresh_table()
 
     def _on_combine_clicked(self) -> None:
         selected = self._selected_spectra()

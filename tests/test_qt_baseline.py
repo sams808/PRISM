@@ -102,6 +102,33 @@ def test_per_spectrum_settings_persist_across_selection(qtbot):
     assert widget.method_combo.currentText() == "poly"
 
 
+def test_pick_roi_by_dragging_appends_segments(qtbot):
+    library = _library_with_baselined_spectrum()
+    widget = BaselineWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.item(0).setSelected(True)
+
+    widget.pick_roi_btn.setChecked(True)  # draws the raw spectrum + arms the selector
+    qtbot.wait(20)
+    assert widget._span_selector is not None
+
+    widget._on_span_selected(100.0, 450.0)
+    widget._on_span_selected(700.0, 1000.0)
+    assert widget.roi_edit.text() == "100-450; 700-1000"
+
+    # Un-toggling detaches the selector.
+    widget.pick_roi_btn.setChecked(False)
+    assert widget._span_selector is None
+
+    # And the picked regions are directly usable by a poly preview.
+    widget.method_combo.setCurrentText("poly")
+    widget.param_edits[0].setText("1")
+    widget.preview()
+    qtbot.wait(20)
+    assert widget._last_preview is not None
+
+
 def test_shell_baseline_page_picks_up_library_records(qtbot, raman_example_path):
     from qt_shell import _load_spectrum_from_path
 
