@@ -12,12 +12,13 @@ from qt_htxrd import HtxrdWorkspace
 from qt_shell import DataappMainWindow
 
 
-def _write_series(tmp_path, temps=(100, 200, 300), center_by_temp=None):
+def _write_series(tmp_path, temps=(100, 200, 300), center_by_temp=None, noise=0.0):
     x = np.linspace(20, 40, 600)
+    rng = np.random.default_rng(0)
     paths = []
     for t in temps:
         center = center_by_temp(t) if center_by_temp else 30.0
-        y = rp.gaussian(x, 500.0, center, 0.3) + 50.0
+        y = rp.gaussian(x, 500.0, center, 0.3) + 50.0 + (rng.normal(0, noise, x.shape) if noise else 0.0)
         p = tmp_path / f"scan_{t}.xy"
         np.savetxt(p, np.column_stack([x, y]))
         paths.append(str(p))
@@ -60,27 +61,28 @@ def test_track_peak_populates_table_plot_and_flags(qtbot, tmp_path, monkeypatch)
     widget.import_files()
     qtbot.wait(200)
 
-    widget.window_lo_edit.setText("29.0")
-    widget.window_hi_edit.setText("31.0")
+    widget.windows_edit.setText("29.0-31.0")
     widget.run_track_peak()
     qtbot.wait(20)
 
-    assert len(widget.track_results) == 4
-    assert all(r.error is None for r in widget.track_results)
+    assert list(widget.track_results.keys()) == ["29-31"]
+    rows = widget.track_results["29-31"]
+    assert len(rows) == 4
+    assert all(r.error is None and r.present for r in rows)
     assert widget.track_table.rowCount() == 4
     # Centers should decrease with temperature (built-in linear shift).
-    centers = [r.center for r in widget.track_results]
+    centers = [r.center for r in rows]
     assert centers == sorted(centers, reverse=True)
     # Three stacked subplots: center/FWHM/area vs ramp.
     assert len(widget.track_plot.figure.get_axes()) == 3
-    assert "anomalies" in widget.transition_text.toPlainText().lower() or "transition" in widget.transition_text.toPlainText().lower()
+    assert "transition" in widget.transition_text.toPlainText().lower()
 
 
 def test_track_peak_without_series_warns(qtbot):
     widget = HtxrdWorkspace()
     qtbot.addWidget(widget)
     widget.run_track_peak()  # QMessageBox.warning neutralized by conftest fixture
-    assert widget.track_results == []
+    assert widget.track_results == {}
 
 
 def test_track_peak_invalid_window_warns(qtbot, tmp_path, monkeypatch):
@@ -91,10 +93,9 @@ def test_track_peak_invalid_window_warns(qtbot, tmp_path, monkeypatch):
     widget.import_files()
     qtbot.wait(200)
 
-    widget.window_lo_edit.setText("31.0")
-    widget.window_hi_edit.setText("29.0")  # inverted
+    widget.windows_edit.setText("31.0-29.0")  # inverted
     widget.run_track_peak()
-    assert widget.track_results == []
+    assert widget.track_results == {}
 
 
 def test_export_track_csv_writes_file(qtbot, tmp_path, monkeypatch):
@@ -105,8 +106,7 @@ def test_export_track_csv_writes_file(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr("qt_htxrd.QFileDialog.getOpenFileNames", staticmethod(lambda *a, **k: (paths, "")))
     widget.import_files()
     qtbot.wait(200)
-    widget.window_lo_edit.setText("29.0")
-    widget.window_hi_edit.setText("31.0")
+    widget.windows_edit.setText("29.0-31.0")
     widget.run_track_peak()
     qtbot.wait(20)
 
@@ -117,7 +117,85 @@ def test_export_track_csv_writes_file(qtbot, tmp_path, monkeypatch):
     assert out_path.exists()
     content = out_path.read_text()
     assert "center_2theta" in content
+    assert "present" in content
     assert "scan_100" in content
+
+
+def test_multi_window_tracking_populates_labels_and_legend(qtbot, tmp_path, monkeypatch):
+    # real noise so the absence test has a noise floor to compare against
+    paths = _write_series(tmp_path, temps=(100, 200, 300), noise=2.0)
+    widget = HtxrdWorkspace()
+    qtbot.addWidget(widget)
+    widget.template_edit.setText("scan_???.xy")
+    monkeypatch.setattr("qt_htxrd.QFileDialog.getOpenFileNames", staticmethod(lambda *a, **k: (paths, "")))
+    widget.import_files()
+    qtbot.wait(200)
+
+    widget.windows_edit.setText("29.0-31.0 @ 30.0; 20.5-25.0")
+    widget.run_track_peak()
+    qtbot.wait(20)
+
+    assert set(widget.track_results.keys()) == {"29-31 @ 30", "20.5-25"}
+    assert widget.track_table.rowCount() == 6  # 3 patterns × 2 windows
+    # The second window holds no peak (flat baseline) -> absent, not error
+    empty_rows = widget.track_results["20.5-25"]
+    assert all(r.error is None for r in empty_rows)
+    assert not any(r.present for r in empty_rows)
+
+
+def test_maps_tab_renders_heatmap_difference_and_3d(qtbot, tmp_path, monkeypatch):
+    """The notebook-ported Maps tab: every plot type renders on a real
+    series without raising, and the difference map resolves its reference
+    by temperature."""
+    paths = _write_series(tmp_path, temps=(100, 200, 300))
+    widget = HtxrdWorkspace()
+    qtbot.addWidget(widget)
+    widget.template_edit.setText("scan_???.xy")
+    monkeypatch.setattr("qt_htxrd.QFileDialog.getOpenFileNames", staticmethod(lambda *a, **k: (paths, "")))
+    widget.import_files()
+    qtbot.wait(200)
+
+    for plot_type in ("Heatmap", "Difference map", "Difference waterfall", "3D surface"):
+        widget.map_type_combo.setCurrentText(plot_type)
+        widget.render_maps()
+        qtbot.wait(20)
+        assert len(widget.maps_plot.figure.get_axes()) >= 1, plot_type
+
+    # reference by temperature: '210' resolves to the 200 °C pattern
+    widget.map_type_combo.setCurrentText("Difference map")
+    widget.reference_edit.setText("210.0")
+    widget.render_maps()
+    qtbot.wait(20)
+    title = widget.maps_plot.figure.get_axes()[0].get_title()
+    assert "Difference map" in title
+
+    # guides draw on the heatmap without error
+    widget.map_type_combo.setCurrentText("Heatmap")
+    widget.guides_edit.setText("{1:30.0; 3:29.8}")
+    widget.render_maps()
+    qtbot.wait(20)
+    ax = widget.maps_plot.figure.get_axes()[0]
+    assert any(ln.get_linestyle() == "--" for ln in ax.lines)
+
+
+def test_time_axis_from_heating_rate(qtbot, tmp_path, monkeypatch):
+    paths = _write_series(tmp_path, temps=(100, 200, 300))
+    widget = HtxrdWorkspace()
+    qtbot.addWidget(widget)
+    widget.template_edit.setText("scan_???.xy")
+    monkeypatch.setattr("qt_htxrd.QFileDialog.getOpenFileNames", staticmethod(lambda *a, **k: (paths, "")))
+    widget.import_files()
+    qtbot.wait(200)
+
+    widget.heating_rate_edit.setText("10")
+    widget.yaxis_combo.setCurrentText("Time (min)")
+    vals, label = widget._y_axis(widget.series)
+    assert label == "Time (min)"
+    assert np.allclose(vals, [0.0, 10.0, 20.0])
+
+    widget.heating_rate_edit.setText("")  # no rate -> falls back to ramp axis
+    vals, label = widget._y_axis(widget.series)
+    assert "Time" not in label
 
 
 def test_real_rasx_example_loads_with_metadata_temperature(qtbot, monkeypatch, examples_dir):

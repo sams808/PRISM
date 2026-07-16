@@ -93,9 +93,18 @@ workspace. Requires the one-time local database build (see the README).</p>
 <h2>HT-XRD</h2>
 <p>Import a whole folder of patterns; temperatures come from <code>.rasx</code>
 metadata or a filename template like <code>scan_???.xy</code>. The waterfall is
-colored by temperature. Enter a 2θ window around a peak and <b>Track</b>: center /
-width / area vs temperature, with automatic flagging of fit-quality anomalies —
-candidate phase-transition windows.</p>
+colored by temperature. The <b>Maps</b> tab adds a 2D heatmap
+(linear/log/sqrt/power color scales), a difference map or difference waterfall
+vs a reference pattern ("first", an index, or a temperature), a 3D surface,
+an optional time axis from the heating rate, and dashed peak-guide lines
+(<code>{slice:2θ; slice:2θ}</code> anchors, interpolated).</p>
+<p><b>Tracking</b> takes several windows at once — <code>28.5-29.5 @ 28.98; 31-32</code> —
+where the <code>@</code> anchor picks WHICH peak to track when a window holds
+more than one. Each pattern's fit is seeded from the previous one (so it
+follows a drifting peak instead of jumping to a stronger neighbor), and a
+peak weaker than the <i>Absence σ</i> noise threshold is reported as absent
+instead of a garbage fit — vanished/appeared peaks are flagged as transition
+signatures alongside fit-quality anomalies.</p>
 
 <h2>Clustering</h2>
 <p>Select a series (e.g. a multi-point map), choose KMeans or hierarchical and

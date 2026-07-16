@@ -1,18 +1,25 @@
 """
-qt_htxrd.py — HTXRD series-processing workspace (M20).
+qt_htxrd.py — HTXRD series-processing workspace (M20, reworked after real
+use).
 
 Thin Qt layer over htxrd_science.py: import a whole folder (or file
 selection) of diffraction patterns as one temperature-ordered series
 (.rasx Temp metadata -> Jana-style filename template -> sequence index),
-view it as a stacked/waterfall plot ordered by temperature, track one peak
-across the series inside a user-chosen 2theta window (center/FWHM/area vs
-temperature — the tractable analog of Jana's cell-parameter Graph tool),
-and flag candidate phase-transition windows from fit-quality jumps.
+then:
+  - Waterfall view (temperature-colored, optional peak guide lines),
+  - Maps view ported from the user's own XRD_HT.ipynb: 2D heatmap
+    (linear/log/sqrt/power color scaling), difference map / difference
+    waterfall vs a reference pattern, 3D surface, temperature-or-time
+    y-axis from a heating rate,
+  - Multi-window peak tracking with sequential seeding, per-window "@"
+    anchors picking WHICH peak to track, and absence detection (peaks that
+    vanish/appear are flagged as transition signatures, not fit garbage).
 """
 from __future__ import annotations
 
 import csv
-from typing import List, Optional
+import re
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -25,12 +32,23 @@ from PySide6.QtWidgets import (
 from htxrd_science import (
     HtxrdPattern,
     PeakTrackResult,
+    build_common_grid,
+    build_intensity_map,
+    compute_relative_time_minutes,
+    estimate_waterfall_shift,
+    evaluate_peak_guide,
     find_series_files,
     flag_transition_candidates,
     load_series,
-    track_peak,
+    parse_peak_guides,
+    parse_track_windows,
+    reference_index,
+    track_peaks_multi,
 )
 from qt_widgets import PlotWidget
+
+MAP_CMAPS = ["magma", "inferno", "viridis", "plasma", "jet", "Greys", "RdBu_r"]
+TRACK_COLORS = ["royalblue", "crimson", "seagreen", "darkorange", "purple", "brown", "teal"]
 
 
 def _to_float(text: str, default: Optional[float] = None) -> Optional[float]:
@@ -44,7 +62,7 @@ class HtxrdWorkspace(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.series: List[HtxrdPattern] = []
-        self.track_results: List[PeakTrackResult] = []
+        self.track_results: Dict[str, List[PeakTrackResult]] = {}
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -89,15 +107,31 @@ class HtxrdWorkspace(QWidget):
         shift_row.addStretch(1)
         left_layout.addLayout(shift_row)
 
-        left_layout.addWidget(QLabel("Peak tracking — 2θ window"))
-        window_row = QHBoxLayout()
-        self.window_lo_edit = QLineEdit()
-        self.window_lo_edit.setPlaceholderText("2θ min")
-        self.window_hi_edit = QLineEdit()
-        self.window_hi_edit.setPlaceholderText("2θ max")
-        window_row.addWidget(self.window_lo_edit)
-        window_row.addWidget(self.window_hi_edit)
-        left_layout.addLayout(window_row)
+        rate_row = QHBoxLayout()
+        rate_row.addWidget(QLabel("Heating rate (°C/min)"))
+        self.heating_rate_edit = QLineEdit()
+        self.heating_rate_edit.setPlaceholderText("optional")
+        self.heating_rate_edit.setMaximumWidth(70)
+        self.heating_rate_edit.setToolTip("Enables the 'Time (min)' y-axis on the Maps tab.")
+        rate_row.addWidget(self.heating_rate_edit)
+        left_layout.addLayout(rate_row)
+
+        left_layout.addWidget(QLabel("Peak tracking — 2θ windows\n('lo-hi @ center; lo-hi'; the @ anchor picks WHICH\npeak to track when a window holds several)"))
+        self.windows_edit = QLineEdit()
+        self.windows_edit.setPlaceholderText("28.5-29.5 @ 28.98; 31-32")
+        left_layout.addWidget(self.windows_edit)
+
+        track_opts = QHBoxLayout()
+        self.seed_check = QCheckBox("Seed from previous")
+        self.seed_check.setChecked(True)
+        self.seed_check.setToolTip("Each pattern's fit starts from the previous pattern's result (sequential refinement) — keeps the fit on a drifting peak.")
+        track_opts.addWidget(self.seed_check)
+        track_opts.addWidget(QLabel("Absence σ"))
+        self.absence_edit = QLineEdit("3.0")
+        self.absence_edit.setMaximumWidth(45)
+        self.absence_edit.setToolTip("A fitted peak weaker than this many noise σ is reported as ABSENT instead of a garbage fit.")
+        track_opts.addWidget(self.absence_edit)
+        left_layout.addLayout(track_opts)
 
         shape_row = QHBoxLayout()
         shape_row.addWidget(QLabel("Peak shape"))
@@ -106,7 +140,7 @@ class HtxrdWorkspace(QWidget):
         shape_row.addWidget(self.shape_combo)
         left_layout.addLayout(shape_row)
 
-        self._track_btn = QPushButton("Track peak across series")
+        self._track_btn = QPushButton("Track peaks across series")
         self._track_btn.setObjectName("Primary")
         self._track_btn.clicked.connect(self.run_track_peak)
         left_layout.addWidget(self._track_btn)
@@ -131,12 +165,58 @@ class HtxrdWorkspace(QWidget):
         wl.addWidget(self.plot)
         self.tabs.addTab(waterfall_tab, "Waterfall")
 
+        maps_tab = QWidget()
+        ml = QVBoxLayout(maps_tab)
+        maps_controls = QHBoxLayout()
+        self.map_type_combo = QComboBox()
+        self.map_type_combo.addItems(["Heatmap", "Difference map", "Difference waterfall", "3D surface"])
+        maps_controls.addWidget(self.map_type_combo)
+        self.map_intensity_combo = QComboBox()
+        self.map_intensity_combo.addItems(["raw", "normalized"])
+        maps_controls.addWidget(self.map_intensity_combo)
+        self.map_scale_combo = QComboBox()
+        self.map_scale_combo.addItems(["linear", "log", "sqrt", "power"])
+        maps_controls.addWidget(self.map_scale_combo)
+        self.map_cmap_combo = QComboBox()
+        self.map_cmap_combo.addItems(MAP_CMAPS)
+        maps_controls.addWidget(self.map_cmap_combo)
+        self.yaxis_combo = QComboBox()
+        self.yaxis_combo.addItems(["Temperature", "Time (min)"])
+        maps_controls.addWidget(self.yaxis_combo)
+        ml.addLayout(maps_controls)
+
+        maps_controls2 = QHBoxLayout()
+        maps_controls2.addWidget(QLabel("Diff. reference"))
+        self.reference_edit = QLineEdit("first")
+        self.reference_edit.setMaximumWidth(60)
+        self.reference_edit.setToolTip("'first', a pattern index (e.g. 3), or a temperature (e.g. 610.5 — nearest pattern wins).")
+        maps_controls2.addWidget(self.reference_edit)
+        self.diff_mode_combo = QComboBox()
+        self.diff_mode_combo.addItems(["signed", "absolute"])
+        maps_controls2.addWidget(self.diff_mode_combo)
+        maps_controls2.addWidget(QLabel("Guides"))
+        self.guides_edit = QLineEdit()
+        self.guides_edit.setPlaceholderText("{1:29; 57:28.65} {39:29.63; 57:29.4}")
+        self.guides_edit.setToolTip("Peak guide lines: {slice:2θ; slice:2θ} anchors, linearly interpolated (1-based slices, sorted by ramp). Drawn on the heatmap and waterfall.")
+        maps_controls2.addWidget(self.guides_edit, 1)
+        ml.addLayout(maps_controls2)
+
+        for combo in (self.map_type_combo, self.map_intensity_combo, self.map_scale_combo,
+                      self.map_cmap_combo, self.yaxis_combo, self.diff_mode_combo):
+            combo.currentIndexChanged.connect(lambda *_: self.maps_plot.request_redraw(self.render_maps))
+        self.reference_edit.editingFinished.connect(lambda: self.maps_plot.request_redraw(self.render_maps))
+        self.guides_edit.editingFinished.connect(lambda: self.maps_plot.request_redraw(self.render_maps))
+
+        self.maps_plot = PlotWidget(figsize=(7, 5.5))
+        ml.addWidget(self.maps_plot, 1)
+        self.tabs.addTab(maps_tab, "Maps")
+
         track_tab = QWidget()
         tl = QVBoxLayout(track_tab)
         self.track_plot = PlotWidget(figsize=(7, 5))
         tl.addWidget(self.track_plot, 2)
-        self.track_table = QTableWidget(0, 7)
-        self.track_table.setHorizontalHeaderLabels(["Pattern", "Ramp", "Center", "FWHM", "Amplitude", "Area", "chi2_red"])
+        self.track_table = QTableWidget(0, 9)
+        self.track_table.setHorizontalHeaderLabels(["Window", "Pattern", "Ramp", "Center", "FWHM", "Amplitude", "Area", "chi2_red", "Present"])
         self.track_table.setEditTriggers(QTableWidget.NoEditTriggers)
         tl.addWidget(self.track_table, 1)
         self.transition_text = QTextEdit()
@@ -195,12 +275,33 @@ class HtxrdWorkspace(QWidget):
         )
         self.render_waterfall()
         self.plot.canvas.draw_idle()
+        self.maps_plot.request_redraw(self.render_maps)
 
     def _selected_patterns(self) -> List[HtxrdPattern]:
         selected_rows = {i.row() for i in self.series_list.selectedIndexes()}
         if not selected_rows:
             return list(self.series)
         return [p for i, p in enumerate(self.series) if i in selected_rows]
+
+    def _parse_guides(self) -> list:
+        """Guides field: any number of '{slice:2θ; slice:2θ}' groups."""
+        text = self.guides_edit.text().strip()
+        if not text:
+            return []
+        try:
+            return parse_peak_guides(re.findall(r"\{[^}]*\}", text))
+        except (ValueError, TypeError):
+            return []
+
+    def _y_axis(self, patterns: List[HtxrdPattern]):
+        """(values, label) for map y-axes: temperature, or minutes when a
+        heating rate is given and 'Time (min)' is selected."""
+        ramps = np.array([p.ramp_value for p in patterns], float)
+        if self.yaxis_combo.currentText().startswith("Time"):
+            times = compute_relative_time_minutes(ramps, _to_float(self.heating_rate_edit.text()))
+            if times is not None:
+                return times, "Time (min)"
+        return ramps, "Temperature (°C)" if any(p.ramp_source == "metadata" for p in patterns) else "Ramp value"
 
     # ------------------------------------------------------------------
     def render_waterfall(self) -> None:
@@ -226,15 +327,31 @@ class HtxrdWorkspace(QWidget):
         except Exception:
             norm = None
 
+        display_y = []
         for i, pat in enumerate(patterns):
             y = pat.y.astype(float)
             if self.normalize_check.isChecked():
                 rng = np.nanmax(y) - np.nanmin(y)
                 if rng > 0:
                     y = (y - np.nanmin(y)) / rng * max_dy
+            display_y.append(y)
             color = cmap(norm(pat.ramp_value)) if (cmap is not None and norm is not None) else None
             label = f"{pat.ramp_value:g}" + ("°C" if pat.ramp_source == "metadata" else "")
             ax.plot(pat.x, y + i * delta, lw=0.8, color=color, label=label if len(patterns) <= 15 else None)
+
+        # Peak guide lines (notebook feature): interpolated 2θ anchors drawn
+        # at each slice's own intensity + offset.
+        for guide in self._parse_guides():
+            _, xpos = evaluate_peak_guide(guide, len(patterns))
+            gx, gy = [], []
+            for i, xg in enumerate(xpos):
+                if not np.isfinite(xg):
+                    continue
+                yg = float(np.interp(xg, patterns[i].x, display_y[i]))
+                gx.append(xg)
+                gy.append(yg + i * delta + 0.02 * delta)
+            if gx:
+                ax.plot(gx, gy, "k--", lw=1.0)
 
         ax.set_xlabel("2θ (deg)")
         ax.set_ylabel("Intensity (offset)")
@@ -246,57 +363,203 @@ class HtxrdWorkspace(QWidget):
         self.plot.canvas.draw_idle()
 
     # ------------------------------------------------------------------
+    # Maps tab (ported from the user's XRD_HT.ipynb)
+    # ------------------------------------------------------------------
+    def _color_norm(self, data: np.ndarray, scale: str, signed: bool = False):
+        import matplotlib.colors as mcolors
+        finite = data[np.isfinite(data)]
+        if finite.size == 0:
+            return mcolors.Normalize(vmin=0, vmax=1)
+        if signed:
+            vmax = float(np.nanmax(np.abs(finite)))
+            return mcolors.Normalize(vmin=-vmax, vmax=vmax)
+        if scale == "log":
+            pos = finite[finite > 0]
+            if pos.size:
+                return mcolors.LogNorm(vmin=float(pos.min()), vmax=float(pos.max()))
+            scale = "linear"
+        if scale == "sqrt":
+            return mcolors.PowerNorm(gamma=0.5, vmin=float(finite.min()), vmax=float(finite.max()))
+        if scale == "power":
+            return mcolors.PowerNorm(gamma=0.8, vmin=float(finite.min()), vmax=float(finite.max()))
+        return mcolors.Normalize(vmin=float(finite.min()), vmax=float(finite.max()))
+
+    def _parse_reference(self):
+        text = self.reference_edit.text().strip() or "first"
+        if text.lower() == "first":
+            return "first"
+        try:
+            return int(text) if re.fullmatch(r"[+-]?\d+", text) else float(text)
+        except ValueError:
+            return "first"
+
+    def render_maps(self) -> None:
+        patterns = self._selected_patterns()
+        fig = self.maps_plot.figure
+        fig.clf()
+        if len(patterns) < 2:
+            ax = fig.add_subplot(111)
+            ax.set_title("Maps need at least 2 patterns")
+            self.maps_plot.canvas.draw_idle()
+            return
+
+        try:
+            grid = build_common_grid(patterns, npts=2000)
+        except ValueError as exc:
+            ax = fig.add_subplot(111)
+            ax.set_title(str(exc))
+            self.maps_plot.canvas.draw_idle()
+            return
+        normalize = self.map_intensity_combo.currentText() == "normalized"
+        data = build_intensity_map(patterns, grid, normalize=normalize)
+        yvals, ylabel = self._y_axis(patterns)
+        cmap_name = self.map_cmap_combo.currentText()
+        scale = self.map_scale_combo.currentText()
+        plot_type = self.map_type_combo.currentText()
+        temps = np.array([p.ramp_value for p in patterns], float)
+
+        if plot_type == "Heatmap":
+            ax = fig.add_subplot(111)
+            show = data.copy()
+            if scale == "log":
+                show = np.where(show > 0, show, np.nan)
+            mesh = ax.pcolormesh(grid, yvals, show, cmap=cmap_name, norm=self._color_norm(show, scale), shading="nearest")
+            fig.colorbar(mesh, ax=ax, label=f"{'normalized ' if normalize else ''}intensity ({scale})")
+            for guide in self._parse_guides():
+                _, xpos = evaluate_peak_guide(guide, len(patterns))
+                ok = np.isfinite(xpos)
+                if np.any(ok):
+                    ax.plot(xpos[ok], yvals[ok], "k--", lw=1.0)
+            ax.set_xlabel("2θ (deg)")
+            ax.set_ylabel(ylabel)
+            ax.set_title("Intensity heatmap")
+
+        elif plot_type == "Difference map":
+            ax = fig.add_subplot(111)
+            try:
+                ref_idx = reference_index(patterns, self._parse_reference())
+            except ValueError as exc:
+                ax.set_title(str(exc))
+                self.maps_plot.canvas.draw_idle()
+                return
+            diff = data - data[ref_idx][None, :]
+            signed = self.diff_mode_combo.currentText() == "signed"
+            if not signed:
+                diff = np.abs(diff)
+            use_cmap = "RdBu_r" if signed else cmap_name
+            mesh = ax.pcolormesh(grid, yvals, diff, cmap=use_cmap,
+                                 norm=self._color_norm(diff, scale if not signed else "linear", signed=signed),
+                                 shading="nearest")
+            fig.colorbar(mesh, ax=ax, label=f"Δ intensity vs slice {ref_idx + 1} ({patterns[ref_idx].ramp_value:g})")
+            ax.set_xlabel("2θ (deg)")
+            ax.set_ylabel(ylabel)
+            ax.set_title(f"Difference map ({'signed' if signed else 'absolute'})")
+
+        elif plot_type == "Difference waterfall":
+            ax = fig.add_subplot(111)
+            try:
+                ref_idx = reference_index(patterns, self._parse_reference())
+            except ValueError as exc:
+                ax.set_title(str(exc))
+                self.maps_plot.canvas.draw_idle()
+                return
+            diff = data - data[ref_idx][None, :]
+            shift = estimate_waterfall_shift(diff) * (_to_float(self.shift_edit.text(), 1.0) or 1.0)
+            import matplotlib
+            import matplotlib.colors as mcolors
+            norm_t = mcolors.Normalize(vmin=float(temps.min()), vmax=float(temps.max()) or 1.0)
+            cm = matplotlib.colormaps[cmap_name]
+            for i in range(len(patterns)):
+                ax.plot(grid, diff[i] + i * shift, lw=0.8, color=cm(norm_t(temps[i])))
+            sm = matplotlib.cm.ScalarMappable(norm=norm_t, cmap=cm)
+            fig.colorbar(sm, ax=ax, label="Temperature (°C)")
+            ax.set_yticks([])
+            ax.set_xlabel("2θ (deg)")
+            ax.set_ylabel("Δ intensity + offset")
+            ax.set_title(f"Difference waterfall vs slice {ref_idx + 1} ({patterns[ref_idx].ramp_value:g})")
+
+        else:  # 3D surface
+            ax = fig.add_subplot(111, projection="3d")
+            X, Y = np.meshgrid(grid, yvals)
+            Z = np.where(np.isfinite(data), data, 0.0)
+            surf_norm = self._color_norm(Z, scale)
+            ax.plot_surface(X, Y, Z, cmap=cmap_name, norm=surf_norm, linewidth=0, antialiased=True)
+            ax.set_xlabel("2θ (deg)")
+            ax.set_ylabel(ylabel)
+            ax.set_zticks([])
+            ax.view_init(elev=25, azim=-70)
+            ax.set_title("3D surface")
+
+        fig.tight_layout()
+        self.maps_plot.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
     def run_track_peak(self) -> None:
         if not self.series:
             QMessageBox.warning(self, "Peak tracking", "Import a series first.")
             return
-        lo = _to_float(self.window_lo_edit.text())
-        hi = _to_float(self.window_hi_edit.text())
-        if lo is None or hi is None or hi <= lo:
-            QMessageBox.warning(self, "Peak tracking", "Enter a valid 2θ window (min < max).")
+        try:
+            windows = parse_track_windows(self.windows_edit.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Peak tracking", str(exc))
+            return
+        if not windows:
+            QMessageBox.warning(self, "Peak tracking", "Enter at least one 2θ window, e.g. '28.5-29.5 @ 28.98; 31-32'.")
             return
 
         patterns = self._selected_patterns()
         shape = self.shape_combo.currentText()
+        seed = self.seed_check.isChecked()
+        absence_sigma = _to_float(self.absence_edit.text(), 3.0) or 3.0
 
         self._track_btn.setEnabled(False)
         self._track_btn.setText("Tracking…")
 
         from qt_worker import run_in_thread
         run_in_thread(
-            lambda: track_peak(patterns, window_lo=lo, window_hi=hi, shape=shape),
+            lambda: track_peaks_multi(patterns, windows, shape=shape,
+                                      seed_from_previous=seed, absence_sigma=absence_sigma),
             self._on_track_done, self._on_track_error,
         )
 
     def _on_track_error(self, traceback_text: str) -> None:
         self._track_btn.setEnabled(True)
-        self._track_btn.setText("Track peak across series")
+        self._track_btn.setText("Track peaks across series")
         QMessageBox.critical(self, "Peak tracking error", traceback_text)
 
-    def _on_track_done(self, results) -> None:
+    def _on_track_done(self, results: Dict[str, List[PeakTrackResult]]) -> None:
         self._track_btn.setEnabled(True)
-        self._track_btn.setText("Track peak across series")
+        self._track_btn.setText("Track peaks across series")
         self.track_results = results
         self._populate_track_table()
         self._render_track_plot()
-        flags = flag_transition_candidates(self.track_results)
-        if flags:
-            lines = ["Candidate phase-transition signatures (fit-quality anomalies):"]
+
+        lines = []
+        for label, rows in self.track_results.items():
+            flags = flag_transition_candidates(rows)
             for ramp, chi2, reason in flags:
-                lines.append(f"  ramp={ramp:g}: {reason}")
-            self.transition_text.setPlainText("\n".join(lines))
+                prefix = "" if reason.startswith("[") else f"[{label}] "
+                lines.append(f"  ramp={ramp:g}: {prefix}{reason}")
+        if lines:
+            self.transition_text.setPlainText(
+                "Candidate phase-transition signatures (fit-quality anomalies, vanished/appeared peaks):\n"
+                + "\n".join(lines)
+            )
         else:
-            self.transition_text.setPlainText("No fit-quality anomalies flagged across the series.")
-        self.tabs.setCurrentIndex(1)
+            self.transition_text.setPlainText("No transition signatures flagged across the series.")
+        self.tabs.setCurrentIndex(2)
 
     def _populate_track_table(self) -> None:
-        self.track_table.setRowCount(len(self.track_results))
-        for row, r in enumerate(self.track_results):
-            values = [r.pattern_name, f"{r.ramp_value:g}"]
-            if r.error is None:
-                values += [f"{r.center:.4f}", f"{r.fwhm:.4f}", f"{r.amplitude:.4g}", f"{r.area:.4g}", f"{r.chi2_red:.4g}"]
+        rows_flat = [r for rows in self.track_results.values() for r in rows]
+        self.track_table.setRowCount(len(rows_flat))
+        for row, r in enumerate(rows_flat):
+            values = [r.window_label, r.pattern_name, f"{r.ramp_value:g}"]
+            if r.error is not None:
+                values += ["—", "—", "—", "—", f"ERROR: {r.error}", "—"]
+            elif not r.present:
+                values += ["—", "—", f"{r.amplitude:.4g}", "—", "—", "absent"]
             else:
-                values += ["—", "—", "—", "—", f"ERROR: {r.error}"]
+                values += [f"{r.center:.4f}", f"{r.fwhm:.4f}", f"{r.amplitude:.4g}", f"{r.area:.4g}", f"{r.chi2_red:.4g}", "yes"]
             for col, val in enumerate(values):
                 self.track_table.setItem(row, col, QTableWidgetItem(str(val)))
         self.track_table.resizeColumnsToContents()
@@ -304,23 +567,34 @@ class HtxrdWorkspace(QWidget):
     def _render_track_plot(self) -> None:
         fig = self.track_plot.figure
         fig.clf()
-        ok = [r for r in self.track_results if r.error is None]
-        if not ok:
+        any_ok = any(r.error is None and r.present for rows in self.track_results.values() for r in rows)
+        if not any_ok:
             self.track_plot.canvas.draw_idle()
             return
-        ramps = [r.ramp_value for r in ok]
         ax_c, ax_w, ax_a = fig.subplots(3, 1, sharex=True)
-        ax_c.plot(ramps, [r.center for r in ok], "o-", ms=4, lw=1)
+        for k, (label, rows) in enumerate(self.track_results.items()):
+            ok = [r for r in rows if r.error is None]
+            if not ok:
+                continue
+            ramps = [r.ramp_value for r in ok]
+            # absent -> NaN so the line breaks across the gap instead of bridging it
+            centers = [r.center if r.present else np.nan for r in ok]
+            fwhms = [r.fwhm if r.present else np.nan for r in ok]
+            areas = [r.area if r.present else np.nan for r in ok]
+            color = TRACK_COLORS[k % len(TRACK_COLORS)]
+            ax_c.plot(ramps, centers, "o-", ms=4, lw=1, color=color, label=label)
+            ax_w.plot(ramps, fwhms, "s-", ms=4, lw=1, color=color)
+            ax_a.plot(ramps, areas, "^-", ms=4, lw=1, color=color)
         ax_c.set_ylabel("Center (°2θ)")
         ax_c.grid(alpha=0.25)
-        ax_w.plot(ramps, [r.fwhm for r in ok], "s-", ms=4, lw=1, color="seagreen")
+        if len(self.track_results) > 1:
+            ax_c.legend(fontsize=7)
         ax_w.set_ylabel("FWHM (°2θ)")
         ax_w.grid(alpha=0.25)
-        ax_a.plot(ramps, [r.area for r in ok], "^-", ms=4, lw=1, color="darkorange")
         ax_a.set_ylabel("Area")
         ax_a.set_xlabel("Ramp value (temperature)")
         ax_a.grid(alpha=0.25)
-        fig.suptitle("Tracked peak vs. ramp", fontsize=10)
+        fig.suptitle("Tracked peak(s) vs. ramp", fontsize=10)
         fig.tight_layout()
         self.track_plot.canvas.draw_idle()
 
@@ -335,9 +609,12 @@ class HtxrdWorkspace(QWidget):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(["pattern", "ramp_value", "center_2theta", "fwhm_2theta", "amplitude", "area", "chi2_red", "error"])
-                for r in self.track_results:
-                    writer.writerow([r.pattern_name, r.ramp_value, r.center, r.fwhm, r.amplitude, r.area, r.chi2_red, r.error or ""])
+                writer.writerow(["window", "pattern", "ramp_value", "center_2theta", "fwhm_2theta",
+                                 "amplitude", "area", "chi2_red", "present", "noise_sigma", "error"])
+                for label, rows in self.track_results.items():
+                    for r in rows:
+                        writer.writerow([label, r.pattern_name, r.ramp_value, r.center, r.fwhm,
+                                         r.amplitude, r.area, r.chi2_red, r.present, r.noise, r.error or ""])
         except OSError as exc:
             QMessageBox.critical(self, "Export error", str(exc))
             return
