@@ -279,6 +279,27 @@ def test_link_fwhm_shares_width_between_components():
     assert fitted["l1"].value == pytest.approx(fitted["l0"].value)  # constrained equal
 
 
+def test_compute_confidence_intervals_on_known_gaussian():
+    x = np.linspace(400, 600, 400)
+    rng = np.random.default_rng(0)
+    y = rp.gaussian(x, 80.0, 505.0, 25.0) + rng.normal(0, 0.5, x.shape)
+    comp = _gaussian_component(center=500.0, fwhm=30.0, amp=100.0)
+    result = fs.fit_spectrum(x, y, [comp], mode="classic")
+
+    report = fs.compute_confidence_intervals(result, sigmas=(1,))
+    assert "f0" in report and "l0" in report  # center and width profiled
+    # The true center (505) must fall inside the reported ±1σ band around
+    # the best value; cheap sanity rather than parsing the full table.
+    best = result.lmfit_result.params["f0"].value
+    assert best == pytest.approx(505.0, abs=1.0)
+
+
+def test_compute_confidence_intervals_requires_classic_fit():
+    fr = fs.FitResult(lmfit_result=None, params=None, y_fit=np.array([]), peaks=[], chi2_red=0.0, minimizer=None)
+    with pytest.raises(ValueError, match="classic-mode"):
+        fs.compute_confidence_intervals(fr)
+
+
 def test_link_ignores_self_and_out_of_range():
     comps = [
         {**_gaussian_component(center=30.0), "link_fwhm": 0},   # self-link

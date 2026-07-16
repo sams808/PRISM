@@ -21,9 +21,10 @@ import numpy as np
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QPushButton, QSplitter, QStackedWidget,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+    QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 import io_universal
@@ -33,6 +34,7 @@ from qt_multi_fit import MultiFitWorkspace
 from qt_settings_store import PerItemSettingsStore
 from qt_simple_plot import SimplePlotWorkspace
 from qt_single_fit import SingleFitWorkspace
+from qt_baseline import BaselineWorkspace
 from qt_cluster import ClusterWorkspace
 from qt_htxrd import HtxrdWorkspace
 from qt_rruff import RruffMatchWorkspace
@@ -50,12 +52,13 @@ NAV_MULTIFIT = "Multi-Fit"
 NAV_RRUFF = "Mineral ID"
 NAV_HTXRD = "HT-XRD"
 NAV_CLUSTER = "Clustering"
+NAV_BASELINE = "Baseline"
 # NAV_FITTING/NAV_MULTIFIT/NAV_RRUFF/NAV_HTXRD are appended at the end (not
 # inserted after Raman) so the DTA page keeps nav row 3 —
 # test_qt_dta.py's test_shell_dta_page_picks_up_library_records hardcodes
 # setCurrentRow(3), and there's no reason to reorder the rail just to churn
 # that index.
-NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER]
+NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE]
 DTA_KINDS = {"ta_sdt", "dta_table"}
 
 
@@ -78,6 +81,104 @@ def _load_spectrum_from_path(path: str) -> Spectrum:
         x=x[order], y=y[order],
         df=df, meta=meta, status="imported",
     )
+
+
+class CombineDialog(QDialog):
+    """Sum / average / weighted-subtract multiple spectra, or scale one —
+    the generalized successor of the old Tk SpectralSumWindow. The result
+    is added to the Library as a derived spectrum."""
+
+    def __init__(self, parent, spectra: list):
+        super().__init__(parent)
+        self.setWindowTitle("Combine / scale spectra")
+        self.spectra = spectra
+        self.result_spectrum: Optional[Spectrum] = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Inputs: " + ", ".join(s.title for s in spectra)))
+
+        from PySide6.QtWidgets import QComboBox
+        op_row = QHBoxLayout()
+        op_row.addWidget(QLabel("Operation"))
+        self.op_combo = QComboBox()
+        ops = ["Scale (single spectrum)"] if len(spectra) == 1 else [
+            "Sum", "Average", "Subtract (1st − rest)",
+        ]
+        self.op_combo.addItems(ops)
+        op_row.addWidget(self.op_combo, 1)
+        layout.addLayout(op_row)
+
+        self.weights_edit = QLineEdit()
+        self.weights_edit.setPlaceholderText("optional weights, comma-separated (e.g. 1, 0.5)")
+        self.factor_edit = QLineEdit("1.0")
+        self.offset_edit = QLineEdit("0.0")
+        if len(spectra) == 1:
+            scale_row = QHBoxLayout()
+            scale_row.addWidget(QLabel("Factor"))
+            scale_row.addWidget(self.factor_edit)
+            scale_row.addWidget(QLabel("Offset"))
+            scale_row.addWidget(self.offset_edit)
+            layout.addLayout(scale_row)
+        else:
+            layout.addWidget(self.weights_edit)
+            self.normalize_check = QCheckBox("Area-normalize each spectrum first (area → 100)")
+            layout.addWidget(self.normalize_check)
+
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Result name"))
+        self.name_edit = QLineEdit(self._suggest_name())
+        name_row.addWidget(self.name_edit, 1)
+        layout.addLayout(name_row)
+
+        buttons = QHBoxLayout()
+        ok_btn = QPushButton("Create")
+        ok_btn.setObjectName("Primary")
+        ok_btn.clicked.connect(self._on_create)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addStretch(1)
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(ok_btn)
+        layout.addLayout(buttons)
+
+    def _suggest_name(self) -> str:
+        if len(self.spectra) == 1:
+            return f"{self.spectra[0].title}_scaled"
+        return f"{self.spectra[0].title}_combined{len(self.spectra)}"
+
+    def _on_create(self) -> None:
+        import spectrum_math as sm
+        try:
+            if len(self.spectra) == 1:
+                sp = self.spectra[0]
+                factor = float(self.factor_edit.text() or "1")
+                offset = float(self.offset_edit.text() or "0")
+                x, y = sm.scale_spectrum(sp.x, sp.y, factor=factor, offset=offset)
+                op_desc = f"scale×{factor:g}+{offset:g}"
+            else:
+                op_ui = self.op_combo.currentText()
+                op = {"Sum": "sum", "Average": "average"}.get(op_ui, "subtract")
+                weights = None
+                wtext = self.weights_edit.text().strip()
+                if wtext:
+                    weights = [float(w) for w in wtext.split(",")]
+                x, y = sm.combine_spectra(
+                    [(s.x, s.y) for s in self.spectra], op=op, weights=weights,
+                    normalize_first=self.normalize_check.isChecked(),
+                )
+                op_desc = op
+        except (ValueError, TypeError) as exc:
+            QMessageBox.critical(self, "Combine error", str(exc))
+            return
+
+        title = self.name_edit.text().strip() or self._suggest_name()
+        self.result_spectrum = Spectrum(
+            id=Spectrum.new_id(), title=title, path="", kind=self.spectra[0].kind,
+            x=x, y=y, df=None,
+            meta={"derived": op_desc, "sources": [s.title for s in self.spectra]},
+            status="derived",
+        )
+        self.accept()
 
 
 class LibraryPage(QWidget):
@@ -111,13 +212,26 @@ class LibraryPage(QWidget):
         import_btn.clicked.connect(self._on_import_clicked)
         left_layout.addWidget(import_btn)
 
+        combine_btn = QPushButton("Combine / scale selected…")
+        combine_btn.clicked.connect(self._on_combine_clicked)
+        left_layout.addWidget(combine_btn)
+
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Title", "Kind"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_context_menu)
         left_layout.addWidget(self.table, 1)
+
+        self.undo_btn = QPushButton("Undo delete")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self._undo_delete)
+        left_layout.addWidget(self.undo_btn)
+        self._undo_stack: list = []  # each entry: list of (position, Spectrum)
 
         root.addWidget(left)
 
@@ -160,6 +274,119 @@ class LibraryPage(QWidget):
             title_item.setData(Qt.UserRole, spectrum.id)
             self.table.setItem(row, 0, title_item)
             self.table.setItem(row, 1, QTableWidgetItem(spectrum.kind))
+
+    # ------------------------------------------------------------------
+    # Library management: rename / duplicate / reorder / delete-with-undo
+    # (parity with the old Tk app's list management, which the first Qt
+    # pass dropped) plus Combine/scale (the old SpectralSumWindow,
+    # generalized).
+    # ------------------------------------------------------------------
+    def _selected_spectra(self) -> list:
+        rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
+        out = []
+        for row in rows:
+            item = self.table.item(row, 0)
+            sp = self.library.get(item.data(Qt.UserRole)) if item else None
+            if sp is not None:
+                out.append(sp)
+        return out
+
+    def _on_context_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+        if self.table.itemAt(pos) is None:
+            return
+        selected = self._selected_spectra()
+        menu = QMenu(self)
+        if len(selected) == 1:
+            menu.addAction("Rename…", self._rename_selected)
+            menu.addAction("Duplicate", self._duplicate_selected)
+            menu.addSeparator()
+            menu.addAction("Move up", lambda: self._move_selected(-1))
+            menu.addAction("Move down", lambda: self._move_selected(+1))
+            menu.addSeparator()
+        if len(selected) >= 2:
+            menu.addAction("Combine / scale…", self._on_combine_clicked)
+            menu.addSeparator()
+        menu.addAction(f"Delete {len(selected)} item(s)", self._delete_selected)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _rename_selected(self) -> None:
+        selected = self._selected_spectra()
+        if len(selected) != 1:
+            return
+        from PySide6.QtWidgets import QInputDialog
+        sp = selected[0]
+        new_title, ok = QInputDialog.getText(self, "Rename", "New name:", text=sp.title)
+        if ok and new_title.strip():
+            sp.title = new_title.strip()
+            self._refresh_table()
+
+    def _duplicate_selected(self) -> None:
+        selected = self._selected_spectra()
+        if len(selected) != 1:
+            return
+        sp = selected[0]
+        copy_sp = Spectrum(
+            id=Spectrum.new_id(), title=f"{sp.title}_copy", path=sp.path, kind=sp.kind,
+            x=np.array(sp.x, float).copy(), y=np.array(sp.y, float).copy(),
+            df=sp.df, meta=dict(sp.meta), status="derived",
+        )
+        self.library.add(copy_sp)
+        self._refresh_table()
+
+    def _move_selected(self, delta: int) -> None:
+        selected = self._selected_spectra()
+        if len(selected) != 1:
+            return
+        order = [s.id for s in self.library.all()]
+        i = order.index(selected[0].id)
+        j = i + delta
+        if not (0 <= j < len(order)):
+            return
+        order[i], order[j] = order[j], order[i]
+        self.library.reorder(order)
+        self._refresh_table()
+        self.table.selectRow(j)
+
+    def _delete_selected(self) -> None:
+        selected = self._selected_spectra()
+        if not selected:
+            return
+        order = [s.id for s in self.library.all()]
+        batch = [(order.index(sp.id), sp) for sp in selected]
+        for _, sp in batch:
+            self.library.remove(sp.id)
+        self._undo_stack.append(batch)
+        self.undo_btn.setEnabled(True)
+        self._refresh_table()
+
+    def _undo_delete(self) -> None:
+        if not self._undo_stack:
+            return
+        batch = self._undo_stack.pop()
+        for position, sp in sorted(batch, key=lambda t: t[0]):
+            self.library.add(sp)
+        # Restore the original ordering as closely as possible.
+        order = [s.id for s in self.library.all()]
+        for position, sp in sorted(batch, key=lambda t: t[0]):
+            order.remove(sp.id)
+            order.insert(min(position, len(order)), sp.id)
+        self.library.reorder(order)
+        self.undo_btn.setEnabled(bool(self._undo_stack))
+        self._refresh_table()
+
+    def _on_combine_clicked(self) -> None:
+        selected = self._selected_spectra()
+        if not selected:
+            QMessageBox.information(self, "Combine", "Select one spectrum (to scale) or several (to sum/average/subtract).")
+            return
+        dlg = CombineDialog(self, selected)
+        if dlg.exec():
+            result = dlg.result_spectrum
+            if result is not None:
+                self.library.add(result)
+                self._refresh_table()
+                self.table.selectRow(self.table.rowCount() - 1)
 
     def _on_selection_changed(self) -> None:
         rows = self.table.selectionModel().selectedRows()
@@ -241,6 +468,8 @@ class DataappMainWindow(QMainWindow):
         self.stack.addWidget(self.htxrd_page)
         self.cluster_page = ClusterWorkspace(library=self.library)
         self.stack.addWidget(self.cluster_page)
+        self.baseline_page = BaselineWorkspace(library=self.library)
+        self.stack.addWidget(self.baseline_page)
         outer.addWidget(self.stack, 1)
 
         self.nav.setCurrentRow(0)
@@ -400,3 +629,5 @@ class DataappMainWindow(QMainWindow):
             self.rruff_page.set_spectra([s.id for s in self.library.all()])
         elif self.stack.widget(row) is self.cluster_page:
             self.cluster_page.set_spectra([s.id for s in self.library.all()])
+        elif self.stack.widget(row) is self.baseline_page:
+            self.baseline_page.set_spectra([s.id for s in self.library.all()])

@@ -385,6 +385,7 @@ class FitResult:
     y_fit: np.ndarray
     peaks: List[np.ndarray]
     chi2_red: float
+    minimizer: Any = None    # the lmfit.Minimizer (classic mode) — needed by conf_interval()
 
 
 def _ensure_numeric(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -441,13 +442,15 @@ def fit_spectrum(
             model, _ = compute_model(x, params, params_struct)
             return model - y
 
-        result = lmfit.minimize(
-            residual, params, args=(x, y), method="leastsq",
+        minimizer = lmfit.Minimizer(residual, params, fcn_args=(x, y))
+        result = minimizer.minimize(
+            method="leastsq",
             ftol=1e-12, xtol=1e-12, gtol=1e-12, max_nfev=10000,
         )
         y_fit, peaks = compute_model(x, result.params, params_struct)
         chi2 = compute_chi2(y, y_fit, result.params)
-        return FitResult(lmfit_result=result, params=result.params, y_fit=y_fit, peaks=peaks, chi2_red=chi2)
+        return FitResult(lmfit_result=result, params=result.params, y_fit=y_fit, peaks=peaks, chi2_red=chi2,
+                         minimizer=minimizer)
 
     if mode == "origin_step":
         if lm_params is None:
@@ -462,3 +465,27 @@ def fit_spectrum(
         return FitResult(lmfit_result=result, params=relaxed, y_fit=y_fit, peaks=peaks, chi2_red=chi2)
 
     raise ValueError(f"Unknown fit mode: {mode!r} (expected 'classic' or 'origin_step')")
+
+
+def compute_confidence_intervals(fit_result: FitResult, sigmas=(1, 2)) -> str:
+    """F-test confidence intervals via lmfit.conf_interval() (the rigorous
+    profiling method, complementing the covariance-based ±1σ standard
+    errors already in reports). Returns lmfit's formatted ci_report text.
+
+    Raises ValueError with a readable message when profiling isn't
+    applicable (needs a classic-mode FitResult, ≥2 varying parameters, and
+    parameters not pinned at their bounds — all common lmfit limitations)."""
+    if fit_result.minimizer is None:
+        raise ValueError("Confidence intervals need a classic-mode fit (run 'Fit !' first).")
+    n_vary = sum(p.vary for p in fit_result.lmfit_result.params.values())
+    if n_vary < 2:
+        raise ValueError("Confidence-interval profiling needs at least 2 varying parameters.")
+    try:
+        ci = lmfit.conf_interval(fit_result.minimizer, fit_result.lmfit_result, sigmas=list(sigmas))
+    except Exception as exc:
+        raise ValueError(
+            f"lmfit could not profile confidence intervals: {exc}\n"
+            "(Common causes: a parameter stuck at its min/max bound, or a "
+            "degenerate/underdetermined fit.)"
+        ) from exc
+    return lmfit.printfuncs.ci_report(ci)

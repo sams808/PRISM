@@ -85,6 +85,21 @@ def larch_available() -> bool:
 requires_larch = pytest.mark.skipif(not larch_available(), reason="larch is not installed")
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _synchronous_workers():
+    """Run qt_worker background jobs inline during tests, so tests assert
+    immediately after triggering an operation instead of polling for a
+    worker thread to finish. Production code never flips this switch."""
+    try:
+        import qt_worker
+    except Exception:
+        yield
+        return
+    qt_worker.set_synchronous(True)
+    yield
+    qt_worker.set_synchronous(False)
+
+
 @pytest.fixture(autouse=True)
 def _prevent_blocking_qt_dialogs(monkeypatch):
     """Autouse safety net for Qt tests: an accidental REAL (unmocked)

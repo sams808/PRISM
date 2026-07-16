@@ -82,6 +82,7 @@ class SingleFitWorkspace(QWidget):
 
         self._current_spectrum_id: Optional[str] = None
         self._current_fit = None
+        self._current_fit_result = None  # FitResult from the last classic fit
         self._current_yfit: Optional[np.ndarray] = None
         self._current_peaks: Optional[List[np.ndarray]] = None
         self._current_x: Optional[np.ndarray] = None
@@ -208,6 +209,9 @@ class SingleFitWorkspace(QWidget):
         self.r2_label = QLabel("--")
         chi2_row.addWidget(self.r2_label)
 
+        ci_btn = QPushButton("Conf. intervals")
+        ci_btn.clicked.connect(self.show_confidence_intervals)
+        chi2_row.addWidget(ci_btn)
         quick_report_btn = QPushButton("Quick report")
         quick_report_btn.clicked.connect(lambda: self.generate_report(quick=True))
         chi2_row.addWidget(quick_report_btn)
@@ -418,6 +422,7 @@ class SingleFitWorkspace(QWidget):
         try:
             fr = fit_spectrum(x, y, params_struct, mode="classic")
             self._current_fit = fr.lmfit_result
+            self._current_fit_result = fr  # full FitResult incl. minimizer, for conf_interval
             self._current_yfit = fr.y_fit
             self._current_peaks = fr.peaks
             self._current_x, self._current_y = x, y
@@ -578,6 +583,31 @@ class SingleFitWorkspace(QWidget):
             QMessageBox.information(self, "Export components", f"Exported {len(self._current_peaks)} component(s) + residual.")
         except OSError as exc:
             QMessageBox.critical(self, "Export error", str(exc))
+
+    def show_confidence_intervals(self) -> None:
+        """F-test confidence-interval profiling (lmfit conf_interval) for
+        the last classic fit — the rigorous complement to the covariance
+        ±1σ values in reports."""
+        from fitting_science import compute_confidence_intervals
+        if self._current_fit_result is None:
+            QMessageBox.information(self, "Confidence intervals", "Run a classic fit ('Fit !') first.")
+            return
+        try:
+            report = compute_confidence_intervals(self._current_fit_result)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Confidence intervals", str(exc))
+            return
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit as _QPT, QVBoxLayout as _QVB
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Confidence intervals (F-test profiling)")
+        dlg.resize(560, 320)
+        lay = _QVB(dlg)
+        text = _QPT()
+        text.setReadOnly(True)
+        text.setPlainText(report)
+        lay.addWidget(text)
+        dlg.exec()
+        self._append_log("[Conf. intervals]\n" + report)
 
     def generate_report(self, quick: bool = False) -> None:
         x, y = self._current_x, self._current_y

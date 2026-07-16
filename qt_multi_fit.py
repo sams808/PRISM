@@ -135,10 +135,10 @@ class MultiFitWorkspace(QWidget):
         self.writeback_check.setChecked(True)
         left_layout.addWidget(self.writeback_check)
 
-        run_btn = QPushButton("Run batch fit")
-        run_btn.setObjectName("Primary")
-        run_btn.clicked.connect(self.run_batch)
-        left_layout.addWidget(run_btn)
+        self._run_btn = QPushButton("Run batch fit")
+        self._run_btn.setObjectName("Primary")
+        self._run_btn.clicked.connect(self.run_batch)
+        left_layout.addWidget(self._run_btn)
         left_layout.addStretch(1)
         splitter.addWidget(left)
 
@@ -244,6 +244,11 @@ class MultiFitWorkspace(QWidget):
         return x, y
 
     def run_batch(self) -> None:
+        """Validates inputs on the UI thread, then runs the fits on a
+        background worker (qt_worker) so a long batch never freezes the
+        app; results land back on the main thread in _on_batch_done."""
+        from qt_worker import run_in_thread
+
         recipe_name = self.recipe_combo.currentText()
         if not recipe_name:
             QMessageBox.warning(self, "No recipe", "Create or select a recipe first.")
@@ -259,29 +264,52 @@ class MultiFitWorkspace(QWidget):
             QMessageBox.warning(self, "No spectra", "Select at least one spectrum to fit.")
             return
 
-        self._results = []
-        errors = []
-        for spectrum in spectra:
-            x, y = self._get_xy(spectrum)
-            params_struct = copy.deepcopy(template)
-            try:
-                fr = fit_spectrum(x, y, params_struct, mode="classic")
-                self._writeback(params_struct, fr.lmfit_result)
-                r2 = compute_r_squared(y, fr.y_fit)
-                self._results.append(_BatchFitResult(
-                    spectrum_id=spectrum.id, spectrum_title=spectrum.title,
-                    params_struct=params_struct, chi2_red=fr.chi2_red, r2=r2,
-                    x=x, y=y, y_fit=fr.y_fit, peaks=fr.peaks,
-                ))
-                if self.writeback_check.isChecked():
-                    self.fit_param_memory.set(spectrum.id, params_struct)
-            except Exception as exc:
-                errors.append(f"{spectrum.title}: {exc}")
-                self._results.append(_BatchFitResult(
-                    spectrum_id=spectrum.id, spectrum_title=spectrum.title,
-                    params_struct=params_struct, chi2_red=float("nan"), r2=float("nan"),
-                    x=x, y=y, y_fit=np.full_like(x, np.nan), peaks=[], error=str(exc),
-                ))
+        # Snapshot everything the worker needs NOW — it must not touch
+        # widgets or live library objects from the background thread.
+        jobs = [(sp.id, sp.title, *self._get_xy(sp)) for sp in spectra]
+        writeback_wanted = self.writeback_check.isChecked()
+
+        self._run_btn.setEnabled(False)
+        self._run_btn.setText("Running…")
+
+        def compute(jobs=jobs, template=template):
+            results, errors = [], []
+            for sid, title, x, y in jobs:
+                params_struct = copy.deepcopy(template)
+                try:
+                    fr = fit_spectrum(x, y, params_struct, mode="classic")
+                    self._writeback(params_struct, fr.lmfit_result)  # pure dict mutation
+                    r2 = compute_r_squared(y, fr.y_fit)
+                    results.append(_BatchFitResult(
+                        spectrum_id=sid, spectrum_title=title,
+                        params_struct=params_struct, chi2_red=fr.chi2_red, r2=r2,
+                        x=x, y=y, y_fit=fr.y_fit, peaks=fr.peaks,
+                    ))
+                except Exception as exc:
+                    errors.append(f"{title}: {exc}")
+                    results.append(_BatchFitResult(
+                        spectrum_id=sid, spectrum_title=title,
+                        params_struct=params_struct, chi2_red=float("nan"), r2=float("nan"),
+                        x=x, y=y, y_fit=np.full_like(x, np.nan), peaks=[], error=str(exc),
+                    ))
+            return results, errors, writeback_wanted
+
+        run_in_thread(compute, self._on_batch_done, self._on_batch_error)
+
+    def _on_batch_error(self, traceback_text: str) -> None:
+        self._run_btn.setEnabled(True)
+        self._run_btn.setText("Run batch fit")
+        QMessageBox.critical(self, "Batch fit error", traceback_text)
+
+    def _on_batch_done(self, payload) -> None:
+        results, errors, writeback_wanted = payload
+        self._run_btn.setEnabled(True)
+        self._run_btn.setText("Run batch fit")
+        self._results = results
+        if writeback_wanted:
+            for res in results:
+                if res.error is None:
+                    self.fit_param_memory.set(res.spectrum_id, res.params_struct)
 
         self._populate_results_table()
         if errors:

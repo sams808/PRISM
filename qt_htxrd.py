@@ -108,10 +108,10 @@ class HtxrdWorkspace(QWidget):
         shape_row.addWidget(self.shape_combo)
         left_layout.addLayout(shape_row)
 
-        track_btn = QPushButton("Track peak across series")
-        track_btn.setObjectName("Primary")
-        track_btn.clicked.connect(self.run_track_peak)
-        left_layout.addWidget(track_btn)
+        self._track_btn = QPushButton("Track peak across series")
+        self._track_btn.setObjectName("Primary")
+        self._track_btn.clicked.connect(self.run_track_peak)
+        left_layout.addWidget(self._track_btn)
 
         export_btn = QPushButton("Export tracking results to CSV…")
         export_btn.clicked.connect(self.export_track_csv)
@@ -259,12 +259,26 @@ class HtxrdWorkspace(QWidget):
             return
 
         patterns = self._selected_patterns()
-        try:
-            self.track_results = track_peak(patterns, window_lo=lo, window_hi=hi, shape=self.shape_combo.currentText())
-        except Exception as exc:
-            QMessageBox.critical(self, "Peak tracking error", str(exc))
-            return
+        shape = self.shape_combo.currentText()
 
+        self._track_btn.setEnabled(False)
+        self._track_btn.setText("Tracking…")
+
+        from qt_worker import run_in_thread
+        run_in_thread(
+            lambda: track_peak(patterns, window_lo=lo, window_hi=hi, shape=shape),
+            self._on_track_done, self._on_track_error,
+        )
+
+    def _on_track_error(self, traceback_text: str) -> None:
+        self._track_btn.setEnabled(True)
+        self._track_btn.setText("Track peak across series")
+        QMessageBox.critical(self, "Peak tracking error", traceback_text)
+
+    def _on_track_done(self, results) -> None:
+        self._track_btn.setEnabled(True)
+        self._track_btn.setText("Track peak across series")
+        self.track_results = results
         self._populate_track_table()
         self._render_track_plot()
         flags = flag_transition_candidates(self.track_results)
