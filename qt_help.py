@@ -73,8 +73,9 @@ them when quoting true FWHM.</p>
 <p>Import EasyXAFS ZIPs, CSVs, or Athena <code>.prj</code> from the workspace's own
 buttons. Tabs follow the workflow: Pre-processing (smoothing, Bragg
 angle→energy correction, click-based tie-point alignment) → μ(E) Builder
-(with deglitching) → Normalization / EXAFS (Larch) → Analysis (merge, difference,
-linear-combination fitting, PCA species count) → Export (Athena formats).</p>
+(with deglitching) → Normalization / EXAFS (Larch) → Analysis (average or sum
+repeat scans, difference, linear-combination fitting, PCA species count) →
+Export (Athena formats). Importing an Athena <code>.prj</code> needs no Larch.</p>
 
 <h2>DTA / Thermal</h2>
 <p>Pick X/Y/dY channels, compute Tg three ways (double tangent, parallel
@@ -87,10 +88,16 @@ candidates are ranked by peak overlap, each showing its <b>laser wavelength</b> 
 relative intensities vary between wavelengths, so judge the overlay yourself.
 The <b>Database filters</b> restrict candidates before ranking: laser λ
 (matched ±2 nm, so 532 also covers 532.6), oriented/unoriented, high-res vs
-broad-scan, and quality category.
-Nothing is labeled until you click <b>Accept</b>. One more click overlays the
-matched mineral's predicted XRD pattern (AMCSD structure) in the Raman
-workspace. Requires the one-time local database build (see the README).</p>
+broad-scan, and quality category. Shift/Ctrl-click several result rows to
+overlay multiple references at once.
+Nothing is labeled until you click <b>Accept</b> — and Accept works
+iteratively for mixtures: the accepted phase is recorded, the peaks it
+explains are removed from the query, and the table immediately shows matches
+for the REMAINING peaks (already-accepted references are excluded). Repeat
+until every peak is explained; each accept is one Ctrl+Z away. One more click
+overlays the matched mineral's predicted XRD pattern (AMCSD structure) in
+the Raman workspace. Requires the one-time local database build (see the
+README).</p>
 
 <h2>HT-XRD</h2>
 <p>Import a whole folder of patterns; temperatures come from <code>.rasx</code>
@@ -100,13 +107,19 @@ colored by temperature. The <b>Maps</b> tab adds a 2D heatmap
 vs a reference pattern ("first", an index, or a temperature), a 3D surface,
 an optional time axis from the heating rate, and dashed peak-guide lines
 (<code>{slice:2θ; slice:2θ}</code> anchors, interpolated).</p>
-<p><b>Tracking</b> takes several windows at once — <code>28.5-29.5 @ 28.98; 31-32</code> —
-where the <code>@</code> anchor picks WHICH peak to track when a window holds
-more than one. Each pattern's fit is seeded from the previous one (so it
-follows a drifting peak instead of jumping to a stronger neighbor), and a
-peak weaker than the <i>Absence σ</i> noise threshold is reported as absent
-instead of a garbage fit — vanished/appeared peaks are flagged as transition
-signatures alongside fit-quality anomalies.</p>
+<p><b>Tracking</b>, three ways. (1) <b>Pick track guide</b> on the waterfall:
+click the same peak at two (or more) temperatures — bottom and top, say — then
+<b>Track picked guide</b> follows the peak along that line; one click from an
+intermediate temperature also works for a peak that appears or dies.
+(2) <b>Auto-track all peaks</b> finds every peak of the first pattern and
+tracks them all (the generated windows appear in the field for editing).
+(3) Typed windows — <code>28.5-29.5 @ 28.98; 31-32</code> — where the
+<code>@</code> anchor picks WHICH peak to track when a window holds more than
+one. In every mode the fit is seeded from the previous pattern (so it follows
+a drifting peak instead of jumping to a stronger neighbor), and a peak weaker
+than the <i>Absence σ</i> noise threshold is reported as absent instead of a
+garbage fit — vanished/appeared peaks are flagged as transition signatures
+alongside fit-quality anomalies.</p>
 
 <h2>Clustering</h2>
 <p>Select a series (e.g. a multi-point map), choose KMeans or hierarchical and

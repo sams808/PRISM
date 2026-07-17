@@ -225,15 +225,17 @@ def _peak_support(x: np.ndarray, y_net: np.ndarray, idx: int, noise: float,
 
 
 def estimate_window_noise(y: np.ndarray) -> float:
-    """High-frequency noise σ from first differences (a peak's smooth shape
-    contributes little to diff(y), so this stays honest even when the
-    window is mostly peak): σ ≈ MAD(diff)/ (1.4826⁻¹ · √2)."""
-    d = np.diff(np.asarray(y, float))
-    d = d[np.isfinite(d)]
-    if len(d) < 4:
+    """High-frequency noise σ from SECOND differences (variance 6σ² for
+    white noise). First differences read a peak's smooth slope as noise —
+    found the hard way when guided tracking's narrow windows sat entirely
+    on a peak flank and declared clearly-present peaks absent; the second
+    difference of a smooth curve is ~h²·y'' and stays near zero."""
+    d2 = np.diff(np.asarray(y, float), n=2)
+    d2 = d2[np.isfinite(d2)]
+    if len(d2) < 4:
         return 0.0
-    mad = float(np.median(np.abs(d - np.median(d))))
-    return 1.4826 * mad / np.sqrt(2.0)
+    mad = float(np.median(np.abs(d2 - np.median(d2))))
+    return 1.4826 * mad / np.sqrt(6.0)
 
 
 def track_peak(
@@ -272,7 +274,9 @@ def track_peak(
 
         baseline = float(np.nanmin(y_win))
         y_net = y_win - baseline  # simple constant-baseline removal for the local window
-        noise = estimate_window_noise(y_win)
+        # Noise from the WHOLE pattern, not the window: a narrow window can
+        # be all peak, leaving no baseline to measure noise on.
+        noise = estimate_window_noise(pat.y)
 
         # ---- seed: previous accepted fit > initial_center anchor > window max
         if seed_from_previous and prev_fit is not None:
@@ -395,6 +399,75 @@ def track_peaks_multi(
             absence_sigma=absence_sigma, window_label=label,
         )
     return out
+
+
+def guide_centers_for_patterns(guide_points: List[Tuple[int, float]], n_patterns: int) -> np.ndarray:
+    """Expected 2θ center per pattern from picked guide anchors
+    [(slice_1based, x), ...]: linear interpolation between anchors, FLAT
+    extrapolation beyond the first/last one — so an anchor picked at an
+    intermediate temperature still defines a full-series guide (the absence
+    test decides where the peak actually exists)."""
+    if not guide_points:
+        raise ValueError("No guide anchors given.")
+    pts = sorted(guide_points, key=lambda t: t[0])
+    slices = np.array([p[0] for p in pts], float)
+    xs = np.array([p[1] for p in pts], float)
+    grid = np.arange(1, n_patterns + 1, dtype=float)
+    return np.interp(grid, slices, xs)  # np.interp clamps outside the anchor range
+
+
+def track_peak_guided(
+    patterns: List[HtxrdPattern], guide_points: List[Tuple[int, float]], *,
+    half_window: float = 0.3, shape: str = "G", absence_sigma: float = 3.0,
+    window_label: str = "",
+) -> List[PeakTrackResult]:
+    """Track a peak along a PICKED guide (user request: click the peak at a
+    start and an end temperature on the waterfall instead of typing window
+    numbers). Each pattern gets its own window, centered on the guide's
+    interpolated position — the window follows the peak by construction, so
+    drift can never walk out of a fixed window — with the guide position as
+    the anchor. Works for appearing/dying peaks: the guide extends flat
+    across the whole series and absence detection reports where the peak
+    isn't."""
+    centers = guide_centers_for_patterns(guide_points, len(patterns))
+    results: List[PeakTrackResult] = []
+    for pat, center in zip(patterns, centers):
+        rows = track_peak(
+            [pat], window_lo=float(center - half_window), window_hi=float(center + half_window),
+            shape=shape, seed_from_previous=False, initial_center=float(center),
+            absence_sigma=absence_sigma, window_label=window_label,
+        )
+        results.extend(rows)
+    return results
+
+
+def auto_track_windows(
+    pattern: HtxrdPattern, *, max_peaks: int = 10, min_prominence_sigma: float = 3.0,
+) -> List[Dict[str, Optional[float]]]:
+    """Automatic tracking setup (user request): find the peaks of one
+    reference pattern and build an anchored tracking window around each,
+    sized from the peak's own local width. Feed the result to
+    track_peaks_multi — or show it in the windows field for editing."""
+    from fitting_science import find_peak_candidates
+
+    x, y = np.asarray(pattern.x, float), np.asarray(pattern.y, float)
+    span = float(x[-1] - x[0]) if len(x) > 1 else 1.0
+    centers = find_peak_candidates(x, y, max_peaks=max_peaks, min_prominence_sigma=min_prominence_sigma)
+    dx = float(np.mean(np.diff(x))) if len(x) > 1 else 0.01
+
+    windows: List[Dict[str, Optional[float]]] = []
+    # _local_hwhm_estimate clips to [1%, 25%] of the span it's given; the
+    # full pattern's span would floor sharp XRD peaks at far too wide an
+    # estimate, so give it a local one.
+    local_span = min(span, 2.0)
+    for center in sorted(centers):
+        idx = int(np.argmin(np.abs(x - center)))
+        y_net = y - float(np.nanmin(y))
+        hwhm = _local_hwhm_estimate(x, y_net, idx, local_span)
+        half = max(6.0 * hwhm, 8.0 * dx)
+        windows.append({"lo": round(float(center - half), 3), "hi": round(float(center + half), 3),
+                        "center": round(float(center), 3)})
+    return windows
 
 
 def flag_transition_candidates(

@@ -297,3 +297,27 @@ def test_origin_stepwise_button_takes_visible_incremental_steps(qtbot):
     qtbot.wait(20)
     after_many = widget.fit_param_memory.get(spectrum.id)[0]["shift_val"]
     assert after_many == pytest.approx(505.0, abs=0.5)  # repeated clicks converge
+
+
+def test_pick_peaks_toggle_deactivates_active_zoom_tool(qtbot):
+    """User report: with the zoom tool left active, pick-mode clicks were
+    silently swallowed (drag still zoomed). Toggling pick mode ON must
+    deactivate the zoom/pan tool so clicks land."""
+    from types import SimpleNamespace
+
+    library = SpectrumLibrary()
+    spectrum = _synthetic_gaussian_spectrum()
+    library.add(spectrum)
+    widget = SingleFitWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([spectrum.id])
+    qtbot.wait(20)
+
+    widget.plot.toolbar.zoom()  # user left the zoom tool on
+    assert widget.plot.toolbar.mode
+    widget.pick_peaks_btn.setChecked(True)
+    assert not widget.plot.toolbar.mode  # pick mode turned it off
+
+    widget._on_pick_click(SimpleNamespace(inaxes=widget.plot.figure.gca(), xdata=505.0, ydata=1.0))
+    qtbot.wait(20)
+    assert len(widget.fit_param_memory.get(spectrum.id)) == 1

@@ -841,9 +841,14 @@ class XasWorkspace(QWidget):
         self.analysis_list.setSelectionMode(QListWidget.ExtendedSelection)
         ctrl_layout.addWidget(self.analysis_list, 1)
 
-        merge_btn = QPushButton("Merge / average selected → new object")
+        merge_row = QHBoxLayout()
+        merge_btn = QPushButton("Average selected → new object")
         merge_btn.clicked.connect(self.merge_average_selected)
-        ctrl_layout.addWidget(merge_btn)
+        merge_row.addWidget(merge_btn)
+        sum_btn = QPushButton("Sum selected → new object")
+        sum_btn.clicked.connect(self.sum_selected)
+        merge_row.addWidget(sum_btn)
+        ctrl_layout.addLayout(merge_row)
 
         diff_btn = QPushButton("Difference (1st − 2nd selected) → new object")
         diff_btn.clicked.connect(self.difference_selected)
@@ -878,33 +883,43 @@ class XasWorkspace(QWidget):
         return out
 
     def merge_average_selected(self) -> None:
+        self._combine_selected("average")
+
+    def sum_selected(self) -> None:
+        self._combine_selected("sum")
+
+    def _combine_selected(self, op: str) -> None:
+        """Average (merge of repeat scans) or sum (e.g. adding up detector
+        channels / partial acquisitions) of the selected spectra, on the
+        first-selected spectrum's energy grid."""
         specs = self._analysis_selected_spectra()
         if len(specs) < 2:
-            QMessageBox.warning(self, "Merge / average", "Select at least 2 spectra to merge.")
+            QMessageBox.warning(self, "Combine", f"Select at least 2 spectra to {op}.")
             return
         ref = specs[0]
         stacked = [ref.y]
         for sp in specs[1:]:
             stacked.append(_interp_to_grid(sp.energy, sp.y, ref.energy))
-        avg_y = np.mean(np.vstack(stacked), axis=0)
+        combined = np.sum(np.vstack(stacked), axis=0) if op == "sum" else np.mean(np.vstack(stacked), axis=0)
 
-        sp_avg = ref.copy(new_name=f"{ref.name}_avg{len(specs)}", new_kind=ref.kind)
-        sp_avg.y = avg_y
-        sp_avg.history.append(Operation("merge_average", {"members": [s.name for s in specs]}))
-        self.store.add(sp_avg)
+        suffix = "sum" if op == "sum" else "avg"
+        sp_new = ref.copy(new_name=f"{ref.name}_{suffix}{len(specs)}", new_kind=ref.kind)
+        sp_new.y = combined
+        sp_new.history.append(Operation(f"merge_{op}", {"members": [s.name for s in specs]}))
+        self.store.add(sp_new)
         self._refresh_all()
 
         ax = self.analysis_plot.ax
         ax.clear()
         for i, sp in enumerate(specs):
             ax.plot(sp.energy, sp.y, lw=0.9, alpha=0.5, color=COLORS[i % len(COLORS)], label=sp.name)
-        ax.plot(ref.energy, avg_y, lw=1.8, color="black", label="average")
+        ax.plot(ref.energy, combined, lw=1.8, color="black", label=op)
         ax.set_xlabel("Energy (eV)"); ax.set_ylabel(ref.units)
-        ax.set_title(f"Merged average of {len(specs)} spectra")
+        ax.set_title(f"{op.capitalize()} of {len(specs)} spectra")
         ax.legend(fontsize=7); ax.grid(alpha=0.25)
         self.analysis_plot.figure.tight_layout()
         self.analysis_plot.canvas.draw_idle()
-        self._set_status(f"Averaged {len(specs)} spectra → {sp_avg.name}")
+        self._set_status(f"{op.capitalize()} of {len(specs)} spectra → {sp_new.name}")
 
     def difference_selected(self) -> None:
         specs = self._analysis_selected_spectra()

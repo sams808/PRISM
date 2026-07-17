@@ -288,3 +288,59 @@ def test_peak_guides_parse_and_evaluate():
     assert xpos[2] == pytest.approx(30.5)
     with pytest.raises(ValueError, match="Invalid guide"):
         hs.parse_peak_guides(["21.2; 19.6"])
+
+
+# --------------------------------------------------------------------------
+# Guided tracking (pick a start and an end point on the waterfall) and
+# automatic tracking setup — the second feedback wave's UX rework.
+# --------------------------------------------------------------------------
+
+def test_guide_centers_interpolate_and_clamp():
+    centers = hs.guide_centers_for_patterns([(2, 29.0), (4, 29.4)], n_patterns=6)
+    assert np.allclose(centers, [29.0, 29.0, 29.2, 29.4, 29.4, 29.4])  # flat beyond anchors
+    with pytest.raises(ValueError):
+        hs.guide_centers_for_patterns([], 5)
+
+
+def test_track_peak_guided_follows_picked_drift_next_to_stronger_neighbor():
+    series = _two_peak_series()  # weak peak drifts 29.4 -> 29.9 beside a strong 28.6 one
+    # two clicks: near the weak peak on the first and last patterns
+    results = hs.track_peak_guided(series, [(1, 29.4), (6, 29.9)], half_window=0.3)
+    assert all(r.error is None and r.present for r in results)
+    for i, r in enumerate(results):
+        assert r.center == pytest.approx(29.4 + 0.1 * i, abs=0.05)
+
+
+def test_track_peak_guided_intermediate_anchor_handles_appearing_peak():
+    """One click at an intermediate temperature where the peak exists must
+    give a full-series guide: absent before, present after."""
+    x = np.linspace(27, 31, 1000)
+    rng = np.random.default_rng(3)
+    series = []
+    for temp in (100, 200, 300, 400, 500, 600):
+        amp = 500.0 if temp >= 400 else 0.0  # peak appears at 400
+        y = rp.gaussian(x, amp, 29.2, 0.2) + 40.0 + rng.normal(0, 2.5, x.shape)
+        series.append(hs.HtxrdPattern(path="", name=f"T{temp}", x=x, y=y,
+                                      ramp_value=float(temp), ramp_source="metadata"))
+    # single pick on slice 5 (500 degC), where the peak clearly exists
+    results = hs.track_peak_guided(series, [(5, 29.2)], half_window=0.3, absence_sigma=5.0)
+    assert [r.present for r in results] == [False, False, False, True, True, True]
+    assert results[4].center == pytest.approx(29.2, abs=0.03)
+    flags = hs.flag_transition_candidates(results)
+    assert any("appeared at 400" in f[2] for f in flags)
+
+
+def test_auto_track_windows_builds_anchored_windows_around_each_peak():
+    x = np.linspace(20, 40, 2000)
+    rng = np.random.default_rng(4)
+    y = (rp.gaussian(x, 900.0, 28.6, 0.15) + rp.gaussian(x, 400.0, 33.2, 0.2)
+         + 60.0 + rng.normal(0, 3.0, x.shape))
+    pat = hs.HtxrdPattern(path="", name="ref", x=x, y=y, ramp_value=25.0)
+
+    windows = hs.auto_track_windows(pat)
+    anchors = [w["center"] for w in windows]
+    assert any(abs(a - 28.6) < 0.1 for a in anchors)
+    assert any(abs(a - 33.2) < 0.1 for a in anchors)
+    for w in windows:
+        assert w["lo"] < w["center"] < w["hi"]
+        assert (w["hi"] - w["lo"]) < 3.0  # local widths, not pattern-scale ones

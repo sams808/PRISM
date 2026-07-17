@@ -140,14 +140,16 @@ def test_accept_selected_candidate_writes_spectrum_metadata(qtbot, tmp_path):
     qtbot.wait(20)
 
     widget.accept_selected_candidate()
+    qtbot.wait(20)  # accept re-renders the preview; let draw_idle settle
     assert sp.meta["rruff_match"]["mineral"] == "Quartz"
     assert sp.meta["rruff_match"]["rruff_id"] == "R040031"
     assert sp.meta["rruff_match"]["wavelength_nm"] == 532.0
 
 
-def test_accept_fires_on_accept_callback_with_previous_match(qtbot, tmp_path):
+def test_accept_fires_on_accept_callback_with_previous_state(qtbot, tmp_path):
     """The shell hooks on_accept to the Library undo stack — it must receive
-    the spectrum id and whatever match was recorded BEFORE this accept."""
+    the spectrum id and the full identification state BEFORE this accept
+    (both the latest match and the accepted-phases list)."""
     cache_dir = tmp_path / "rruff_cache"
     _write_fake_cache(cache_dir, cache_dir / "raw")
 
@@ -166,8 +168,76 @@ def test_accept_fires_on_accept_callback_with_previous_match(qtbot, tmp_path):
     qtbot.wait(20)
 
     widget.accept_selected_candidate()
-    assert calls == [(sp.id, old_match)]
+    qtbot.wait(20)  # accept re-renders the preview; let draw_idle settle
+    assert calls == [(sp.id, {"rruff_match": old_match, "rruff_matches": None})]
     assert sp.meta["rruff_match"]["mineral"] == "Quartz"
+    assert [m["mineral"] for m in sp.meta["rruff_matches"]] == ["Quartz"]
+
+
+def test_accept_subtracts_matched_peaks_and_researches_remainder(qtbot, tmp_path):
+    """User request: accept = keep the candidate as an identified phase and
+    look for matches on the REMAINING peaks (mixture identification)."""
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    # 464 + 1085 belong to Quartz; 700 is an extra unexplained peak
+    widget.peaks_edit.setText("464.0, 1085.0, 700.0")
+    widget.find_matches()
+    qtbot.wait(20)
+    assert widget.results_table.item(0, 0).text() == "Quartz"
+    widget.results_table.selectRow(0)
+
+    widget.accept_selected_candidate()
+    qtbot.wait(20)
+    # Quartz recorded; its peaks removed; the field now holds the remainder
+    assert [m["mineral"] for m in sp.meta["rruff_matches"]] == ["Quartz"]
+    assert widget.peaks_edit.text() == "700.0"
+    # the re-search excludes accepted Quartz, and nothing matches 700 alone
+    assert all(widget.results_table.item(r, 0).text() != "Quartz"
+               for r in range(widget.results_table.rowCount()))
+
+    # a second accept in a fully-explained scenario clears the query
+    widget.peaks_edit.setText("1085.0")
+    widget.find_matches()
+    qtbot.wait(20)
+    assert widget.results_table.item(0, 0).text() == "Calcite"  # Quartz excluded now
+    widget.results_table.selectRow(0)
+    widget.accept_selected_candidate()
+    qtbot.wait(20)
+    assert [m["mineral"] for m in sp.meta["rruff_matches"]] == ["Quartz", "Calcite"]
+    assert widget.peaks_edit.text() == ""
+
+
+def test_shift_click_multi_selection_overlays_candidates(qtbot, tmp_path):
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.find_matches()
+    qtbot.wait(20)
+    assert widget.results_table.rowCount() == 2
+
+    from PySide6.QtWidgets import QTableWidget
+    assert widget.results_table.selectionMode() == QTableWidget.ExtendedSelection
+    widget.results_table.selectAll()  # both candidates selected
+    qtbot.wait(50)
+
+    ax = widget.plot.figure.get_axes()[0]
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert any("Quartz" in lbl for lbl in labels)
+    assert any("Calcite" in lbl for lbl in labels)
 
 
 def test_render_preview_overlays_measured_spectrum(qtbot, tmp_path):

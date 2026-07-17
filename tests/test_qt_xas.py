@@ -368,3 +368,24 @@ def test_shell_xas_page_is_xas_workspace(qtbot):
     window.nav.setCurrentRow(2)  # XAS workspace
     qtbot.wait(20)
     assert window.stack.currentWidget() is window.xas_page
+
+
+def test_analysis_sum_selected_creates_summed_object(qtbot):
+    """User request: summing alongside averaging in the XAS stream."""
+    widget = XasWorkspace()
+    qtbot.addWidget(widget)
+    energy = np.linspace(0, 100, 50)
+    a = Spectrum(sid=_uid("sp"), name="a", kind="mu", energy=energy, y=np.full(50, 1.0))
+    b = Spectrum(sid=_uid("sp"), name="b", kind="mu", energy=energy, y=np.full(50, 3.0))
+    widget.store.add(a); widget.store.add(b)
+    widget._refresh_all()
+
+    for i in range(widget.analysis_list.count()):
+        widget.analysis_list.item(i).setSelected(True)
+    widget.sum_selected()
+    qtbot.wait(20)
+
+    summed = widget.store.find_by_name("a_sum2")
+    assert summed is not None
+    assert np.allclose(summed.y, 4.0)
+    assert summed.history[-1].name == "merge_sum"

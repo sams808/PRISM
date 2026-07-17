@@ -6,6 +6,7 @@ for why): `pytest tests/test_qt_htxrd.py --override-ini="addopts="`
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import rampy as rp
 
 from qt_htxrd import HtxrdWorkspace
@@ -219,3 +220,71 @@ def test_shell_htxrd_page_is_htxrd_workspace(qtbot):
     window.nav.setCurrentRow(7)  # HT-XRD workspace
     qtbot.wait(20)
     assert window.stack.currentWidget() is window.htxrd_page
+
+
+def test_pick_guide_on_waterfall_and_track(qtbot, tmp_path, monkeypatch):
+    """User request: click the peak at a start and an end temperature on
+    the waterfall instead of typing window numbers."""
+    from types import SimpleNamespace
+
+    def center_by_temp(t):
+        return 30.0 - 0.001 * t  # drifts 29.9 -> 29.7 across 100..300
+
+    paths = _write_series(tmp_path, temps=(100, 200, 300), center_by_temp=center_by_temp, noise=2.0)
+    widget = HtxrdWorkspace()
+    qtbot.addWidget(widget)
+    widget.template_edit.setText("scan_???.xy")
+    monkeypatch.setattr("qt_htxrd.QFileDialog.getOpenFileNames", staticmethod(lambda *a, **k: (paths, "")))
+    widget.import_files()
+    qtbot.wait(250)
+
+    widget.pick_guide_btn.setChecked(True)
+    assert widget._pick_cid is not None
+    patterns, display_y, delta = widget._wf_state
+    ax = widget.plot.figure.get_axes()[0]
+
+    # click near the peak of the bottom (100 degC) curve and the top (300 degC) one
+    def click(x, slice_i):
+        y = float(np.interp(x, patterns[slice_i].x, display_y[slice_i])) + slice_i * delta
+        widget._on_waterfall_pick(SimpleNamespace(inaxes=ax, xdata=x, ydata=y))
+
+    click(29.9, 0)
+    click(29.7, 2)
+    qtbot.wait(250)
+    assert widget._track_picks == [(1, 29.9), (3, 29.7)]
+
+    widget.track_picked_guide()
+    qtbot.wait(20)
+    labels = list(widget.track_results.keys())
+    assert labels == ["guide 29.90°→29.70°"]
+    rows = widget.track_results[labels[0]]
+    assert [r.present for r in rows] == [True, True, True]
+    for r, expected in zip(rows, (29.9, 29.8, 29.7)):
+        assert r.center == pytest.approx(expected, abs=0.05)
+
+    # picks clear and the guide artist disappears on next render
+    widget._clear_track_picks()
+    qtbot.wait(250)
+    assert widget._track_picks == []
+
+
+def test_auto_track_all_fills_windows_and_tracks(qtbot, tmp_path, monkeypatch):
+    paths = _write_series(tmp_path, temps=(100, 200, 300), noise=2.0)
+    widget = HtxrdWorkspace()
+    qtbot.addWidget(widget)
+    widget.template_edit.setText("scan_???.xy")
+    monkeypatch.setattr("qt_htxrd.QFileDialog.getOpenFileNames", staticmethod(lambda *a, **k: (paths, "")))
+    widget.import_files()
+    qtbot.wait(250)
+
+    widget.auto_track_all()
+    qtbot.wait(20)
+    # the generated windows are shown for editing, anchored on the found peak
+    assert "@ 30" in widget.windows_edit.text() or "@ 29.9" in widget.windows_edit.text()
+    assert len(widget.track_results) >= 1
+    # weak curvature candidates may come along as absent rows; the REAL peak
+    # must be present in (at least) one window, tracked at its true center
+    present_rows = [r for rows in widget.track_results.values() for r in rows if r.present]
+    assert present_rows
+    assert all(r.error is None for rows in widget.track_results.values() for r in rows)
+    assert any(r.center == pytest.approx(30.0, abs=0.05) for r in present_rows)

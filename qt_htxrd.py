@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from htxrd_science import (
     HtxrdPattern,
     PeakTrackResult,
+    auto_track_windows,
     build_common_grid,
     build_intensity_map,
     compute_relative_time_minutes,
@@ -39,10 +40,12 @@ from htxrd_science import (
     evaluate_peak_guide,
     find_series_files,
     flag_transition_candidates,
+    guide_centers_for_patterns,
     load_series,
     parse_peak_guides,
     parse_track_windows,
     reference_index,
+    track_peak_guided,
     track_peaks_multi,
 )
 from qt_widgets import PlotWidget
@@ -63,6 +66,9 @@ class HtxrdWorkspace(QWidget):
         super().__init__(parent)
         self.series: List[HtxrdPattern] = []
         self.track_results: Dict[str, List[PeakTrackResult]] = {}
+        self._track_picks: List[tuple] = []  # (slice_1based, x) waterfall click anchors
+        self._wf_state: Optional[tuple] = None  # (patterns, display_y, delta) of the last waterfall render
+        self._pick_cid = None
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -145,6 +151,14 @@ class HtxrdWorkspace(QWidget):
         self._track_btn.clicked.connect(self.run_track_peak)
         left_layout.addWidget(self._track_btn)
 
+        self._auto_track_btn = QPushButton("Auto-track all peaks")
+        self._auto_track_btn.setToolTip(
+            "Find every peak of the first selected pattern, build an anchored window around each "
+            "(shown in the windows field for editing), and track them all."
+        )
+        self._auto_track_btn.clicked.connect(self.auto_track_all)
+        left_layout.addWidget(self._auto_track_btn)
+
         export_btn = QPushButton("Export tracking results to CSV…")
         export_btn.clicked.connect(self.export_track_csv)
         left_layout.addWidget(export_btn)
@@ -161,6 +175,29 @@ class HtxrdWorkspace(QWidget):
 
         waterfall_tab = QWidget()
         wl = QVBoxLayout(waterfall_tab)
+        pick_row = QHBoxLayout()
+        self.pick_guide_btn = QPushButton("Pick track guide")
+        self.pick_guide_btn.setCheckable(True)
+        self.pick_guide_btn.setToolTip(
+            "Toggle, then click the SAME peak at two (or more) temperatures on the waterfall — "
+            "e.g. once near the bottom and once near the top. 'Track picked guide' then follows "
+            "the peak along that line. One click works too (a constant-2θ guide), including from "
+            "an intermediate temperature for a peak that appears or dies."
+        )
+        self.pick_guide_btn.toggled.connect(self._on_pick_guide_toggled)
+        pick_row.addWidget(self.pick_guide_btn)
+        pick_row.addWidget(QLabel("± window (°2θ)"))
+        self.guide_half_edit = QLineEdit("0.3")
+        self.guide_half_edit.setMaximumWidth(50)
+        pick_row.addWidget(self.guide_half_edit)
+        self._track_guide_btn = QPushButton("Track picked guide")
+        self._track_guide_btn.clicked.connect(self.track_picked_guide)
+        pick_row.addWidget(self._track_guide_btn)
+        clear_picks_btn = QPushButton("Clear picks")
+        clear_picks_btn.clicked.connect(self._clear_track_picks)
+        pick_row.addWidget(clear_picks_btn)
+        pick_row.addStretch(1)
+        wl.addLayout(pick_row)
         self.plot = PlotWidget(figsize=(7, 5.5))
         wl.addWidget(self.plot)
         self.tabs.addTab(waterfall_tab, "Waterfall")
@@ -339,6 +376,8 @@ class HtxrdWorkspace(QWidget):
             label = f"{pat.ramp_value:g}" + ("°C" if pat.ramp_source == "metadata" else "")
             ax.plot(pat.x, y + i * delta, lw=0.8, color=color, label=label if len(patterns) <= 15 else None)
 
+        self._wf_state = (patterns, display_y, delta)
+
         # Peak guide lines (notebook feature): interpolated 2θ anchors drawn
         # at each slice's own intensity + offset.
         for guide in self._parse_guides():
@@ -353,6 +392,21 @@ class HtxrdWorkspace(QWidget):
             if gx:
                 ax.plot(gx, gy, "k--", lw=1.0)
 
+        # Picked track-guide anchors (X markers) + the interpolated guide
+        # they define across the whole series.
+        if self._track_picks:
+            centers = guide_centers_for_patterns(self._track_picks, len(patterns))
+            gx, gy = [], []
+            for i, xg in enumerate(centers):
+                yg = float(np.interp(xg, patterns[i].x, display_y[i]))
+                gx.append(float(xg))
+                gy.append(yg + i * delta + 0.02 * delta)
+            ax.plot(gx, gy, "-", color="magenta", lw=1.2, alpha=0.8)
+            for s, xp in self._track_picks:
+                i = int(np.clip(s - 1, 0, len(patterns) - 1))
+                yp = float(np.interp(xp, patterns[i].x, display_y[i])) + i * delta
+                ax.plot([xp], [yp], "x", color="magenta", ms=10, mew=2)
+
         ax.set_xlabel("2θ (deg)")
         ax.set_ylabel("Intensity (offset)")
         ax.set_title(f"HTXRD series — {len(patterns)} patterns (bottom = lowest ramp)")
@@ -361,6 +415,111 @@ class HtxrdWorkspace(QWidget):
         ax.grid(alpha=0.2)
         fig.tight_layout()
         self.plot.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Pick-to-track (user request: click the peak at a start and an end
+    # temperature on the waterfall instead of typing window numbers)
+    # ------------------------------------------------------------------
+    def _on_pick_guide_toggled(self, checked: bool) -> None:
+        from PySide6.QtCore import Qt
+        if checked:
+            if not self.series:
+                self.pick_guide_btn.setChecked(False)
+                QMessageBox.information(self, "Pick track guide", "Import a series first.")
+                return
+            mode = str(self.plot.toolbar.mode)
+            if "zoom" in mode:
+                self.plot.toolbar.zoom()
+            elif "pan" in mode:
+                self.plot.toolbar.pan()
+            self.plot.canvas.setCursor(Qt.CrossCursor)
+            self._pick_cid = self.plot.canvas.mpl_connect("button_press_event", self._on_waterfall_pick)
+            self.status_label.setText("Pick mode: click the same peak at different temperatures (bottom = lowest).")
+        else:
+            if self._pick_cid is not None:
+                self.plot.canvas.mpl_disconnect(self._pick_cid)
+                self._pick_cid = None
+            self.plot.canvas.unsetCursor()
+
+    def _on_waterfall_pick(self, event) -> None:
+        if event.inaxes is None or event.xdata is None or self.plot.toolbar.mode:
+            return
+        if self._wf_state is None:
+            return
+        patterns, display_y, delta = self._wf_state
+        x_click, y_click = float(event.xdata), float(event.ydata)
+        # Which slice? The one whose displayed curve (offset included) passes
+        # closest to the click at this 2θ.
+        best_i, best_d = 0, np.inf
+        for i, pat in enumerate(patterns):
+            y_at = float(np.interp(x_click, pat.x, display_y[i])) + i * delta
+            d = abs(y_click - y_at)
+            if d < best_d:
+                best_i, best_d = i, d
+        self._track_picks.append((best_i + 1, x_click))
+        self._track_picks.sort(key=lambda t: t[0])
+        self.status_label.setText(
+            f"Guide anchors: {', '.join(f'slice {s} @ {x:.2f}°' for s, x in self._track_picks)} — "
+            "add more or click 'Track picked guide'."
+        )
+        self.plot.request_redraw(self.render_waterfall)
+
+    def _clear_track_picks(self) -> None:
+        self._track_picks = []
+        self.plot.request_redraw(self.render_waterfall)
+
+    def track_picked_guide(self) -> None:
+        if not self.series:
+            QMessageBox.warning(self, "Track picked guide", "Import a series first.")
+            return
+        if not self._track_picks:
+            QMessageBox.warning(self, "Track picked guide", "Pick at least one anchor on the waterfall first ('Pick track guide').")
+            return
+        patterns = self._selected_patterns()
+        picks = list(self._track_picks)
+        half = _to_float(self.guide_half_edit.text(), 0.3) or 0.3
+        shape = self.shape_combo.currentText()
+        absence_sigma = _to_float(self.absence_edit.text(), 3.0) or 3.0
+        label = f"guide {picks[0][1]:.2f}°" + (f"→{picks[-1][1]:.2f}°" if len(picks) > 1 else "")
+
+        self._track_guide_btn.setEnabled(False)
+        self._track_guide_btn.setText("Tracking…")
+        from qt_worker import run_in_thread
+        run_in_thread(
+            lambda: track_peak_guided(patterns, picks, half_window=half, shape=shape,
+                                      absence_sigma=absence_sigma, window_label=label),
+            lambda rows, label=label: self._on_guided_done(label, rows),
+            self._on_guided_error,
+        )
+
+    def _on_guided_error(self, traceback_text: str) -> None:
+        self._track_guide_btn.setEnabled(True)
+        self._track_guide_btn.setText("Track picked guide")
+        QMessageBox.critical(self, "Track picked guide error", traceback_text)
+
+    def _on_guided_done(self, label: str, rows: List[PeakTrackResult]) -> None:
+        self._track_guide_btn.setEnabled(True)
+        self._track_guide_btn.setText("Track picked guide")
+        # merge, so several guides can be picked and tracked one after another
+        self.track_results = {**self.track_results, label: rows}
+        self._refresh_tracking_views()
+
+    def auto_track_all(self) -> None:
+        """Automatic tracking setup: peaks of the first selected pattern →
+        anchored windows (left in the windows field for editing) → full run."""
+        if not self.series:
+            QMessageBox.warning(self, "Auto-track", "Import a series first.")
+            return
+        patterns = self._selected_patterns()
+        windows = auto_track_windows(patterns[0])
+        if not windows:
+            QMessageBox.information(self, "Auto-track", "No clear peaks found in the first selected pattern.")
+            return
+        self.windows_edit.setText("; ".join(
+            f"{w['lo']:g}-{w['hi']:g} @ {w['center']:g}" for w in windows
+        ))
+        self.status_label.setText(f"Auto-track: {len(windows)} peak window(s) from '{patterns[0].name}' — tracking…")
+        self.run_track_peak()
 
     # ------------------------------------------------------------------
     # Maps tab (ported from the user's XRD_HT.ipynb)
@@ -531,6 +690,11 @@ class HtxrdWorkspace(QWidget):
         self._track_btn.setEnabled(True)
         self._track_btn.setText("Track peaks across series")
         self.track_results = results
+        self._refresh_tracking_views()
+
+    def _refresh_tracking_views(self) -> None:
+        """Table + plot + transition flags from self.track_results — shared
+        by full runs and incremental guided-tracking merges."""
         self._populate_track_table()
         self._render_track_plot()
 

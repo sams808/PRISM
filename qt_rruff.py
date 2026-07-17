@@ -178,6 +178,7 @@ class RruffMatchWorkspace(QWidget):
         self.results_table = QTableWidget(0, len(RESULT_COLUMNS))
         self.results_table.setHorizontalHeaderLabels(RESULT_COLUMNS)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.results_table.setSelectionMode(QTableWidget.ExtendedSelection)  # shift/ctrl-click overlays several candidates
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.results_table.itemSelectionChanged.connect(self._on_result_selected)
         right_layout.addWidget(self.results_table, 1)
@@ -202,6 +203,11 @@ class RruffMatchWorkspace(QWidget):
             if idx >= 0:
                 self.spec_combo.setCurrentIndex(idx)
         self.spec_combo.blockSignals(False)
+        # Eager index load on page entry (user report: the λ filter was
+        # empty until the first search, because the index only loaded then).
+        if self._index is None and not getattr(self, "_index_load_attempted", False):
+            self._index_load_attempted = True
+            self._ensure_index_loaded()
 
     def _current_spectrum(self):
         sid = self.spec_combo.currentData()
@@ -283,13 +289,21 @@ class RruffMatchWorkspace(QWidget):
             self._results = []
             self._populate_results_table()
             return
+        # Already-accepted references for this spectrum drop out of further
+        # searches — accept means "this phase is identified", so the search
+        # continues over the remaining candidates/peaks.
+        spectrum = self._current_spectrum()
+        accepted_ids = {m.get("rruff_id") for m in (spectrum.meta.get("rruff_matches", []) if spectrum else [])}
+        if accepted_ids:
+            searchable = [r for r in searchable if r.get("rruff_id") not in accepted_ids]
         if len(searchable) < len(self._index):
             self.db_status_label.setText(
-                f"Filters keep {len(searchable)} of {len(self._index)} database spectra."
+                f"Filters keep {len(searchable)} of {len(self._index)} database spectra"
+                + (f" ({len(accepted_ids)} already-accepted excluded)." if accepted_ids else ".")
             )
         self._results = rank_rruff_matches(peaks, searchable, tolerance=tolerance, top_n=25)
         self._populate_results_table()
-        self._render_preview(candidate=self._results[0] if self._results else None)
+        self._render_preview([self._results[0]] if self._results else [])
 
     def _populate_results_table(self) -> None:
         self.results_table.setRowCount(len(self._results))
@@ -311,10 +325,16 @@ class RruffMatchWorkspace(QWidget):
         rows = self.results_table.selectionModel().selectedRows()
         if not rows or not self._results:
             return
-        self._render_preview(candidate=self._results[rows[0].row()])
+        candidates = [self._results[r.row()] for r in sorted(rows, key=lambda r: r.row())
+                      if 0 <= r.row() < len(self._results)]
+        self._render_preview(candidates)
 
     # ------------------------------------------------------------------
-    def _render_preview(self, candidate: Optional[Dict[str, Any]]) -> None:
+    CANDIDATE_COLORS = ["crimson", "royalblue", "seagreen", "darkorange", "purple", "teal"]
+
+    def _render_preview(self, candidates: List[Dict[str, Any]]) -> None:
+        """Overlay the query against one or several candidates (shift/ctrl-
+        click rows to compare references side by side)."""
         fig = self.plot.figure
         fig.clf()
         ax = fig.add_subplot(111)
@@ -325,8 +345,10 @@ class RruffMatchWorkspace(QWidget):
             y_norm = y / np.nanmax(np.abs(y)) if np.nanmax(np.abs(y)) > 0 else y
             ax.plot(spectrum.x, y_norm, color="black", lw=1.1, label=f"query: {spectrum.title}")
 
-        if candidate is not None:
+        for k, candidate in enumerate(candidates):
+            color = self.CANDIDATE_COLORS[k % len(self.CANDIDATE_COLORS)]
             label = f"{candidate.get('mineral', '?')} ({candidate.get('rruff_id', '?')}, {candidate.get('wavelength_nm', '?')} nm)"
+            drew_curve = False
             if self.overlay_raw_check.isChecked() and candidate.get("raw_path") and os.path.isfile(candidate["raw_path"]):
                 try:
                     with open(candidate["raw_path"], "r", encoding="utf-8", errors="replace") as f:
@@ -334,11 +356,13 @@ class RruffMatchWorkspace(QWidget):
                     ref = parse_rruff_txt(text, source_filename=os.path.basename(candidate["raw_path"]))
                     if len(ref.y):
                         ref_norm = ref.y / np.nanmax(np.abs(ref.y)) if np.nanmax(np.abs(ref.y)) > 0 else ref.y
-                        ax.plot(ref.x, ref_norm, color="crimson", lw=1.0, alpha=0.8, label=label)
+                        ax.plot(ref.x, ref_norm, color=color, lw=1.0, alpha=0.8, label=label)
+                        drew_curve = True
                 except OSError:
                     pass
-            for peak in candidate.get("peaks", []):
-                ax.axvline(peak, color="crimson", ls="--", lw=0.7, alpha=0.5)
+            for j, peak in enumerate(candidate.get("peaks", [])):
+                ax.axvline(peak, color=color, ls="--", lw=0.7, alpha=0.5,
+                           label=label if (not drew_curve and j == 0) else None)
 
         ax.set_xlabel("Raman shift (cm⁻¹)")
         ax.set_ylabel("Normalized intensity")
@@ -378,14 +402,25 @@ class RruffMatchWorkspace(QWidget):
         )
 
     def accept_selected_candidate(self) -> None:
+        """Accept = 'this phase is identified': record it, remove the peaks
+        it explains from the query, and immediately re-search the REMAINING
+        peaks for further phases (user request — mixtures are the norm, one
+        spectrum can hold several minerals). Accepted references are
+        excluded from the follow-up search; every accept lands on the undo
+        stack (Ctrl+Z in the Library)."""
         rows = self.results_table.selectionModel().selectedRows()
         spectrum = self._current_spectrum()
         if spectrum is None or not rows or not self._results:
             QMessageBox.warning(self, "Accept identification", "Select a query spectrum and a candidate row first.")
             return
         candidate = self._results[rows[0].row()]
-        previous_match = spectrum.meta.get("rruff_match")
-        spectrum.meta["rruff_match"] = {
+        tolerance = _to_float(self.tolerance_edit.text(), 10.0)
+
+        previous_state = {
+            "rruff_match": spectrum.meta.get("rruff_match"),
+            "rruff_matches": list(spectrum.meta["rruff_matches"]) if spectrum.meta.get("rruff_matches") else None,
+        }
+        match_record = {
             "mineral": candidate.get("mineral"),
             "rruff_id": candidate.get("rruff_id"),
             "wavelength_nm": candidate.get("wavelength_nm"),
@@ -393,10 +428,34 @@ class RruffMatchWorkspace(QWidget):
             "match_fraction": candidate.get("match_fraction"),
             "accepted_at": time.time(),
         }
+        spectrum.meta["rruff_match"] = match_record  # latest accept (back-compat: reports/projects read this)
+        accepted = list(spectrum.meta.get("rruff_matches", []))
+        accepted.append(match_record)
+        spectrum.meta["rruff_matches"] = accepted
         if self.on_accept is not None:
-            self.on_accept(spectrum.id, previous_match)
-        QMessageBox.information(
-            self, "Accepted",
-            f"Recorded '{candidate.get('mineral')}' ({candidate.get('rruff_id')}) as the accepted identification "
-            f"for '{spectrum.title}'.\n\n{RRUFF_CITATION}",
-        )
+            self.on_accept(spectrum.id, previous_state)
+
+        cand_peaks = candidate.get("peaks", []) or []
+        remaining = [p for p in self._query_peaks
+                     if not any(abs(p - cp) <= tolerance for cp in cand_peaks)]
+        phase_list = ", ".join(f"{m['mineral']} ({m['rruff_id']})" for m in accepted)
+
+        if remaining:
+            self.peaks_edit.setText(", ".join(f"{p:.1f}" for p in sorted(remaining)))
+            QMessageBox.information(
+                self, "Phase accepted",
+                f"Recorded '{candidate.get('mineral')}' ({candidate.get('rruff_id')}) for '{spectrum.title}'.\n"
+                f"{len(remaining)} peak(s) remain unexplained — the table now shows matches for those.\n"
+                f"Accepted so far: {phase_list}\n\n{RRUFF_CITATION}",
+            )
+            self.find_matches()
+        else:
+            self.peaks_edit.setText("")
+            self._results = []
+            self._populate_results_table()
+            self._render_preview([])
+            QMessageBox.information(
+                self, "All peaks explained",
+                f"Every query peak of '{spectrum.title}' is now explained by {len(accepted)} accepted phase(s): "
+                f"{phase_list}.\n\n{RRUFF_CITATION}",
+            )

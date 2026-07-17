@@ -453,11 +453,19 @@ class LibraryPage(QWidget):
         elif kind == "ident":
             sp = self.library.get(action[1])
             if sp is not None:
-                old_match = action[2]
-                if old_match is None:
+                old = action[2]
+                if isinstance(old, dict) and "rruff_match" in old and "rruff_matches" in old:
+                    # multi-phase envelope (iterative accept): restore both keys
+                    for key in ("rruff_match", "rruff_matches"):
+                        if old.get(key) is None:
+                            sp.meta.pop(key, None)
+                        else:
+                            sp.meta[key] = old[key]
+                elif old is None:
                     sp.meta.pop("rruff_match", None)
-                else:
-                    sp.meta["rruff_match"] = old_match
+                    sp.meta.pop("rruff_matches", None)
+                else:  # legacy single-match record
+                    sp.meta["rruff_match"] = old
         self.undo_btn.setEnabled(bool(self._undo_stack))
         self._refresh_table()
 

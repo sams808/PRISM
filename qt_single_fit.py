@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
@@ -373,19 +374,30 @@ class SingleFitWorkspace(QWidget):
                 self.pick_peaks_btn.setChecked(False)
                 QMessageBox.information(self, "Pick peaks", "Select a spectrum first.")
                 return
+            # A still-active zoom/pan tool would swallow every click (the
+            # user's report: "clicking does nothing but drag-zoom works").
+            # Entering pick mode deactivates it instead of silently losing.
+            mode = str(self.plot.toolbar.mode)
+            if "zoom" in mode:
+                self.plot.toolbar.zoom()
+            elif "pan" in mode:
+                self.plot.toolbar.pan()
+            self.plot.canvas.setCursor(Qt.CrossCursor)
             self._pick_cid = self.plot.canvas.mpl_connect("button_press_event", self._on_pick_click)
             self._append_log("[Pick peaks] ON — click peak apexes; each click adds a component.")
         else:
             if getattr(self, "_pick_cid", None) is not None:
                 self.plot.canvas.mpl_disconnect(self._pick_cid)
                 self._pick_cid = None
+            self.plot.canvas.unsetCursor()
             n = len(self.get_current_params())
             self._append_log(f"[Pick peaks] OFF — model now has {n} component(s); open Fit param. to refine.")
 
     def _on_pick_click(self, event) -> None:
         if event.inaxes is None or event.xdata is None:
             return
-        if self.plot.toolbar.mode:  # zoom/pan tool active — don't hijack the click
+        if self.plot.toolbar.mode:  # zoom/pan re-activated mid-pick — say so instead of silently eating clicks
+            self._append_log("[Pick peaks] click ignored — the zoom/pan tool is active; deactivate it in the toolbar to pick.")
             return
         x, y = self.get_xy()
         if not len(x):
