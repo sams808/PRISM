@@ -10,8 +10,10 @@ from typing import Optional
 from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 
 # Single source of the app version: shown in the window title and About,
-# and matched by the git tag (v2.0.0 marks the completed Qt rebuild).
-APP_VERSION = "2.0.0"
+# and matched by the git tag (2.0.0 = the completed Qt rebuild; 2.1.0 = the
+# first hands-on-feedback wave: .prj fixes, RRUFF filters, peak picking,
+# true Origin-style stepwise LM, HT-XRD tracking rework + Maps tab).
+APP_VERSION = "2.1.0"
 
 HELP_HTML = """
 <h1>Dataapp — quick-start guide</h1>
