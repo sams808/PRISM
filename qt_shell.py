@@ -36,6 +36,7 @@ from qt_single_fit import SingleFitWorkspace
 from qt_baseline import BaselineWorkspace
 from qt_calc import CalcWorkspace
 from qt_figures import FiguresWorkspace
+from qt_glass import GlassWorkspace
 from qt_saxs import SaxsWorkspace
 from qt_xrd import XrdIdWorkspace
 from qt_htxrd import HtxrdWorkspace
@@ -63,11 +64,12 @@ NAV_CALC = "Calculations"
 NAV_XRD_ID = "XRD ID"
 NAV_FIGURES = "Figures"
 NAV_SAXS = "SAXS/WAXS"
+NAV_GLASS = "Glass"
 # Ordered PER TECHNIQUE (user request): Raman block, then XRD, XAS,
 # Thermal, SAXS, cross-technique processing, Figures.
 NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_RRUFF, NAV_FITTING, NAV_MULTIFIT,
              NAV_BASELINE, NAV_XRD_ID, NAV_HTXRD, NAV_XAS, NAV_DTA,
-             NAV_SAXS, NAV_CALC, NAV_FIGURES]
+             NAV_SAXS, NAV_GLASS, NAV_CALC, NAV_FIGURES]
 
 # Activatable modules (user request: a Raman-only or XRD-only user should
 # see a simple app). Each module = (accent color, its nav pages); the
@@ -82,6 +84,7 @@ MODULES = {
     "Processing": ("#3b82f6", [NAV_BASELINE, NAV_CALC]),
     "Figures":    ("#14b8a6", [NAV_FIGURES]),
     "SAXS/WAXS":  ("#b08f26", [NAV_SAXS]),
+    "Glass":      ("#5b8dd6", [NAV_GLASS]),
 }
 CORE_COLOR = "#8a97b5"  # Library
 
@@ -656,6 +659,8 @@ class PrismMainWindow(QMainWindow):
             on_derived_added=lambda ids: self.library_page.push_undo(("add", list(ids))),
         )
         self.stack.addWidget(self.saxs_page)
+        self.glass_page = GlassWorkspace()
+        self.stack.addWidget(self.glass_page)
         outer.addWidget(self.stack, 1)
 
         # Nav row -> page by NAME (the rail is ordered per technique, the
@@ -667,7 +672,7 @@ class PrismMainWindow(QMainWindow):
             NAV_RRUFF: self.rruff_page, NAV_HTXRD: self.htxrd_page,
             NAV_BASELINE: self.baseline_page, NAV_CALC: self.calc_page,
             NAV_XRD_ID: self.xrd_id_page, NAV_FIGURES: self.figures_page,
-            NAV_SAXS: self.saxs_page,
+            NAV_SAXS: self.saxs_page, NAV_GLASS: self.glass_page,
         }
         self.nav.setCurrentRow(0)
 

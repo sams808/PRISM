@@ -207,6 +207,15 @@ The XAS workspace also gained a <b>Sample mass</b> tab — the Hephaestus
 calculator on oxide compositions (mol%/wt%) or formulas: masses for total
 μt = 1 / 2.5 and edge step Δμt = 1 in a pellet of chosen diameter.</p>
 
+<h2>Glass</h2>
+<p>Composition-based glass property calculation. Paste (or load as CSV) a
+composition table &mdash; header = oxides, one row per sample, mol% or wt% &mdash;
+then: <b>Optical basicity &Lambda;</b> (oxygen-weighted Duffy mixing with the
+recommended per-oxide values of Rodriguez &amp; McCloy, PNNL-20184 Table B.1),
+and <b>GlassNet predictions</b> (Tg, viscosity, density, refractive index and
+~80 more; Cassar 2023, trained on SciGlass &mdash; estimates to validate, not
+measurements). Compare against SciGlass, INTERGLAD, glassproperties.com.</p>
+
 <h2>Shortcuts</h2>
 <p><code>Ctrl+O</code> import · <code>Ctrl+I</code> custom import ·
 <code>Ctrl+E</code> export · <code>Ctrl+S</code> save project ·
