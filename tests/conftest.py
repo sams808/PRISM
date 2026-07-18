@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-DATAAPP_ROOT = Path(__file__).resolve().parents[1]
-EXAMPLES_DIR = DATAAPP_ROOT / "EXAMPLES"
-ARCHIVE_DIR = DATAAPP_ROOT.parent / "data_and_notebooks"
+PRISM_ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES_DIR = PRISM_ROOT / "EXAMPLES"
+ARCHIVE_DIR = PRISM_ROOT.parent / "data_and_notebooks"
 
 
 @pytest.fixture(scope="session")
@@ -98,6 +98,21 @@ def _synchronous_workers():
     qt_worker.set_synchronous(True)
     yield
     qt_worker.set_synchronous(False)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_xrd_registry(tmp_path, monkeypatch):
+    """The XRD ID workspace reads/writes a per-user database registry
+    (~/.raman_cache/xrd_id/databases.json) and would auto-migrate a real
+    local database into it — point all registry paths at a temp location so
+    tests never touch (or migrate!) the user's real registered databases.
+    Works because the registry functions resolve these module attributes at
+    call time, not def time."""
+    import xrd_id_science as xid
+    monkeypatch.setattr(xid, "XRD_ID_REGISTRY_PATH", str(tmp_path / "xrd_registry.json"))
+    monkeypatch.setattr(xid, "XRD_ID_DB_PATH", str(tmp_path / "xrdid_legacy_absent.sq"))
+    monkeypatch.setattr(xid, "XRD_ID_IMPORT_DIR", str(tmp_path / "xrd_imported"))
+    yield
 
 
 @pytest.fixture(autouse=True)

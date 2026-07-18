@@ -1,16 +1,24 @@
 """
-xrd_id_science.py — XRD phase identification (framework-agnostic): the
-QualX-style search-match engine, rebuilt on the user's own QualX-format
-SQLite databases (COD 1906-inorganic, COD 2205, ICDD PDF-2), merged into
-ONE local database that keeps every card's original source and code.
+xrd_id_science.py — XRD phase identification (framework-agnostic): a
+QualX-style search-match engine over the user's OWN reference databases.
 
-QualX .sq format (reverse-engineered from the three files): an `id` table
-with one row per card — name / mineralname / chemical_formula / spacegroup /
-quality / rir and the reference pattern as comma-separated text in `dvalue`
-(d-spacings, Å) and `intensita` (intensities) — plus a `chemical` table
-(card id → element) and `infodb` (provenance).
+PRISM ships no reference data. Users download whichever card database they
+have the rights to use — any QualX-format .sq works — and register it in
+the XRD ID workspace ("Add database…" / "Add folder…"). Registered
+databases live in a small JSON registry (~/.raman_cache/xrd_id/
+databases.json); any number can be enabled at once and every search probes
+all enabled ones, so results can mix several databases exactly like QualX.
 
-Unified database (built once into ~/.raman_cache/xrd_id/xrdid.sq):
+QualX .sq format (reverse-engineered): an `id` table with one row per
+card — name / mineralname / chemical_formula / spacegroup / quality / rir
+and the reference pattern as comma-separated text in `dvalue` (d-spacings,
+Å) and `intensita` (intensities) — plus a `chemical` table (card id →
+element) and `infodb` (provenance). Registering such a file converts it
+ONCE into PRISM's indexed format below (stored under ~/.raman_cache/
+xrd_id/imported/); a .sq that is already in PRISM's format (e.g. handed
+over by a colleague) registers in place, no copy.
+
+PRISM indexed .sq schema:
   cards(card_id, source, source_code, name, mineral, formula, spacegroup,
         quality, rir, nd, d, i)          — lines capped at the strongest 60
   elements(card_id, element)             — for chemistry filters
@@ -27,6 +35,7 @@ match-assist.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -36,7 +45,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 XRD_ID_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".raman_cache", "xrd_id")
-XRD_ID_DB_PATH = os.path.join(XRD_ID_CACHE_DIR, "xrdid.sq")
+XRD_ID_DB_PATH = os.path.join(XRD_ID_CACHE_DIR, "xrdid.sq")  # legacy single-db location
+XRD_ID_REGISTRY_PATH = os.path.join(XRD_ID_CACHE_DIR, "databases.json")
+XRD_ID_IMPORT_DIR = os.path.join(XRD_ID_CACHE_DIR, "imported")
 
 CU_KA1 = 1.5406  # Å — the default lab wavelength
 
@@ -68,8 +79,8 @@ def d_to_two_theta(d: np.ndarray, wavelength: float = CU_KA1) -> np.ndarray:
 # =============================================================================
 
 def _parse_lines_text(d_text, i_text) -> Tuple[np.ndarray, np.ndarray]:
-    """The dvalue/intensita columns are comma-separated float text (declared
-    BLOB in PDF2 but stored as text in all three files)."""
+    """The dvalue/intensita columns are comma-separated float text (some
+    databases declare them BLOB but store text all the same)."""
     def _floats(t):
         if t is None:
             return np.array([])
@@ -92,7 +103,7 @@ def _parse_lines_text(d_text, i_text) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _safe_float(v) -> Optional[float]:
-    """PDF-2 stores empty numerics as runs of spaces — not None, not ''."""
+    """Some databases store empty numerics as runs of spaces — not None, not ''."""
     try:
         return float(str(v).strip())
     except (TypeError, ValueError):
@@ -100,7 +111,7 @@ def _safe_float(v) -> Optional[float]:
 
 
 def _clean_name(name: Optional[str]) -> str:
-    """PDF-2 names carry $-prefixed typesetting codes ('$GB-...')."""
+    """Some databases carry $-prefixed typesetting codes in names ('$GB-...')."""
     s = (name or "").strip()
     s = re.sub(r"\$[A-Z0-9]{1,3}[- ]?", "", s)
     return s.strip()
@@ -110,11 +121,11 @@ def build_xrd_database(
     sources: Sequence[Tuple[str, str]], *, out_path: str = XRD_ID_DB_PATH,
     min_lines: int = 3, progress_every: int = 50000, log=print,
 ) -> Dict[str, int]:
-    """Merge QualX-format .sq files into the unified database.
-    sources: [(path, tag), ...] e.g. [(cod1906ino.sq, 'COD1906-INO'), ...].
-    Cards keep their original id as source_code. Cards with fewer than
-    min_lines usable lines are skipped (nothing to match against).
-    Returns {tag: n_cards_ingested}."""
+    """Convert (and optionally merge) QualX-format .sq files into one
+    PRISM-indexed database. sources: [(path, tag), ...] — the tag labels
+    every card's provenance in results. Cards keep their original id as
+    source_code. Cards with fewer than min_lines usable lines are skipped
+    (nothing to match against). Returns {tag: n_cards_ingested}."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     if os.path.exists(out_path):
         os.remove(out_path)
@@ -215,6 +226,153 @@ def database_summary(db_path: str = XRD_ID_DB_PATH) -> Optional[Dict[str, Any]]:
 
 
 # =============================================================================
+# Database registry — use whatever databases you want, several at once
+# =============================================================================
+
+def sniff_sq_format(path: str) -> Optional[str]:
+    """'prism' (PRISM's indexed schema), 'qualx' (original QualX schema),
+    or None (not a recognizable card database)."""
+    if not os.path.isfile(path):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        tables = {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table','view')")}
+        if {"cards", "strong_lines"} <= tables:
+            con.close()
+            return "prism"
+        if "id" in tables:
+            cols = {r[1] for r in con.execute("PRAGMA table_info(id)")}
+            con.close()
+            if {"dvalue", "intensita"} <= cols:
+                return "qualx"
+            return None
+        con.close()
+    except sqlite3.Error:
+        return None
+    return None
+
+
+def load_registry(registry_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The registered databases: [{'name', 'path', 'enabled', 'origin'?}, …].
+    First call migrates a pre-registry unified database (the old fixed
+    ~/.raman_cache/xrd_id/xrdid.sq location) into the registry so existing
+    setups keep working untouched."""
+    registry_path = registry_path or XRD_ID_REGISTRY_PATH
+    entries: List[Dict[str, Any]] = []
+    if os.path.isfile(registry_path):
+        try:
+            with open(registry_path, encoding="utf-8") as f:
+                entries = list(json.load(f).get("databases", []))
+        except (OSError, ValueError):
+            entries = []
+    if not any(os.path.normcase(e.get("path", "")) == os.path.normcase(XRD_ID_DB_PATH)
+               for e in entries) and os.path.isfile(XRD_ID_DB_PATH) \
+            and os.path.normcase(registry_path) == os.path.normcase(XRD_ID_REGISTRY_PATH):
+        entries.insert(0, {"name": "Local database", "path": XRD_ID_DB_PATH, "enabled": True})
+        save_registry(entries, registry_path)
+    return entries
+
+
+def save_registry(entries: Sequence[Dict[str, Any]], registry_path: Optional[str] = None) -> None:
+    registry_path = registry_path or XRD_ID_REGISTRY_PATH
+    os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+    with open(registry_path, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "databases": list(entries)}, f, indent=1)
+
+
+def _unique_name(base: str, entries: Sequence[Dict[str, Any]]) -> str:
+    taken = {e.get("name") for e in entries}
+    name, k = base, 2
+    while name in taken:
+        name = f"{base} ({k})"
+        k += 1
+    return name
+
+
+def register_database(path: str, name: Optional[str] = None, *,
+                      registry_path: Optional[str] = None,
+                      import_dir: Optional[str] = None,
+                      log=print) -> Dict[str, Any]:
+    """Register a card database for searching. A PRISM-format .sq is
+    registered in place (no copy — network drives are fine); a QualX-format
+    .sq is converted ONCE into the indexed format under import_dir, then
+    the converted file is registered (with the original recorded as
+    'origin'). Re-registering an already-registered path is a no-op.
+    Raises ValueError when the file isn't a recognizable card database."""
+    registry_path = registry_path or XRD_ID_REGISTRY_PATH
+    import_dir = import_dir or XRD_ID_IMPORT_DIR
+    path = os.path.abspath(path)
+    fmt = sniff_sq_format(path)
+    if fmt is None:
+        raise ValueError(
+            f"{os.path.basename(path)} is not a recognizable card database "
+            "(expected a QualX-format or PRISM-format .sq SQLite file).")
+    entries = load_registry(registry_path)
+    for e in entries:
+        if os.path.normcase(e.get("path", "")) == os.path.normcase(path) or \
+                os.path.normcase(e.get("origin") or "") == os.path.normcase(path):
+            return e
+    name = _unique_name((name or os.path.splitext(os.path.basename(path))[0]).strip(), entries)
+    if fmt == "qualx":
+        os.makedirs(import_dir, exist_ok=True)
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name) or "db"
+        out_path = os.path.join(import_dir, f"{slug}.sq")
+        log(f"Importing '{name}' (one-time indexing — large databases take a few minutes)…")
+        counts = build_xrd_database([(path, name)], out_path=out_path, log=log)
+        log(f"Imported {sum(counts.values())} cards from '{name}'.")
+        entry = {"name": name, "path": out_path, "enabled": True, "origin": path}
+    else:
+        entry = {"name": name, "path": path, "enabled": True}
+    entries.append(entry)
+    save_registry(entries, registry_path)
+    return entry
+
+
+def register_folder(folder: str, *, registry_path: Optional[str] = None,
+                    import_dir: Optional[str] = None, log=print) -> List[Dict[str, Any]]:
+    """Register every recognizable .sq in a folder (non-recursive first,
+    then one level of subfolders — the layout database downloads unpack to).
+    Unrecognizable files are skipped with a log line."""
+    added: List[Dict[str, Any]] = []
+    candidates: List[str] = []
+    for root in [folder] + sorted(
+            os.path.join(folder, d) for d in os.listdir(folder)
+            if os.path.isdir(os.path.join(folder, d))):
+        candidates += sorted(
+            os.path.join(root, f) for f in os.listdir(root)
+            if f.lower().endswith(".sq") and os.path.isfile(os.path.join(root, f)))
+    for p in candidates:
+        try:
+            added.append(register_database(p, registry_path=registry_path,
+                                           import_dir=import_dir, log=log))
+        except ValueError as exc:
+            log(f"Skipped {os.path.basename(p)}: {exc}")
+    return added
+
+
+def unregister_database(name: str, *, registry_path: Optional[str] = None) -> None:
+    """Remove a database from the registry (the .sq file itself is never
+    deleted — it may be the user's only copy)."""
+    entries = [e for e in load_registry(registry_path) if e.get("name") != name]
+    save_registry(entries, registry_path)
+
+
+def set_database_enabled(name: str, enabled: bool, *,
+                         registry_path: Optional[str] = None) -> None:
+    entries = load_registry(registry_path)
+    for e in entries:
+        if e.get("name") == name:
+            e["enabled"] = bool(enabled)
+    save_registry(entries, registry_path)
+
+
+def enabled_database_paths(registry_path: Optional[str] = None) -> List[str]:
+    return [e["path"] for e in load_registry(registry_path)
+            if e.get("enabled", True) and os.path.isfile(e.get("path", ""))]
+
+
+# =============================================================================
 # Search-match
 # =============================================================================
 
@@ -233,6 +391,7 @@ class XrdMatch:
     cov_card: float          # how much of the card's pattern is in the data
     cov_query: float         # how much of the data the card explains
     n_matched: int
+    db: str = ""             # which registered database the card came from
     matched_pairs: List[Tuple[float, float]] = field(default_factory=list)  # (query 2θ, card 2θ)
     d: np.ndarray = field(default_factory=lambda: np.array([]))
     i: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -245,6 +404,7 @@ def search_match(
     sources: Sequence[str] = (), top_n: int = 40,
     two_theta_range: Optional[Tuple[float, float]] = None,
     max_candidates: int = 20000, db_path: str = XRD_ID_DB_PATH,
+    db_paths: Optional[Sequence[str]] = None,
 ) -> List[XrdMatch]:
     """Rank database cards against a measured peak list.
 
@@ -252,11 +412,35 @@ def search_match(
     assumed when none given). tol_two_theta: match window in °2θ.
     elements_all: card must contain ALL of these; elements_none: none.
     sources: restrict to these source tags. two_theta_range: only card
-    lines inside the measured range count against the card's coverage."""
+    lines inside the measured range count against the card's coverage.
+    db_paths: probe SEVERAL registered databases at once (QualX-style) —
+    results are merged and re-ranked; each match's .db says which file it
+    came from. When db_paths is None, the single db_path is probed."""
+    paths = [str(p) for p in db_paths] if db_paths is not None else [db_path]
+    results: List[XrdMatch] = []
+    for p in paths:
+        results.extend(_search_match_one(
+            query_two_theta, query_intensity, wavelength=wavelength,
+            tol_two_theta=tol_two_theta, elements_all=elements_all,
+            elements_none=elements_none, sources=sources, top_n=top_n,
+            two_theta_range=two_theta_range, max_candidates=max_candidates,
+            db_path=p))
+    results.sort(key=lambda r: (r.fom, r.n_matched), reverse=True)
+    return results[:top_n]
+
+
+def _search_match_one(
+    query_two_theta: Sequence[float], query_intensity: Optional[Sequence[float]] = None, *,
+    wavelength: float = CU_KA1, tol_two_theta: float = 0.2,
+    elements_all: Sequence[str] = (), elements_none: Sequence[str] = (),
+    sources: Sequence[str] = (), top_n: int = 40,
+    two_theta_range: Optional[Tuple[float, float]] = None,
+    max_candidates: int = 20000, db_path: str = XRD_ID_DB_PATH,
+) -> List[XrdMatch]:
     if not os.path.isfile(db_path):
         raise FileNotFoundError(
-            f"No unified XRD database at {db_path}. Build it once with "
-            "xrd_id_science.build_xrd_database() — see the XRD workspace help.")
+            f"No XRD database at {db_path}. Register one in the XRD ID "
+            "workspace (Add database…) or build one with build_xrd_database().")
     q_tt = np.asarray(list(query_two_theta), float)
     if len(q_tt) == 0:
         return []
@@ -268,8 +452,12 @@ def search_match(
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 
     # ---- candidate prefilter: cards whose strong lines coincide with the
-    # query's strongest peaks (union, ranked by hit count)
-    strongest = np.argsort(q_i)[::-1][:5]
+    # query's strongest peaks (union, ranked by hit count). With a flat
+    # intensity list (hand-typed peaks, no spectrum) "strongest 5" would be
+    # an arbitrary subset — probe every peak instead so no phase whose
+    # lines happen to sit late in the list is silently missed.
+    n_probe = len(q_tt) if float(q_i.max()) == float(q_i.min()) else 5
+    strongest = np.argsort(q_i)[::-1][:n_probe]
     hits: Dict[int, int] = {}
     for qi in strongest:
         tt = q_tt[qi]
@@ -315,6 +503,7 @@ def search_match(
         f"FROM cards WHERE card_id IN ({marks}){src_filter}", params).fetchall()
     con.close()
 
+    db_label = os.path.splitext(os.path.basename(db_path))[0]
     results: List[XrdMatch] = []
     for (cid, source, code, name, mineral, formula, sg, quality, rir, d_text, i_text) in rows:
         c_d = np.array([float(v) for v in d_text.split(",")], float)
@@ -349,18 +538,19 @@ def search_match(
             card_id=cid, source=source, source_code=code, name=name or "", mineral=mineral or "",
             formula=formula or "", spacegroup=sg or "", quality=quality or "", rir=rir,
             fom=fom, cov_card=cov_card, cov_query=cov_query, n_matched=len(matched_pairs),
-            matched_pairs=matched_pairs, d=c_d, i=c_i,
+            db=db_label, matched_pairs=matched_pairs, d=c_d, i=c_i,
         ))
     results.sort(key=lambda r: (r.fom, r.n_matched), reverse=True)
     return results[:top_n]
 
 
-def _rows_to_cards(rows) -> List[Dict[str, Any]]:
+def _rows_to_cards(rows, db_label: str = "") -> List[Dict[str, Any]]:
     out = []
     for (cid, source, code, name, mineral, formula, sg, quality, d_text, i_text) in rows:
         out.append({
             "card_id": cid, "source": source, "source_code": code, "name": name,
             "mineral": mineral, "formula": formula, "spacegroup": sg, "quality": quality,
+            "db": db_label,
             "d": np.array([float(v) for v in d_text.split(",")], float),
             "i": np.array([float(v) for v in i_text.split(",")], float),
         })
@@ -368,7 +558,8 @@ def _rows_to_cards(rows) -> List[Dict[str, Any]]:
 
 
 def find_cards_by_elements(query: str, *, mode: str = "exact", limit: int = 100,
-                           db_path: str = XRD_ID_DB_PATH) -> List[Dict[str, Any]]:
+                           db_path: str = XRD_ID_DB_PATH,
+                           db_paths: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
     """Element-set card lookup (user report: text-searching 'TiO2' missed
     cards whose formula is written 'O2 Ti'). The query is parsed as a
     chemical formula; cards are matched on their ELEMENT SET, so formula
@@ -376,6 +567,13 @@ def find_cards_by_elements(query: str, *, mode: str = "exact", limit: int = 100,
     mode='exact'  — card contains exactly these elements and no others
     mode='contains' — card contains at least these elements."""
     import xraydb
+    if db_paths is not None:
+        out: List[Dict[str, Any]] = []
+        for p in db_paths:
+            out += find_cards_by_elements(query, mode=mode, limit=limit - len(out), db_path=p)
+            if len(out) >= limit:
+                break
+        return out
     if not os.path.isfile(db_path):
         return []
     try:
@@ -405,12 +603,20 @@ def find_cards_by_elements(query: str, *, mode: str = "exact", limit: int = 100,
         f"SELECT card_id, source, source_code, name, mineral, formula, spacegroup, quality, d, i "
         f"FROM cards WHERE card_id IN ({','.join('?' * len(ids))})", ids).fetchall()
     con.close()
-    return _rows_to_cards(rows)
+    return _rows_to_cards(rows, os.path.splitext(os.path.basename(db_path))[0])
 
 
-def find_cards_by_text(text: str, *, limit: int = 50, db_path: str = XRD_ID_DB_PATH) -> List[Dict[str, Any]]:
+def find_cards_by_text(text: str, *, limit: int = 50, db_path: str = XRD_ID_DB_PATH,
+                       db_paths: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
     """Name/mineral/formula substring lookup — the Raman↔XRD bridge uses
     this to pull reference patterns for an already-identified mineral."""
+    if db_paths is not None:
+        out: List[Dict[str, Any]] = []
+        for p in db_paths:
+            out += find_cards_by_text(text, limit=limit - len(out), db_path=p)
+            if len(out) >= limit:
+                break
+        return out
     if not os.path.isfile(db_path):
         return []
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -420,12 +626,4 @@ def find_cards_by_text(text: str, *, limit: int = 50, db_path: str = XRD_ID_DB_P
         "FROM cards WHERE mineral LIKE ? OR name LIKE ? OR formula LIKE ? LIMIT ?",
         (like, like, like, int(limit))).fetchall()
     con.close()
-    out = []
-    for (cid, source, code, name, mineral, formula, sg, quality, d_text, i_text) in rows:
-        out.append({
-            "card_id": cid, "source": source, "source_code": code, "name": name,
-            "mineral": mineral, "formula": formula, "spacegroup": sg, "quality": quality,
-            "d": np.array([float(v) for v in d_text.split(",")], float),
-            "i": np.array([float(v) for v in i_text.split(",")], float),
-        })
-    return out
+    return _rows_to_cards(rows, os.path.splitext(os.path.basename(db_path))[0])

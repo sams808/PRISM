@@ -7,7 +7,7 @@ import pytest
 
 import xrd_id_science as xid
 from qt_models import Spectrum, SpectrumLibrary
-from qt_shell import NAV_ITEMS, DataappMainWindow
+from qt_shell import NAV_ITEMS, PrismMainWindow
 from qt_xrd import XrdIdWorkspace
 from test_xrd_id_science import QUARTZ_D, QUARTZ_I, _make_source_sq
 
@@ -106,8 +106,60 @@ def test_card_browser_lookup(qtbot, db_path):
     assert "TESTDB 1020" in widget.browse_list.item(0).text()
 
 
+def test_database_list_shows_and_toggles(qtbot, db_path):
+    from PySide6.QtCore import Qt
+    widget, _, _ = _workspace(qtbot, db_path)
+    assert widget.db_list.count() == 1
+    assert widget.db_list.item(0).checkState() == Qt.Checked
+    assert widget._enabled_paths() == [db_path]
+    widget.db_list.item(0).setCheckState(Qt.Unchecked)
+    assert widget._enabled_paths() == []  # unchecked databases are not probed
+
+
+def test_add_database_and_search_probes_both(qtbot, db_path, tmp_path):
+    """Register a second database at runtime; one search must probe both
+    (the user's 'allow them to use multiple if wanted')."""
+    src = tmp_path / "extra_src.sq"
+    _make_source_sq(src, [
+        (9, "Cristobalite", "Cristobalite", "Si O2", "P 41 21 2", "A",
+         [4.05, 2.485, 2.841, 3.135], [100.0, 20.0, 13.0, 11.0], ["Si", "O"]),
+    ])
+    db2 = tmp_path / "extra.sq"
+    xid.build_xrd_database([(str(src), "EXTRA")], out_path=str(db2), log=lambda *a: None)
+
+    widget, _, _ = _workspace(qtbot, db_path)
+    widget._register_paths([str(db2)])
+    qtbot.wait(20)
+    assert widget.db_list.count() == 2
+    assert len(widget._enabled_paths()) == 2
+    assert "Added: extra" in widget.db_status_label.text()
+
+    # a quartz+cristobalite mixture: each phase only exists in one database.
+    # No spectrum selected -> equal peak intensities, so the strong-line
+    # prefilter probes both phases' lines (with a spectrum, weak second-phase
+    # lines are found via the iterative Accept workflow instead).
+    tt_q = xid.d_to_two_theta(np.array(QUARTZ_D))
+    tt_c = xid.d_to_two_theta(np.array([4.05, 2.485, 2.841, 3.135]))
+    widget.peaks_edit.setText(", ".join(f"{v:.3f}" for v in np.concatenate([tt_q, tt_c])))
+    widget.spec_combo.setCurrentIndex(-1)
+    widget.run_search()
+    qtbot.wait(20)
+    found = {widget.results_table.item(r, 1).text() for r in range(widget.results_table.rowCount())}
+    assert {"Quartz", "Cristobalite"} <= found
+
+
+def test_add_rejects_non_database_file(qtbot, db_path, tmp_path):
+    junk = tmp_path / "junk.sq"
+    junk.write_text("not sqlite at all")
+    widget, _, _ = _workspace(qtbot, db_path)
+    widget._register_paths([str(junk)])
+    qtbot.wait(20)
+    assert widget.db_list.count() == 1  # nothing added
+    assert widget.add_db_btn.isEnabled()  # buttons re-enabled after the error
+
+
 def test_shell_has_xrd_id_page(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     window.nav.setCurrentRow(NAV_ITEMS.index("XRD ID"))
     qtbot.wait(20)
@@ -115,7 +167,7 @@ def test_shell_has_xrd_id_page(qtbot):
 
 
 def test_xrd_accept_is_undoable_through_shell(qtbot, db_path):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     sp = _quartz_pattern()
     window.library.add(sp)

@@ -1,25 +1,30 @@
 """
-qt_xrd.py — the XRD phase-identification workspace: the QualX search-match
-rebuilt inside Dataapp (xrd_id_science engine over the unified
-COD1906-INO + COD2205 + PDF2 database), plus a reference-card browser and
-the Raman↔XRD bridge.
+qt_xrd.py — the XRD phase-identification workspace: a QualX-style
+search-match (xrd_id_science engine) over the user's OWN registered card
+databases, plus a reference-card browser and the Raman↔XRD bridge.
 
-Same philosophy as Mineral ID: candidates are RANKED with their figure of
+PRISM ships no reference data: any QualX-format or PRISM-format .sq the
+user has the rights to can be registered ("Add database…" / "Add folder…"),
+several can be enabled at once, and every search probes all enabled ones.
+
+Same philosophy as Raman ID: candidates are RANKED with their figure of
 merit, sources, and codes — identification only happens on an explicit
 Accept, which works iteratively for mixtures (matched peaks removed, the
 remaining ones re-searched), mirroring the Raman workflow.
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QMessageBox, QPushButton, QSplitter, QTabWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSplitter,
+    QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 import xrd_id_science as xid
@@ -47,15 +52,29 @@ class XrdIdWorkspace(QWidget):
                  db_path: Optional[str] = None, on_accept=None):
         super().__init__(parent)
         self.library = library if library is not None else SpectrumLibrary()
-        self.db_path = db_path or xid.XRD_ID_DB_PATH
+        # Database registry: with an explicit db_path (tests / embedding) the
+        # workspace runs on that single file and never touches the on-disk
+        # registry; otherwise the JSON registry drives the list and toggles
+        # persist there.
+        if db_path:
+            self._registry_backed = False
+            self._db_entries: List[Dict[str, Any]] = [
+                {"name": os.path.splitext(os.path.basename(db_path))[0], "path": db_path, "enabled": True}]
+        else:
+            self._registry_backed = True
+            self._db_entries = xid.load_registry()
         # Shell callback (spectrum_id, previous_state) — accepted phases join
-        # the Library undo stack, same as Mineral ID.
+        # the Library undo stack, same as Raman ID.
         self.on_accept = on_accept
         self._results: List[xid.XrdMatch] = []
         self._query_peaks: List[float] = []
         self._query_int: List[float] = []
         self._build_ui()
         self._refresh_db_status()
+
+    def _enabled_paths(self) -> List[str]:
+        return [e["path"] for e in self._db_entries
+                if e.get("enabled", True) and os.path.isfile(e.get("path", ""))]
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -139,6 +158,29 @@ class XrdIdWorkspace(QWidget):
         self.raman_link_btn.clicked.connect(self.check_raman_phases)
         left_layout.addWidget(self.raman_link_btn)
 
+        left_layout.addWidget(QLabel("Databases (check = probe)"))
+        self.db_list = QListWidget()
+        self.db_list.setMaximumHeight(110)
+        self.db_list.setToolTip(
+            "Register any card database you have the rights to use: a QualX-format .sq is "
+            "indexed once locally; a PRISM-format .sq is used in place. Check several to "
+            "probe them all in one search."
+        )
+        self.db_list.itemChanged.connect(self._on_db_toggled)
+        left_layout.addWidget(self.db_list)
+        db_btn_row = QHBoxLayout()
+        self.add_db_btn = QPushButton("Add database…")
+        self.add_db_btn.clicked.connect(self.add_database)
+        db_btn_row.addWidget(self.add_db_btn)
+        self.add_folder_btn = QPushButton("Add folder…")
+        self.add_folder_btn.clicked.connect(self.add_database_folder)
+        db_btn_row.addWidget(self.add_folder_btn)
+        self.remove_db_btn = QPushButton("Remove")
+        self.remove_db_btn.setToolTip("Unregister the selected database (the .sq file itself is not deleted).")
+        self.remove_db_btn.clicked.connect(self.remove_database)
+        db_btn_row.addWidget(self.remove_db_btn)
+        left_layout.addLayout(db_btn_row)
+
         self.db_status_label = QLabel("")
         self.db_status_label.setWordWrap(True)
         left_layout.addWidget(self.db_status_label)
@@ -187,22 +229,154 @@ class XrdIdWorkspace(QWidget):
         self._browse_hits: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
+    # Database management
+    # ------------------------------------------------------------------
+    def _summary_cached(self, path: str):
+        """database_summary scans the whole cards table — cache per file
+        state so nav switches into this page stay instant."""
+        try:
+            st = os.stat(path)
+            key = (path, st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+        cache = getattr(self, "_summary_cache", None)
+        if cache is None:
+            cache = self._summary_cache = {}
+        if key not in cache:
+            cache[key] = xid.database_summary(path)
+        return cache[key]
+
     def _refresh_db_status(self) -> None:
-        summary = xid.database_summary(self.db_path)
-        if summary is None:
+        self.db_list.blockSignals(True)
+        self.db_list.clear()
+        total = 0
+        by_source: Dict[str, int] = {}
+        for e in self._db_entries:
+            item = QListWidgetItem(e.get("name", "?"))
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            missing = not os.path.isfile(e.get("path", ""))
+            item.setCheckState(Qt.Checked if e.get("enabled", True) and not missing else Qt.Unchecked)
+            tip = e.get("path", "")
+            if missing:
+                item.setText(f"{e.get('name', '?')} (file missing)")
+                tip += "\nThe .sq file is missing — reconnect the drive or Remove the entry."
+            summary = self._summary_cached(e["path"]) if not missing else None
+            if summary is not None:
+                tip += f"\n{summary['total_cards']} cards"
+                if e.get("enabled", True):
+                    total += summary["total_cards"]
+                    for k, v in summary["by_source"].items():
+                        by_source[k] = by_source.get(k, 0) + v
+            item.setToolTip(tip)
+            self.db_list.addItem(item)
+        self.db_list.blockSignals(False)
+
+        if not self._db_entries:
             self.db_status_label.setText(
-                "No unified XRD database yet. Build it once from your QualX .sq sources with "
-                "xrd_id_science.build_xrd_database() — see F1 help."
+                "No card database registered yet. Download any QualX-format .sq database "
+                "you have the rights to use, then click 'Add database…'."
             )
-            return
-        parts = ", ".join(f"{k}: {v}" for k, v in sorted(summary["by_source"].items()))
-        self.db_status_label.setText(f"XRD database: {summary['total_cards']} cards ({parts}).")
-        for tag in sorted(summary["by_source"]):
+        else:
+            parts = ", ".join(f"{k}: {v}" for k, v in sorted(by_source.items()))
+            self.db_status_label.setText(f"Enabled databases: {total} cards ({parts}).")
+        for tag in sorted(by_source):
             if tag not in self.source_checks:
                 cb = QCheckBox(tag)
                 cb.setChecked(True)
                 self.source_checks[tag] = cb
                 self.sources_holder.addWidget(cb)
+
+    def _on_db_toggled(self, item: QListWidgetItem) -> None:
+        row = self.db_list.row(item)
+        if not (0 <= row < len(self._db_entries)):
+            return
+        entry = self._db_entries[row]
+        entry["enabled"] = item.checkState() == Qt.Checked
+        if self._registry_backed:
+            xid.set_database_enabled(entry["name"], entry["enabled"])
+        # deferred: rebuilding the list from inside its own itemChanged
+        # handler would delete the item mid-signal
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._refresh_db_status)
+
+    def add_database(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Add card database (.sq)", "",
+            "Card databases (*.sq);;All files (*.*)")
+        if path:
+            self._register_paths([path])
+
+    def add_database_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Add every .sq database in a folder")
+        if folder:
+            self._register_paths([folder], folder_mode=True)
+
+    def _register_paths(self, paths: List[str], folder_mode: bool = False) -> None:
+        """Register in a worker thread — indexing a large QualX-format .sq
+        takes minutes and must not freeze the UI."""
+        self.add_db_btn.setEnabled(False)
+        self.add_folder_btn.setEnabled(False)
+        self.db_status_label.setText(
+            "Registering… a QualX-format database is indexed once, which can take a few "
+            "minutes for hundreds of thousands of cards. PRISM stays usable meanwhile."
+        )
+
+        registry_backed = self._registry_backed
+        base_entries = list(self._db_entries)  # snapshot — the worker fn must not touch self
+
+        def work():
+            added = []
+            if registry_backed:
+                for p in paths:
+                    if folder_mode:
+                        added += xid.register_folder(p, log=lambda *a: None)
+                    else:
+                        added.append(xid.register_database(p, log=lambda *a: None))
+                return xid.load_registry(), added
+            # single-db (embedded/test) mode: keep everything in memory
+            entries = base_entries
+            for p in paths:
+                fmt = xid.sniff_sq_format(p)
+                if fmt is None:
+                    raise ValueError(f"{os.path.basename(p)} is not a recognizable card database.")
+                entry = {"name": os.path.splitext(os.path.basename(p))[0], "path": p, "enabled": True}
+                entries.append(entry)
+                added.append(entry)
+            return entries, added
+
+        from qt_worker import run_in_thread
+        run_in_thread(work, self._on_register_done, self._on_register_error)
+
+    def _on_register_error(self, traceback_text: str) -> None:
+        self.add_db_btn.setEnabled(True)
+        self.add_folder_btn.setEnabled(True)
+        self._refresh_db_status()
+        QMessageBox.critical(self, "Add database", traceback_text)
+
+    def _on_register_done(self, result) -> None:
+        entries, added = result
+        self.add_db_btn.setEnabled(True)
+        self.add_folder_btn.setEnabled(True)
+        self._db_entries = entries
+        self._refresh_db_status()
+        if added:
+            names = ", ".join(e["name"] for e in added if e)
+            self.db_status_label.setText(self.db_status_label.text() + f" Added: {names}.")
+        else:
+            QMessageBox.information(self, "Add database", "No new database found (already registered, or no .sq files).")
+
+    def remove_database(self) -> None:
+        row = self.db_list.currentRow()
+        if not (0 <= row < len(self._db_entries)):
+            QMessageBox.information(self, "Remove database", "Select a database in the list first.")
+            return
+        entry = self._db_entries[row]
+        if self._registry_backed:
+            xid.unregister_database(entry["name"])
+            self._db_entries = xid.load_registry()
+        else:
+            self._db_entries = [e for e in self._db_entries if e is not entry]
+        self._refresh_db_status()
 
     def set_spectra(self, spectrum_ids: List[str]) -> None:
         current = self.spec_combo.currentData()
@@ -237,7 +411,6 @@ class XrdIdWorkspace(QWidget):
         self.peaks_edit.setText(", ".join(f"{c:.3f}" for c in sorted(centers)))
 
     def _on_pick_peaks_toggled(self, checked: bool) -> None:
-        from PySide6.QtCore import Qt
         if checked:
             mode = str(self.plot.toolbar.mode)
             if "zoom" in mode:
@@ -285,8 +458,12 @@ class XrdIdWorkspace(QWidget):
         if not peaks:
             QMessageBox.warning(self, "Search match", "Enter or auto-find at least one 2θ peak.")
             return
-        if xid.database_summary(self.db_path) is None:
-            QMessageBox.information(self, "Search match", self.db_status_label.text())
+        db_paths = self._enabled_paths()
+        if not db_paths:
+            QMessageBox.information(
+                self, "Search match",
+                "No card database enabled. Register one with 'Add database…' (any "
+                "QualX-format .sq you have the rights to use) and check it in the list.")
             return
         self._query_peaks = peaks
         self._query_int = self._peak_intensities(peaks)
@@ -302,7 +479,7 @@ class XrdIdWorkspace(QWidget):
             elements_all=_parse_elements(self.elements_all_edit.text()),
             elements_none=_parse_elements(self.elements_none_edit.text()),
             sources=sources if sources and len(sources) < len(self.source_checks) else (),
-            two_theta_range=tt_range, db_path=self.db_path,
+            two_theta_range=tt_range, db_paths=db_paths,
         )
         from qt_worker import run_in_thread
         run_in_thread(
@@ -441,7 +618,7 @@ class XrdIdWorkspace(QWidget):
         found: List[xid.XrdMatch] = []
         missing = []
         for name in minerals:
-            hits = xid.find_cards_by_text(name, limit=3, db_path=self.db_path)
+            hits = xid.find_cards_by_text(name, limit=3, db_paths=self._enabled_paths())
             if not hits:
                 missing.append(name)
                 continue
@@ -470,13 +647,15 @@ class XrdIdWorkspace(QWidget):
         text = self.browse_edit.text().strip()
         if not text:
             return
+        db_paths = self._enabled_paths()
         hits, seen = [], set()
-        for batch in (xid.find_cards_by_elements(text, mode="exact", db_path=self.db_path),
-                      xid.find_cards_by_elements(text, mode="contains", limit=40, db_path=self.db_path),
-                      xid.find_cards_by_text(text, limit=50, db_path=self.db_path)):
+        for batch in (xid.find_cards_by_elements(text, mode="exact", db_paths=db_paths),
+                      xid.find_cards_by_elements(text, mode="contains", limit=40, db_paths=db_paths),
+                      xid.find_cards_by_text(text, limit=50, db_paths=db_paths)):
             for h in batch:
-                if h["card_id"] not in seen:
-                    seen.add(h["card_id"])
+                key = (h.get("db", ""), h["card_id"])
+                if key not in seen:
+                    seen.add(key)
                     hits.append(h)
         self._browse_hits = hits[:100]
         self.browse_list.clear()

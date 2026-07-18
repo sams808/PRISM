@@ -1,6 +1,6 @@
 """Tests for xrd_id_science.py — the QualX-style XRD phase-identification
-engine. Uses a tiny synthetic QualX-format source database (same schema as
-the user's real cod/pdf2 .sq files), never the real multi-GB ones."""
+engine. Uses tiny synthetic QualX-format source databases (same schema as
+real downloadable card databases), never real multi-GB ones."""
 from __future__ import annotations
 
 import sqlite3
@@ -66,7 +66,7 @@ def test_two_theta_d_round_trip():
     assert xid.d_to_two_theta(np.array([3.342]))[0] == pytest.approx(26.65, abs=0.05)
 
 
-def test_build_keeps_sources_codes_and_cleans_pdf2_names(unified_db):
+def test_build_keeps_sources_codes_and_cleans_typeset_names(unified_db):
     con = sqlite3.connect(unified_db)
     rows = con.execute("SELECT source, source_code, name FROM cards ORDER BY card_id").fetchall()
     con.close()
@@ -128,6 +128,108 @@ def test_find_cards_by_text(unified_db):
     assert all(len(h["d"]) == len(QUARTZ_D) for h in hits)
     hits = xid.find_cards_by_text("Ca O3", db_path=unified_db)
     assert len(hits) == 1 and hits[0]["mineral"] == "Calcite"
+
+
+# ---------------------------------------------------------------------------
+# Database registry + multi-database probing
+# ---------------------------------------------------------------------------
+
+def test_sniff_sq_format(tmp_path, unified_db):
+    src = tmp_path / "qualx_src.sq"
+    _make_source_sq(src, [(1, "X", "", "Si O2", "", "A", QUARTZ_D, QUARTZ_I, ["Si", "O"])])
+    assert xid.sniff_sq_format(str(src)) == "qualx"
+    assert xid.sniff_sq_format(unified_db) == "prism"
+    junk = tmp_path / "not_a_db.sq"
+    junk.write_text("hello, not sqlite")
+    assert xid.sniff_sq_format(str(junk)) is None
+    assert xid.sniff_sq_format(str(tmp_path / "absent.sq")) is None
+
+
+def test_register_qualx_database_converts_once(tmp_path):
+    reg = str(tmp_path / "reg.json")
+    imp = str(tmp_path / "imported")
+    src = tmp_path / "MyCOD.sq"
+    _make_source_sq(src, [(1010, "Quartz low", "Quartz", "Si O2", "P 32 2 1", "A",
+                           QUARTZ_D, QUARTZ_I, ["Si", "O"])])
+    entry = xid.register_database(str(src), registry_path=reg, import_dir=imp, log=lambda *a: None)
+    assert entry["name"] == "MyCOD"
+    assert entry["origin"] == str(src)
+    assert xid.sniff_sq_format(entry["path"]) == "prism"
+    # provenance tag inside the converted file = the registry name
+    assert xid.database_summary(entry["path"])["by_source"] == {"MyCOD": 1}
+    # re-registering the ORIGINAL path is a no-op, not a duplicate
+    xid.register_database(str(src), registry_path=reg, import_dir=imp, log=lambda *a: None)
+    assert len(xid.load_registry(reg)) == 1
+
+
+def test_register_prism_database_in_place_no_copy(tmp_path, unified_db):
+    import os
+    reg = str(tmp_path / "reg2.json")
+    entry = xid.register_database(unified_db, registry_path=reg, log=lambda *a: None)
+    assert entry["path"] == os.path.abspath(unified_db)
+    assert "origin" not in entry
+
+
+def test_register_rejects_non_database(tmp_path):
+    bad = tmp_path / "junk.sq"
+    bad.write_text("definitely not sqlite")
+    with pytest.raises(ValueError, match="not a recognizable"):
+        xid.register_database(str(bad), registry_path=str(tmp_path / "r.json"))
+
+
+def test_enable_disable_and_unregister(tmp_path, unified_db):
+    import os
+    reg = str(tmp_path / "reg3.json")
+    xid.register_database(unified_db, name="DB A", registry_path=reg, log=lambda *a: None)
+    assert xid.enabled_database_paths(reg) == [os.path.abspath(unified_db)]
+    xid.set_database_enabled("DB A", False, registry_path=reg)
+    assert xid.enabled_database_paths(reg) == []
+    xid.unregister_database("DB A", registry_path=reg)
+    assert xid.load_registry(reg) == []
+
+
+def test_load_registry_migrates_legacy_unified_db(tmp_path, monkeypatch, unified_db):
+    """A pre-registry setup (only the old fixed-location unified .sq) must
+    keep working: first load_registry() call registers it automatically."""
+    reg = tmp_path / "migrated_registry.json"
+    monkeypatch.setattr(xid, "XRD_ID_REGISTRY_PATH", str(reg))
+    monkeypatch.setattr(xid, "XRD_ID_DB_PATH", unified_db)
+    entries = xid.load_registry()
+    assert len(entries) == 1
+    assert entries[0]["path"] == unified_db
+    assert entries[0]["enabled"] is True
+    assert reg.is_file()  # persisted, so the migration happens exactly once
+
+
+def test_search_match_across_multiple_databases(tmp_path):
+    """Quartz lives only in DB1, calcite only in DB2 — one search over both
+    must find both, each hit tagged with the database it came from."""
+    src1, src2 = tmp_path / "s1.sq", tmp_path / "s2.sq"
+    _make_source_sq(src1, [(1, "Quartz", "Quartz", "Si O2", "", "A", QUARTZ_D, QUARTZ_I, ["Si", "O"])])
+    _make_source_sq(src2, [(2, "Calcite", "Calcite", "C Ca O3", "", "A", CALCITE_D, CALCITE_I, ["C", "Ca", "O"])])
+    db1, db2 = tmp_path / "db_quartz.sq", tmp_path / "db_calcite.sq"
+    xid.build_xrd_database([(str(src1), "DB1")], out_path=str(db1), log=lambda *a: None)
+    xid.build_xrd_database([(str(src2), "DB2")], out_path=str(db2), log=lambda *a: None)
+
+    tt = np.concatenate([xid.d_to_two_theta(np.array(QUARTZ_D)),
+                         xid.d_to_two_theta(np.array(CALCITE_D))])
+    ii = np.concatenate([QUARTZ_I, CALCITE_I])
+    results = xid.search_match(tt, ii, db_paths=[str(db1), str(db2)])
+    minerals = {r.mineral for r in results}
+    assert {"Quartz", "Calcite"} <= minerals
+    assert {r.db for r in results} == {"db_quartz", "db_calcite"}
+
+
+def test_find_cards_by_text_across_multiple_databases(tmp_path):
+    src1, src2 = tmp_path / "t1.sq", tmp_path / "t2.sq"
+    _make_source_sq(src1, [(1, "Quartz", "Quartz", "Si O2", "", "A", QUARTZ_D, QUARTZ_I, ["Si", "O"])])
+    _make_source_sq(src2, [(2, "Quartz high", "Quartz", "Si O2", "", "B", QUARTZ_D, QUARTZ_I, ["Si", "O"])])
+    db1, db2 = tmp_path / "ta.sq", tmp_path / "tb.sq"
+    xid.build_xrd_database([(str(src1), "A")], out_path=str(db1), log=lambda *a: None)
+    xid.build_xrd_database([(str(src2), "B")], out_path=str(db2), log=lambda *a: None)
+    hits = xid.find_cards_by_text("quartz", db_paths=[str(db1), str(db2)])
+    assert len(hits) == 2
+    assert {h["db"] for h in hits} == {"ta", "tb"}
 
 
 def test_find_cards_by_elements_matches_regardless_of_formula_order(tmp_path):
