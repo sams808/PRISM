@@ -15,7 +15,7 @@ import rampy as rp
 from qt_models import Spectrum, SpectrumLibrary
 from qt_multi_fit import MultiFitWorkspace
 from qt_settings_store import PerItemSettingsStore
-from qt_shell import DataappMainWindow, _load_spectrum_from_path
+from qt_shell import NAV_ITEMS, DataappMainWindow, _load_spectrum_from_path
 from qt_single_fit import SingleFitWorkspace
 
 
@@ -186,7 +186,7 @@ def test_shell_refreshes_recipes_saved_after_construction_on_nav_switch(qtbot, t
 
     _write_recipe(tmp_path, "late_recipe", [_component()])  # written AFTER construction
 
-    window.nav.setCurrentRow(5)  # Multi-Fit workspace
+    window.nav.setCurrentRow(NAV_ITEMS.index("Multi-Fit"))
     qtbot.wait(20)
 
     names = [window.multifit_page.recipe_combo.itemText(i) for i in range(window.multifit_page.recipe_combo.count())]
@@ -200,7 +200,7 @@ def test_shell_multifit_page_picks_up_library_records(qtbot, raman_example_path)
     spectrum = _load_spectrum_from_path(str(raman_example_path))
     window.library.add(spectrum)
 
-    window.nav.setCurrentRow(5)  # Multi-Fit workspace
+    window.nav.setCurrentRow(NAV_ITEMS.index("Multi-Fit"))
     qtbot.wait(20)
 
     assert window.multifit_page.file_list.count() == 1

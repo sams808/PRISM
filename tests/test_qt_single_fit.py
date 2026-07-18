@@ -12,7 +12,7 @@ import rampy as rp
 
 from qt_fit_params import FitParamDialog
 from qt_models import Spectrum, SpectrumLibrary
-from qt_shell import DataappMainWindow, _load_spectrum_from_path
+from qt_shell import NAV_ITEMS, DataappMainWindow, _load_spectrum_from_path
 from qt_single_fit import SingleFitWorkspace
 
 
@@ -207,7 +207,7 @@ def test_shell_fitting_page_picks_up_library_records(qtbot, raman_example_path):
     spectrum = _load_spectrum_from_path(str(raman_example_path))
     window.library.add(spectrum)
 
-    window.nav.setCurrentRow(4)  # Peak Fitting workspace
+    window.nav.setCurrentRow(NAV_ITEMS.index("Peak Fitting"))
     qtbot.wait(20)
 
     assert window.fitting_page.spec_combo.count() == 1
