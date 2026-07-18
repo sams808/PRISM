@@ -74,7 +74,20 @@ class RruffMatchWorkspace(QWidget):
         self._index: Optional[List[Dict[str, Any]]] = None
         self._query_peaks: List[float] = []
         self._results: List[Dict[str, Any]] = []
+        # Per-spectrum session state (QualX-style, same as XRD ID): accepted
+        # phases stay overlaid across iterative searches, and the query
+        # peaks they explain turn gray instead of vanishing.
+        self._session: Dict[str, Dict[str, Any]] = {}
         self._build_ui()
+
+    def _state(self) -> Dict[str, Any]:
+        sid = self.spec_combo.currentData() or "__none__"
+        return self._session.setdefault(sid, {"accepted": [], "explained": []})
+
+    def _selected_candidates(self) -> List[Dict[str, Any]]:
+        rows = self.results_table.selectionModel().selectedRows()
+        return [self._results[r.row()] for r in sorted(rows, key=lambda r: r.row())
+                if 0 <= r.row() < len(self._results)]
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -90,6 +103,8 @@ class RruffMatchWorkspace(QWidget):
 
         left_layout.addWidget(QLabel("Query spectrum"))
         self.spec_combo = QComboBox()
+        self.spec_combo.currentIndexChanged.connect(
+            lambda _=None: self.plot.request_redraw(lambda: self._render_preview(self._selected_candidates())))
         left_layout.addWidget(self.spec_combo)
 
         auto_btn = QPushButton("Auto-find peaks from spectrum")
@@ -164,6 +179,17 @@ class RruffMatchWorkspace(QWidget):
         send_cif_btn.clicked.connect(self.send_candidate_cifs)
         left_layout.addWidget(send_cif_btn)
 
+        clear_row = QHBoxLayout()
+        update_btn = QPushButton("Update plot")
+        update_btn.clicked.connect(
+            lambda: self.plot.request_redraw(lambda: self._render_preview(self._selected_candidates())))
+        clear_row.addWidget(update_btn)
+        clear_btn = QPushButton("Clear")
+        clear_btn.setToolTip("Start over on this spectrum: clears peaks, results, and the accepted-phase overlays (accepted identifications stay recorded; Ctrl+Z in the Library to undo those).")
+        clear_btn.clicked.connect(self.clear_session)
+        clear_row.addWidget(clear_btn)
+        left_layout.addLayout(clear_row)
+
         citation_label = QLabel(f"{RRUFF_CITATION}\n\n{RRUFF_ATTRIBUTION_NOTE}")
         citation_label.setWordWrap(True)
         citation_label.setObjectName("SectionNote")
@@ -208,6 +234,9 @@ class RruffMatchWorkspace(QWidget):
         if self._index is None and not getattr(self, "_index_load_attempted", False):
             self._index_load_attempted = True
             self._ensure_index_loaded()
+        # Arriving on the page must show the spectrum immediately, not an
+        # empty axes (user request — same rule on every workspace).
+        self.plot.request_redraw(lambda: self._render_preview(self._selected_candidates()))
 
     def _current_spectrum(self):
         sid = self.spec_combo.currentData()
@@ -325,16 +354,17 @@ class RruffMatchWorkspace(QWidget):
         rows = self.results_table.selectionModel().selectedRows()
         if not rows or not self._results:
             return
-        candidates = [self._results[r.row()] for r in sorted(rows, key=lambda r: r.row())
-                      if 0 <= r.row() < len(self._results)]
-        self._render_preview(candidates)
+        self._render_preview(self._selected_candidates())
 
     # ------------------------------------------------------------------
     CANDIDATE_COLORS = ["crimson", "royalblue", "seagreen", "darkorange", "purple", "teal"]
+    # Muted palette for phases already accepted (they stay overlaid)
+    ACCEPTED_COLORS = ["#9c6b74", "#6b7d9c", "#6b9c7d", "#9c8a6b", "#856b9c", "#6b969c"]
 
     def _render_preview(self, candidates: List[Dict[str, Any]]) -> None:
         """Overlay the query against one or several candidates (shift/ctrl-
         click rows to compare references side by side)."""
+        self.plot.cancel_pending()  # direct draws supersede any queued entry render
         fig = self.plot.figure
         fig.clf()
         ax = fig.add_subplot(111)
@@ -344,6 +374,25 @@ class RruffMatchWorkspace(QWidget):
             y = spectrum.y
             y_norm = y / np.nanmax(np.abs(y)) if np.nanmax(np.abs(y)) > 0 else y
             ax.plot(spectrum.x, y_norm, color="black", lw=1.1, label=f"query: {spectrum.title}")
+
+        # Query peak bars (same convention as XRD ID): current unexplained
+        # peaks in black, peaks explained by accepted phases in gray.
+        state = self._state()
+        peaks = self._parse_peaks()
+        if peaks:
+            ax.vlines(peaks, 0, 1.04, color="black", lw=0.8, alpha=0.30,
+                      label="query peaks")
+        if state["explained"]:
+            ax.vlines(state["explained"], 0, 1.04, color="gray", lw=0.8,
+                      alpha=0.45, ls="--", label="explained by accepted phases")
+
+        # Accepted phases stay overlaid across iterative searches (muted).
+        for k, acc in enumerate(state["accepted"]):
+            color = self.ACCEPTED_COLORS[k % len(self.ACCEPTED_COLORS)]
+            acc_label = f"accepted: {acc.get('mineral', '?')} ({acc.get('rruff_id', '?')})"
+            for j, peak in enumerate(acc.get("peaks", [])):
+                ax.axvline(peak, color=color, ls=":", lw=0.9, alpha=0.6,
+                           label=acc_label if j == 0 else None)
 
         for k, candidate in enumerate(candidates):
             color = self.CANDIDATE_COLORS[k % len(self.CANDIDATE_COLORS)]
@@ -370,6 +419,20 @@ class RruffMatchWorkspace(QWidget):
         ax.grid(alpha=0.25)
         fig.tight_layout()
         self.plot.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    def clear_session(self) -> None:
+        """Start over on the current spectrum: peaks, results, and the
+        accepted-overlay/explained-peak session state (identifications
+        recorded on the spectrum itself are untouched — undo those from
+        the Library)."""
+        sid = self.spec_combo.currentData() or "__none__"
+        self._session.pop(sid, None)
+        self.peaks_edit.setText("")
+        self._query_peaks = []
+        self._results = []
+        self._populate_results_table()
+        self.plot.request_redraw(lambda: self._render_preview([]))
 
     # ------------------------------------------------------------------
     def send_candidate_cifs(self) -> None:
@@ -438,6 +501,10 @@ class RruffMatchWorkspace(QWidget):
         cand_peaks = candidate.get("peaks", []) or []
         remaining = [p for p in self._query_peaks
                      if not any(abs(p - cp) <= tolerance for cp in cand_peaks)]
+        # session overlays: the accepted phase's bars stay, its peaks gray out
+        state = self._state()
+        state["accepted"].append(dict(candidate))
+        state["explained"].extend(p for p in self._query_peaks if p not in remaining)
         phase_list = ", ".join(f"{m['mineral']} ({m['rruff_id']})" for m in accepted)
 
         if remaining:

@@ -77,13 +77,26 @@ class PlotWidget(QWidget):
         self._pending = (fn, args, kwargs)
         self._debounce.start()
 
+    def cancel_pending(self) -> None:
+        """Drop any queued debounced render. Call before drawing the figure
+        DIRECTLY (not via request_redraw), or a stale queued render fires up
+        to debounce_ms later and overwrites what was just drawn."""
+        self._debounce.stop()
+        self._pending = None
+
     def _flush_redraw(self) -> None:
         if self._pending is None:
             return
         fn, args, kwargs = self._pending
         self._pending = None
-        fn(*args, **kwargs)
-        self.canvas.draw_idle()
+        try:
+            fn(*args, **kwargs)
+            self.canvas.draw_idle()
+        except RuntimeError:
+            # The widget is mid-destruction (deleteLater processed between
+            # the debounce firing and the draw — pytest-qt teardown does
+            # exactly this): there is nothing left to redraw.
+            return
 
     def clear(self, title: str = "") -> None:
         self.ax.clear()
@@ -103,3 +116,57 @@ class PlotWidget(QWidget):
         finally:
             self.figure.set_size_inches(*old_size)
             self.canvas.draw_idle()
+
+
+class CheckComboBox(QWidget):
+    """A drop-list with checkboxes (multi-select filter), QualX-style.
+
+    Reads as "All <label>" when nothing is checked (= no filtering), or a
+    comma list of the checked entries. checked() returns [] for
+    "no filter" so callers can pass it straight to the science layer.
+    """
+
+    def __init__(self, label: str = "values", parent: Optional[QWidget] = None):
+        from PySide6.QtWidgets import QHBoxLayout, QMenu, QSizePolicy, QToolButton
+        super().__init__(parent)
+        self._label = label
+        self._button = QToolButton()
+        self._button.setPopupMode(QToolButton.InstantPopup)
+        self._button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._menu = QMenu(self._button)
+        self._button.setMenu(self._menu)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._button)
+        self._actions: dict = {}
+        self._update_text()
+
+    def set_items(self, items) -> None:
+        """Replace the entries, preserving check states for survivors.
+        Entries are QCheckBoxes inside QWidgetActions so the menu stays
+        open while ticking several."""
+        from PySide6.QtWidgets import QCheckBox, QWidgetAction
+        prev = {name for name, cb in self._actions.items() if cb.isChecked()}
+        self._menu.clear()
+        self._actions = {}
+        for name in items:
+            cb = QCheckBox(str(name))
+            cb.setChecked(str(name) in prev)
+            cb.toggled.connect(self._update_text)
+            wa = QWidgetAction(self._menu)
+            wa.setDefaultWidget(cb)
+            self._menu.addAction(wa)
+            self._actions[str(name)] = cb
+        self._update_text()
+
+    def checked(self) -> list:
+        return [name for name, cb in self._actions.items() if cb.isChecked()]
+
+    def clear_checks(self) -> None:
+        for cb in self._actions.values():
+            cb.setChecked(False)
+
+    def _update_text(self, *_):
+        sel = self.checked()
+        self._button.setText(f"All {self._label}" if not sel else ", ".join(sel[:3]) + ("…" if len(sel) > 3 else ""))

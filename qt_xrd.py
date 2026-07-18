@@ -34,6 +34,8 @@ from qt_widgets import PlotWidget
 
 RESULT_COLUMNS = ["FoM %", "Mineral / name", "Formula", "Source", "Code", "Q", "Space group", "Matched"]
 CARD_COLORS = ["crimson", "royalblue", "seagreen", "darkorange", "purple", "teal"]
+# Muted palette for phases already accepted (they stay overlaid, QualX-style)
+ACCEPTED_COLORS = ["#9c6b74", "#6b7d9c", "#6b9c7d", "#9c8a6b", "#856b9c", "#6b969c"]
 
 
 def _to_float(text: str, default: Optional[float] = None) -> Optional[float]:
@@ -69,8 +71,16 @@ class XrdIdWorkspace(QWidget):
         self._results: List[xid.XrdMatch] = []
         self._query_peaks: List[float] = []
         self._query_int: List[float] = []
+        # Per-spectrum session state (QualX-style): accepted phases stay
+        # overlaid across iterative searches, and the query peaks they
+        # explain turn gray instead of vanishing from the plot.
+        self._session: Dict[str, Dict[str, Any]] = {}
         self._build_ui()
         self._refresh_db_status()
+
+    def _state(self) -> Dict[str, Any]:
+        sid = self.spec_combo.currentData() or "__none__"
+        return self._session.setdefault(sid, {"accepted": [], "explained": []})
 
     def _enabled_paths(self) -> List[str]:
         return [e["path"] for e in self._db_entries
@@ -90,6 +100,8 @@ class XrdIdWorkspace(QWidget):
 
         left_layout.addWidget(QLabel("Query pattern"))
         self.spec_combo = QComboBox()
+        self.spec_combo.currentIndexChanged.connect(
+            lambda _=None: self.plot.request_redraw(self.render_preview))
         left_layout.addWidget(self.spec_combo)
 
         auto_row = QHBoxLayout()
@@ -137,6 +149,19 @@ class XrdIdWorkspace(QWidget):
         el_row2.addWidget(self.elements_none_edit)
         left_layout.addLayout(el_row2)
 
+        left_layout.addWidget(QLabel("Card filters"))
+        from qt_widgets import CheckComboBox
+        filt_row = QHBoxLayout()
+        self.system_filter = CheckComboBox("systems")
+        self.system_filter.set_items(xid.CRYSTAL_SYSTEMS)
+        filt_row.addWidget(self.system_filter, 1)
+        self.quality_filter = CheckComboBox("qualities")
+        filt_row.addWidget(self.quality_filter, 1)
+        left_layout.addLayout(filt_row)
+        self.sg_filter_edit = QLineEdit()
+        self.sg_filter_edit.setPlaceholderText("space group contains… (e.g. Pnma)")
+        left_layout.addWidget(self.sg_filter_edit)
+
         self.source_checks: Dict[str, QCheckBox] = {}
         self.sources_holder = QHBoxLayout()
         left_layout.addLayout(self.sources_holder)
@@ -149,6 +174,16 @@ class XrdIdWorkspace(QWidget):
         accept_btn = QPushButton("Accept selected phase")
         accept_btn.clicked.connect(self.accept_selected)
         left_layout.addWidget(accept_btn)
+
+        clear_row = QHBoxLayout()
+        update_btn = QPushButton("Update plot")
+        update_btn.clicked.connect(lambda: self.plot.request_redraw(self.render_preview))
+        clear_row.addWidget(update_btn)
+        clear_btn = QPushButton("Clear")
+        clear_btn.setToolTip("Start over on this pattern: clears peaks, results, and the accepted-phase overlays (accepted identifications stay recorded on the spectrum; Ctrl+Z in the Library to undo those).")
+        clear_btn.clicked.connect(self.clear_session)
+        clear_row.addWidget(clear_btn)
+        left_layout.addLayout(clear_row)
 
         self.raman_link_btn = QPushButton("Check Raman-identified phases here")
         self.raman_link_btn.setToolTip(
@@ -279,12 +314,30 @@ class XrdIdWorkspace(QWidget):
         else:
             parts = ", ".join(f"{k}: {v}" for k, v in sorted(by_source.items()))
             self.db_status_label.setText(f"Enabled databases: {total} cards ({parts}).")
+
+        # Source-tag checkboxes track the ENABLED databases' contents only:
+        # tags from disabled/removed databases disappear (nobody sees tag
+        # names their own files don't carry), new ones appear checked.
+        for tag in list(self.source_checks):
+            if tag not in by_source:
+                cb = self.source_checks.pop(tag)
+                self.sources_holder.removeWidget(cb)
+                cb.deleteLater()
         for tag in sorted(by_source):
             if tag not in self.source_checks:
                 cb = QCheckBox(tag)
                 cb.setChecked(True)
                 self.source_checks[tag] = cb
                 self.sources_holder.addWidget(cb)
+
+        # Quality filter entries = the quality codes actually present in
+        # the enabled databases (check states preserved across refreshes).
+        qualities: set = set()
+        for e in self._db_entries:
+            if e.get("enabled", True) and os.path.isfile(e.get("path", "")):
+                summary = self._summary_cached(e["path"])
+                qualities.update((summary or {}).get("qualities", []))
+        self.quality_filter.set_items(sorted(qualities))
 
     def _on_db_toggled(self, item: QListWidgetItem) -> None:
         row = self.db_list.row(item)
@@ -392,6 +445,9 @@ class XrdIdWorkspace(QWidget):
                 self.spec_combo.setCurrentIndex(idx)
         self.spec_combo.blockSignals(False)
         self._refresh_db_status()
+        # Arriving on the page must show the diffractogram immediately, not
+        # an empty axes (user request — same rule on every workspace).
+        self.plot.request_redraw(self.render_preview)
 
     def _current_spectrum(self):
         sid = self.spec_combo.currentData()
@@ -480,6 +536,9 @@ class XrdIdWorkspace(QWidget):
             elements_none=_parse_elements(self.elements_none_edit.text()),
             sources=sources if sources and len(sources) < len(self.source_checks) else (),
             two_theta_range=tt_range, db_paths=db_paths,
+            qualities=self.quality_filter.checked(),
+            crystal_systems=self.system_filter.checked(),
+            spacegroup_contains=self.sg_filter_edit.text().strip(),
         )
         from qt_worker import run_in_thread
         run_in_thread(
@@ -526,7 +585,26 @@ class XrdIdWorkspace(QWidget):
             y = np.asarray(sp.y, float)
             ymax = float(np.nanmax(y)) or 1.0
             ax.plot(sp.x, y / ymax * 100.0, color="black", lw=1.0, label=f"query: {sp.title}")
+
+        # Query peak bars (QualX-style): the current (unexplained) peaks in
+        # black; peaks already explained by an accepted phase turn gray.
+        state = self._state()
+        peaks = self._parse_peaks()
+        if peaks:
+            ax.vlines(peaks, 0, 104, color="black", lw=0.8, alpha=0.30,
+                      label="query peaks")
+        if state["explained"]:
+            ax.vlines(state["explained"], 0, 104, color="gray", lw=0.8,
+                      alpha=0.45, ls="--", label="explained by accepted phases")
+
         wavelength = _to_float(self.wavelength_edit.text(), xid.CU_KA1)
+        # Accepted phases stay overlaid across iterative searches (muted).
+        for k, r in enumerate(state["accepted"]):
+            tt = xid.d_to_two_theta(r.d, wavelength)
+            ok = np.isfinite(tt)
+            label = f"accepted: {r.mineral or r.name or r.formula} [{r.source} {r.source_code}]"
+            ax.vlines(tt[ok], 0, -r.i[ok], color=ACCEPTED_COLORS[k % len(ACCEPTED_COLORS)],
+                      lw=1.1, alpha=0.75, label=label)
         for k, r in enumerate(self._selected_matches()):
             color = CARD_COLORS[k % len(CARD_COLORS)]
             tt = xid.d_to_two_theta(r.d, wavelength)
@@ -536,10 +614,25 @@ class XrdIdWorkspace(QWidget):
         ax.axhline(0, color="grey", lw=0.5)
         ax.set_xlabel("2θ (deg)")
         ax.set_ylabel("query (up) / card lines (down)")
-        ax.legend(fontsize=7)
+        if sp is not None or peaks or state["accepted"]:
+            ax.legend(fontsize=7)
         ax.grid(alpha=0.2)
         fig.tight_layout()
         self.plot.canvas.draw_idle()
+
+    def clear_session(self) -> None:
+        """Start over on the current pattern: peaks, results, and the
+        accepted-overlay/explained-peak session state (the identifications
+        recorded on the spectrum itself are untouched — undo those from
+        the Library)."""
+        sid = self.spec_combo.currentData() or "__none__"
+        self._session.pop(sid, None)
+        self.peaks_edit.setText("")
+        self._results = []
+        self._query_peaks = []
+        self._query_int = []
+        self.results_table.setRowCount(0)
+        self.plot.request_redraw(self.render_preview)
 
     # ------------------------------------------------------------------
     def accept_selected(self) -> None:
@@ -569,6 +662,10 @@ class XrdIdWorkspace(QWidget):
 
         matched_q = {round(q, 4) for q, _ in r.matched_pairs}
         remaining = [p for p in self._query_peaks if round(p, 4) not in matched_q]
+        # session overlays: the accepted phase's bars stay, its peaks gray out
+        state = self._state()
+        state["accepted"].append(r)
+        state["explained"].extend(p for p in self._query_peaks if round(p, 4) in matched_q)
         phase_list = ", ".join(f"{m['mineral'] or m['name'] or m['formula']} [{m['source']} {m['source_code']}]"
                                for m in accepted)
         if remaining:
@@ -653,7 +750,10 @@ class XrdIdWorkspace(QWidget):
                       xid.find_cards_by_elements(text, mode="contains", limit=40, db_paths=db_paths),
                       xid.find_cards_by_text(text, limit=50, db_paths=db_paths)):
             for h in batch:
-                key = (h.get("db", ""), h["card_id"])
+                # content-level dedup: the same card carried by several
+                # databases/sources appears once (same rule as search results)
+                key = xid._dedup_key(h["source_code"], h["name"], h["mineral"],
+                                     h["formula"], h["spacegroup"], h["quality"])
                 if key not in seen:
                     seen.add(key)
                     hits.append(h)

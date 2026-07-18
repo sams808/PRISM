@@ -103,6 +103,49 @@ def test_find_matches_missing_cache_updates_status(qtbot, tmp_path):
     assert "No RRUFF database found" in widget.db_status_label.text()
 
 
+def test_accept_keeps_overlay_state_and_clear_resets(qtbot, tmp_path):
+    """QualX-style session state (same as XRD ID): accepted phases stay
+    overlaid, their peaks gray out; Clear starts over."""
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    qtbot.wait(200)
+
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.find_matches()
+    qtbot.wait(20)
+    widget.results_table.selectRow(0)
+    widget.accept_selected_candidate()
+    qtbot.wait(20)
+    state = widget._state()
+    assert len(state["accepted"]) == 1
+    assert state["explained"]
+
+    widget.clear_session()
+    qtbot.wait(250)
+    assert widget._state() == {"accepted": [], "explained": []}
+    assert widget.peaks_edit.text() == ""
+    assert widget.results_table.rowCount() == 0
+
+
+def test_entry_preview_renders_spectrum(qtbot, tmp_path):
+    """Arriving on the page renders the query spectrum immediately."""
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    qtbot.wait(200)  # entry preview goes through the debounce
+    axes = widget.plot.figure.get_axes()
+    assert axes and axes[0].lines
+
+
 def test_find_matches_ranks_best_candidate_first(qtbot, tmp_path):
     cache_dir = tmp_path / "rruff_cache"
     _write_fake_cache(cache_dir, cache_dir / "raw")

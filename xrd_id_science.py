@@ -221,8 +221,11 @@ def database_summary(db_path: str = XRD_ID_DB_PATH) -> Optional[Dict[str, Any]]:
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     by_source = dict(con.execute("SELECT source, COUNT(*) FROM cards GROUP BY source"))
     total = sum(by_source.values())
+    qualities = sorted({(q or "").strip().upper()
+                        for (q,) in con.execute("SELECT DISTINCT quality FROM cards")
+                        if (q or "").strip()})
     con.close()
-    return {"total_cards": total, "by_source": by_source, "path": db_path}
+    return {"total_cards": total, "by_source": by_source, "qualities": qualities, "path": db_path}
 
 
 # =============================================================================
@@ -373,6 +376,51 @@ def enabled_database_paths(registry_path: Optional[str] = None) -> List[str]:
 
 
 # =============================================================================
+# Crystal-system inference (filters): the databases store the Hermann-
+# Mauguin symbol as text, so the system is derived from the symbol's
+# rotational content — standard H-M reading order (cubic before trigonal
+# because m-3m contains a 3; hexagonal before tetragonal is irrelevant as
+# 6 and 4 never co-occur as principal axes).
+# =============================================================================
+
+CRYSTAL_SYSTEMS = ["cubic", "hexagonal", "trigonal", "tetragonal",
+                   "orthorhombic", "monoclinic", "triclinic"]
+
+
+def crystal_system(spacegroup: str) -> str:
+    """Best-effort crystal system from an H-M space-group string; ''
+    when the string is empty/unreadable. Decision tree: R lattice ->
+    trigonal; primary 6 -> hexagonal; a 3 in the PRIMARY position ->
+    trigonal, a 3 anywhere later (the body diagonal) -> cubic (covers
+    23, m-3, 432, -43m, m-3m and screw variants like P4132); primary
+    4 -> tetragonal; else count 2-fold/mirror directions."""
+    s = (spacegroup or "").strip()
+    if not s:
+        return ""
+    body = re.sub(r"\s+", "", s)
+    rest = body[1:] if body[:1].upper() in "PABCIFR" and len(body) > 1 else body
+    seq = re.sub(r"[-/_:]", "", rest)  # symbol sequence without decorations
+    if not seq:
+        return ""
+    if body[:1].upper() == "R":
+        return "trigonal"
+    if seq[0] == "6":
+        return "hexagonal"
+    if "3" in seq:
+        return "trigonal" if seq[0] == "3" else "cubic"
+    if seq[0] == "4":
+        return "tetragonal"
+    n_dirs = len(re.findall(r"[2mcdnabe]", seq))
+    if n_dirs >= 3:
+        return "orthorhombic"
+    if seq in ("1", "-1") or rest in ("1", "-1"):
+        return "triclinic"
+    if n_dirs >= 1:
+        return "monoclinic"
+    return ""
+
+
+# =============================================================================
 # Search-match
 # =============================================================================
 
@@ -397,6 +445,17 @@ class XrdMatch:
     i: np.ndarray = field(default_factory=lambda: np.array([]))
 
 
+def _dedup_key(source_code: str, name: str, mineral: str, formula: str,
+               spacegroup: str, quality: str) -> Tuple[str, str, str, str]:
+    """Cards identical in code + composition + symmetry + quality are the
+    same reference record, however many databases carry it (user request:
+    e.g. the same COD entry present in both an inorganic subset and the
+    full COD shows up twice otherwise)."""
+    phase = (mineral or name or formula or "").strip().lower()
+    return (str(source_code).strip(), phase,
+            re.sub(r"\s+", "", (spacegroup or "")).lower(), (quality or "").strip().upper())
+
+
 def search_match(
     query_two_theta: Sequence[float], query_intensity: Optional[Sequence[float]] = None, *,
     wavelength: float = CU_KA1, tol_two_theta: float = 0.2,
@@ -405,6 +464,8 @@ def search_match(
     two_theta_range: Optional[Tuple[float, float]] = None,
     max_candidates: int = 20000, db_path: str = XRD_ID_DB_PATH,
     db_paths: Optional[Sequence[str]] = None,
+    qualities: Sequence[str] = (), crystal_systems: Sequence[str] = (),
+    spacegroup_contains: str = "",
 ) -> List[XrdMatch]:
     """Rank database cards against a measured peak list.
 
@@ -414,8 +475,12 @@ def search_match(
     sources: restrict to these source tags. two_theta_range: only card
     lines inside the measured range count against the card's coverage.
     db_paths: probe SEVERAL registered databases at once (QualX-style) —
-    results are merged and re-ranked; each match's .db says which file it
-    came from. When db_paths is None, the single db_path is probed."""
+    results are merged, DEDUPLICATED (same code+phase+spacegroup+quality
+    kept once, best FoM wins), and re-ranked; each match's .db says which
+    file it came from. When db_paths is None, the single db_path is probed.
+    qualities / crystal_systems / spacegroup_contains: optional card
+    filters (quality codes; systems from CRYSTAL_SYSTEMS; substring of
+    the H-M symbol)."""
     paths = [str(p) for p in db_paths] if db_paths is not None else [db_path]
     results: List[XrdMatch] = []
     for p in paths:
@@ -424,9 +489,17 @@ def search_match(
             tol_two_theta=tol_two_theta, elements_all=elements_all,
             elements_none=elements_none, sources=sources, top_n=top_n,
             two_theta_range=two_theta_range, max_candidates=max_candidates,
-            db_path=p))
+            db_path=p, qualities=qualities, crystal_systems=crystal_systems,
+            spacegroup_contains=spacegroup_contains))
     results.sort(key=lambda r: (r.fom, r.n_matched), reverse=True)
-    return results[:top_n]
+    seen: set = set()
+    unique: List[XrdMatch] = []
+    for r in results:
+        key = _dedup_key(r.source_code, r.name, r.mineral, r.formula, r.spacegroup, r.quality)
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    return unique[:top_n]
 
 
 def _search_match_one(
@@ -436,6 +509,8 @@ def _search_match_one(
     sources: Sequence[str] = (), top_n: int = 40,
     two_theta_range: Optional[Tuple[float, float]] = None,
     max_candidates: int = 20000, db_path: str = XRD_ID_DB_PATH,
+    qualities: Sequence[str] = (), crystal_systems: Sequence[str] = (),
+    spacegroup_contains: str = "",
 ) -> List[XrdMatch]:
     if not os.path.isfile(db_path):
         raise FileNotFoundError(
@@ -504,8 +579,17 @@ def _search_match_one(
     con.close()
 
     db_label = os.path.splitext(os.path.basename(db_path))[0]
+    quality_set = {q.strip().upper() for q in qualities if q.strip()}
+    system_set = {c.strip().lower() for c in crystal_systems if c.strip()}
+    sg_needle = (spacegroup_contains or "").strip().lower()
     results: List[XrdMatch] = []
     for (cid, source, code, name, mineral, formula, sg, quality, rir, d_text, i_text) in rows:
+        if quality_set and (quality or "").strip().upper() not in quality_set:
+            continue
+        if system_set and crystal_system(sg or "") not in system_set:
+            continue
+        if sg_needle and sg_needle not in (sg or "").lower():
+            continue
         c_d = np.array([float(v) for v in d_text.split(",")], float)
         c_i = np.array([float(v) for v in i_text.split(",")], float)
         c_tt = d_to_two_theta(c_d, wavelength)

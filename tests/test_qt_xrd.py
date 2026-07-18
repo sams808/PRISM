@@ -42,6 +42,10 @@ def _workspace(qtbot, db_path, on_accept=None):
     widget = XrdIdWorkspace(library=library, db_path=db_path, on_accept=on_accept)
     qtbot.addWidget(widget)
     widget.set_spectra([sp.id])
+    # set_spectra queues the entry preview through the 120ms debounce —
+    # let it complete INSIDE the test, or matplotlib's own singleShot(0)
+    # idle-draw lands on a torn-down canvas in the next test.
+    qtbot.wait(200)
     return widget, library, sp
 
 
@@ -114,6 +118,7 @@ def test_database_list_shows_and_toggles(qtbot, db_path):
     assert widget._enabled_paths() == [db_path]
     widget.db_list.item(0).setCheckState(Qt.Unchecked)
     assert widget._enabled_paths() == []  # unchecked databases are not probed
+    qtbot.wait(200)  # flush the deferred list rebuild + debounced render before teardown
 
 
 def test_add_database_and_search_probes_both(qtbot, db_path, tmp_path):
@@ -146,6 +151,7 @@ def test_add_database_and_search_probes_both(qtbot, db_path, tmp_path):
     qtbot.wait(20)
     found = {widget.results_table.item(r, 1).text() for r in range(widget.results_table.rowCount())}
     assert {"Quartz", "Cristobalite"} <= found
+    qtbot.wait(200)  # flush the debounced preview render before teardown
 
 
 def test_add_rejects_non_database_file(qtbot, db_path, tmp_path):
@@ -156,6 +162,52 @@ def test_add_rejects_non_database_file(qtbot, db_path, tmp_path):
     qtbot.wait(20)
     assert widget.db_list.count() == 1  # nothing added
     assert widget.add_db_btn.isEnabled()  # buttons re-enabled after the error
+
+
+def test_entry_preview_shows_diffractogram(qtbot, db_path):
+    """Arriving on the page renders the query pattern immediately (user
+    report: 'where tf is my diffractogram')."""
+    widget, _, _ = _workspace(qtbot, db_path)
+    axes = widget.plot.figure.get_axes()
+    assert axes and axes[0].lines
+
+
+def test_accept_keeps_overlay_and_clear_resets(qtbot, db_path):
+    widget, _, sp = _workspace(qtbot, db_path)
+    widget.auto_find_peaks()
+    widget.run_search()
+    qtbot.wait(20)
+    widget.results_table.selectRow(0)
+    widget.accept_selected()
+    qtbot.wait(20)
+    state = widget._state()
+    assert len(state["accepted"]) == 1   # the accepted phase stays overlaid (QualX-style)
+    assert state["explained"]            # its peaks turn gray instead of vanishing
+
+    widget.clear_session()
+    qtbot.wait(250)
+    assert widget._state() == {"accepted": [], "explained": []}
+    assert widget.peaks_edit.text() == ""
+    assert widget.results_table.rowCount() == 0
+
+
+def test_crystal_system_filter_narrows_results(qtbot, db_path):
+    widget, _, _ = _workspace(qtbot, db_path)
+    widget.auto_find_peaks()
+    widget.system_filter._actions["cubic"].setChecked(True)  # quartz is trigonal
+    widget.run_search()
+    qtbot.wait(20)
+    assert widget.results_table.rowCount() == 0
+    widget.system_filter._actions["cubic"].setChecked(False)
+    widget.system_filter._actions["trigonal"].setChecked(True)
+    widget.run_search()
+    qtbot.wait(20)
+    assert widget.results_table.rowCount() >= 1
+
+
+def test_quality_filter_populated_from_databases(qtbot, db_path):
+    widget, _, _ = _workspace(qtbot, db_path)
+    assert set(widget.quality_filter._actions) == {"A"}  # the fixture DB's only quality code
 
 
 def test_shell_has_xrd_id_page(qtbot):

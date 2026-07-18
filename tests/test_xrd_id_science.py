@@ -232,6 +232,52 @@ def test_find_cards_by_text_across_multiple_databases(tmp_path):
     assert {h["db"] for h in hits} == {"ta", "tb"}
 
 
+def test_crystal_system_inference():
+    cases = {
+        "Fm-3m": "cubic", "Im-3m": "cubic", "P 41 32": "cubic", "Ia-3d": "cubic",
+        "P 63/m m c": "hexagonal", "P 6222": "hexagonal",
+        "R -3 c": "trigonal", "P 32 2 1": "trigonal", "P -3 m 1": "trigonal",
+        "I 41/a m d": "tetragonal", "P 42/m n m": "tetragonal",
+        "P n m a": "orthorhombic", "C m c m": "orthorhombic", "P 21 21 21": "orthorhombic",
+        "P 21/c": "monoclinic", "C 2/m": "monoclinic", "P 2": "monoclinic",
+        "P -1": "triclinic", "P 1": "triclinic",
+        "": "",
+    }
+    for sg, expected in cases.items():
+        assert xid.crystal_system(sg) == expected, f"{sg!r} -> {xid.crystal_system(sg)!r}, expected {expected!r}"
+
+
+def test_search_match_quality_system_and_spacegroup_filters(unified_db):
+    tt = xid.d_to_two_theta(np.array(QUARTZ_D))
+    # quartz exists as quality A (SRC1) and quality B (SRC2), both P 32 2 1
+    only_b = xid.search_match(tt, QUARTZ_I, qualities=["B"], db_path=unified_db)
+    assert only_b and all(r.quality == "B" for r in only_b)
+    # nothing in the fixture DB is cubic
+    assert xid.search_match(tt, QUARTZ_I, crystal_systems=["cubic"], db_path=unified_db) == []
+    sg_hits = xid.search_match(tt, QUARTZ_I, spacegroup_contains="32 2 1", db_path=unified_db)
+    assert sg_hits and all("32 2 1" in r.spacegroup for r in sg_hits)
+
+
+def test_search_match_dedups_identical_cards_across_databases(tmp_path):
+    """The same card (code + phase + space group + quality) carried by two
+    registered databases must appear once, not twice (user request)."""
+    src = tmp_path / "same.sq"
+    _make_source_sq(src, [(1010, "Quartz low", "Quartz", "Si O2", "P 32 2 1", "A",
+                           QUARTZ_D, QUARTZ_I, ["Si", "O"])])
+    db1, db2 = tmp_path / "d1.sq", tmp_path / "d2.sq"
+    xid.build_xrd_database([(str(src), "TAG1")], out_path=str(db1), log=lambda *a: None)
+    xid.build_xrd_database([(str(src), "TAG2")], out_path=str(db2), log=lambda *a: None)
+    tt = xid.d_to_two_theta(np.array(QUARTZ_D))
+    res = xid.search_match(tt, QUARTZ_I, db_paths=[str(db1), str(db2)])
+    assert len([r for r in res if r.mineral == "Quartz"]) == 1
+
+
+def test_database_summary_lists_qualities(unified_db):
+    # kept cards: two quality-A (SRC1) + one quality-B (SRC2); the junk
+    # quality-C card is skipped at build time (< min_lines)
+    assert xid.database_summary(unified_db)["qualities"] == ["A", "B"]
+
+
 def test_find_cards_by_elements_matches_regardless_of_formula_order(tmp_path):
     """User report: text search for 'TiO2' missed cards written 'O2 Ti'."""
     src = tmp_path / "src_ti.sq"
