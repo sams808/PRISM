@@ -37,6 +37,7 @@ from qt_baseline import BaselineWorkspace
 from qt_calc import CalcWorkspace
 from qt_cluster import ClusterWorkspace
 from qt_figures import FiguresWorkspace
+from qt_saxs import SaxsWorkspace
 from qt_xrd import XrdIdWorkspace
 from qt_htxrd import HtxrdWorkspace
 from qt_rruff import RruffMatchWorkspace
@@ -63,7 +64,8 @@ NAV_BASELINE = "Baseline"
 NAV_CALC = "Calculations"
 NAV_XRD_ID = "XRD ID"
 NAV_FIGURES = "Figures"
-NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC, NAV_XRD_ID, NAV_FIGURES]
+NAV_SAXS = "SAXS/WAXS"
+NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC, NAV_XRD_ID, NAV_FIGURES, NAV_SAXS]
 
 # Activatable modules (user request: a Raman-only or XRD-only user should
 # see a simple app). Each module = (accent color, its nav pages); the
@@ -77,6 +79,7 @@ MODULES = {
     "Thermal":    ("#d43f6e", [NAV_DTA]),
     "Processing": ("#3b82f6", [NAV_BASELINE, NAV_CALC, NAV_CLUSTER]),
     "Figures":    ("#14b8a6", [NAV_FIGURES]),
+    "SAXS/WAXS":  ("#b08f26", [NAV_SAXS]),
 }
 CORE_COLOR = "#8a97b5"  # Library
 
@@ -648,6 +651,11 @@ class DataappMainWindow(QMainWindow):
         self.stack.addWidget(self.xrd_id_page)
         self.figures_page = FiguresWorkspace(library=self.library)
         self.stack.addWidget(self.figures_page)
+        self.saxs_page = SaxsWorkspace(
+            library=self.library,
+            on_derived_added=lambda ids: self.library_page.push_undo(("add", list(ids))),
+        )
+        self.stack.addWidget(self.saxs_page)
         outer.addWidget(self.stack, 1)
 
         self.nav.setCurrentRow(0)

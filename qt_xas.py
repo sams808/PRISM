@@ -151,6 +151,7 @@ class XasWorkspace(QWidget):
         self.tabs.addTab(self._build_analysis_tab(), "Analysis")
         self.tabs.addTab(self._build_tools_tab(), "Tools")
         self.tabs.addTab(self._build_export_tab(), "Export")
+        self.tabs.addTab(self._build_mass_tab(), "Sample mass")
         right_layout.addWidget(self.tabs)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
@@ -1160,6 +1161,61 @@ class XasWorkspace(QWidget):
     # ------------------------------------------------------------------
     # Export tab
     # ------------------------------------------------------------------
+    def _build_mass_tab(self) -> QWidget:
+        """Hephaestus-style sample-mass calculator (xas_mass), accepting the
+        lab's oxide-composition tables (mol%/wt%) or a single formula."""
+        from PySide6.QtWidgets import QPlainTextEdit
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.addWidget(QLabel("Composition — one component per line:\n'SiO2 58.8' (fraction optional; a lone\nformula means the pure compound)"))
+        self.mass_comp_edit = QPlainTextEdit()
+        self.mass_comp_edit.setPlainText("SiO2 58.8\nNa2O 19.6\nBi2O3 19.6\nUO3 2.0")
+        ll.addWidget(self.mass_comp_edit, 1)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("basis"))
+        self.mass_basis_combo = QComboBox()
+        self.mass_basis_combo.addItems(["mol", "wt"])
+        row.addWidget(self.mass_basis_combo)
+        row.addWidget(QLabel("element"))
+        self.mass_element_edit = QLineEdit("Bi")
+        self.mass_element_edit.setMaximumWidth(40)
+        row.addWidget(self.mass_element_edit)
+        row.addWidget(QLabel("edge"))
+        self.mass_edge_combo = QComboBox()
+        self.mass_edge_combo.addItems(["K", "L3", "L2", "L1", "M5"])
+        self.mass_edge_combo.setCurrentText("L3")
+        row.addWidget(self.mass_edge_combo)
+        row.addWidget(QLabel("⌀ (mm)"))
+        self.mass_diam_edit = QLineEdit("13")
+        self.mass_diam_edit.setMaximumWidth(40)
+        row.addWidget(self.mass_diam_edit)
+        ll.addLayout(row)
+        calc_btn = QPushButton("Compute sample mass")
+        calc_btn.clicked.connect(self._compute_sample_mass)
+        ll.addWidget(calc_btn)
+        layout.addWidget(left, 1)
+        self.mass_report_text = QPlainTextEdit()
+        self.mass_report_text.setReadOnly(True)
+        layout.addWidget(self.mass_report_text, 1)
+        return tab
+
+    def _compute_sample_mass(self) -> None:
+        import xas_mass
+        try:
+            element = self.mass_element_edit.text().strip().capitalize()
+            edge = self.mass_edge_combo.currentText()
+            diameter = float(self.mass_diam_edit.text() or 13.0)
+            report = xas_mass.sample_mass_report(
+                self.mass_comp_edit.toPlainText(), element, edge,
+                basis=self.mass_basis_combo.currentText(), pellet_diameter_mm=diameter,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Sample mass", str(exc))
+            return
+        self.mass_report_text.setPlainText(report.text(element, edge, diameter))
+
     def _build_export_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)

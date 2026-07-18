@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 # and matched by the git tag (2.0.0 = the completed Qt rebuild; 2.1.0 = the
 # first hands-on-feedback wave: .prj fixes, RRUFF filters, peak picking,
 # true Origin-style stepwise LM, HT-XRD tracking rework + Maps tab).
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 APP_NAME = "PRISM"
 APP_TAGLINE = "Platform for Research In Spectroscopy & Materials"
 
@@ -202,6 +202,18 @@ Gaussian, Lorentzian, Arrhenius) with parameters ±1σ and R².
 color-mapped value column. <b>Raman ↔ XRD</b>: the cross-technique figure —
 your Raman spectrum with its accepted Mineral-ID phases above the XRD
 pattern with each accepted phase's reference stick pattern.</p>
+
+<h2>SAXS/WAXS</h2>
+<p>Small/wide-angle scattering (ported from the author's own POMME suite).
+Import Xenocs-style 1D ASCII curves; <b>Reduction</b> subtracts the empty
+capillary with manual, auto, transmission, or physics-based (xraydb)
+scaling; <b>Analysis</b> fits Guinier (Rg), generalized Porod (slope +
+background), and pseudo-Bragg peaks (d-spacing, correlation length) with
+auto region detection; <b>WAXS</b> auto-finds and fits pseudo-Voigt peaks
+(d-spacings, crystallinity index). Curves can be sent to the Library.
+The XAS workspace also gained a <b>Sample mass</b> tab — the Hephaestus
+calculator on oxide compositions (mol%/wt%) or formulas: masses for total
+μt = 1 / 2.5 and edge step Δμt = 1 in a pellet of chosen diameter.</p>
 
 <h2>Shortcuts</h2>
 <p><code>Ctrl+O</code> import · <code>Ctrl+I</code> custom import ·
