@@ -12,7 +12,24 @@ import pytest
 
 PRISM_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = PRISM_ROOT / "EXAMPLES"
-ARCHIVE_DIR = PRISM_ROOT.parent / "data_and_notebooks"
+
+
+def _find_archive_dir() -> Path:
+    """The archived real-data folder (ISG pressure series, PBi0-1 maps) is
+    not part of the repo; the repo has lived both next to it and one level
+    up (…\\NEW\\PRISM vs the old …\\NEW\\Raman\\<repo>). Take the first
+    candidate that exists — archive-dependent tests skip when none does."""
+    candidates = [
+        PRISM_ROOT.parent / "data_and_notebooks",
+        PRISM_ROOT.parent / "Raman" / "data_and_notebooks",
+    ]
+    for c in candidates:
+        if c.is_dir():
+            return c
+    return candidates[0]
+
+
+ARCHIVE_DIR = _find_archive_dir()
 
 
 @pytest.fixture(scope="session")
