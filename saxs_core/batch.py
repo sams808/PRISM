@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from .chemistry import CapillaryConfig, SamplePhysicsConfig
 from .loader import export_correction_table, export_summary_table, load_curve

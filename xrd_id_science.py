@@ -164,7 +164,7 @@ def build_xrd_database(
                 len(d), ",".join(f"{v:.5f}" for v in d), ",".join(f"{v:.2f}" for v in i),
             ))
             n_in += 1
-        cur2 = out.executemany(
+        out.executemany(
             "INSERT INTO cards (source, source_code, name, mineral, formula, spacegroup, quality, rir, nd, d, i) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows_cards)
         # strong lines need the new card_id: fetch back in insert order

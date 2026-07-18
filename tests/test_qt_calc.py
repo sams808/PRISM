@@ -3,7 +3,6 @@ over calc_science)."""
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from qt_calc import CalcWorkspace
 from qt_models import Spectrum, SpectrumLibrary

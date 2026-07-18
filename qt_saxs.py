@@ -29,7 +29,7 @@ from saxs_core.chemistry import CapillaryConfig, SamplePhysicsConfig
 from saxs_core.curve import Curve
 from saxs_core.loader import load_curve
 from saxs_core.reduction import CorrectionSettings, correct_sample
-from saxs_core.waxs import auto_find_peaks, crystallinity_index, fit_waxs_peaks
+from saxs_core.waxs import auto_find_peaks, fit_waxs_peaks
 
 
 def _to_float(text: str, default: Optional[float] = None) -> Optional[float]:

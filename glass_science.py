@@ -19,9 +19,11 @@ SciGlass (now free, https://github.com/epam/SciGlass), INTERGLAD
 """
 from __future__ import annotations
 
-from typing import Dict, List, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, Sequence, Tuple
 
-import numpy as np
+if TYPE_CHECKING:
+    import pandas as pd
+
 
 OPTICAL_BASICITY_SOURCE = (
     "Λrec values: Rodriguez & McCloy, PNNL-20184/EMSP-RPT-003 (2011), Table B.1 "
