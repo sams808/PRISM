@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 
 from qt_models import Spectrum
-from qt_shell import CombineDialog, DataappMainWindow
+from qt_shell import CombineDialog, PrismMainWindow
 
 
 def _spectrum(title, value=1.0, n=50):
@@ -16,7 +16,7 @@ def _spectrum(title, value=1.0, n=50):
 
 
 def _window_with(qtbot, titles_values):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     for title, value in titles_values:
         window.library.add(_spectrum(title, value))

@@ -26,7 +26,7 @@ from PySide6.QtGui import QFont, QKeyEvent
 from PySide6.QtWidgets import QDockWidget, QLineEdit, QPlainTextEdit, QVBoxLayout, QWidget
 
 _BANNER = (
-    "Dataapp Python console — the live app is in scope:\n"
+    "PRISM Python console — the live app is in scope:\n"
     "  window, library, xas_store, htxrd_series, fit_params, np, pd\n"
     "Example: [s.title for s in library.all()]\n"
 )

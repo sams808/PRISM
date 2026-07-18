@@ -9,7 +9,7 @@ import pytest
 import figures_science as fsc
 from qt_figures import FiguresWorkspace
 from qt_models import Spectrum, SpectrumLibrary
-from qt_shell import NAV_ITEMS, DataappMainWindow
+from qt_shell import NAV_ITEMS, PrismMainWindow
 
 
 # --------------------------------------------------------------------------
@@ -161,7 +161,7 @@ def test_raman_xrd_link_figure(qtbot, tmp_path):
 
 
 def test_shell_has_figures_page(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     window.library.add(_spectrum("in_lib"))
     window.nav.setCurrentRow(NAV_ITEMS.index("Figures"))

@@ -1,14 +1,15 @@
-<!-- Generated from qt_help.py (the in-app F1 guide). Edit there, then regenerate. -->
+<!-- Generated from qt_help.py by make_user_guide.py. Edit qt_help.py, then regenerate. -->
 
-# Dataapp — quick-start guide
+# PRISM — quick-start guide
 
 **The flow:** bring data in through the **Library**, then switch to the
 workspace for your technique in the left rail. Everything you derive
 (baseline-subtracted, combined, fitted) lands back in the Library as a new
-spectrum. **File > Save project** keeps the whole session in one
-`.dataapp` file.
+spectrum. **File › Save project** keeps the whole session in one
+`.prism` file (older project files still load).
 
 ## Library
+
 **Import files…** auto-detects the format (plain XY, TA SDT thermal exports,
 SAXS EDF, Rigaku `.rasx`, JCAMP-DX). If it guesses wrong, use
 **Custom import…** (Ctrl+I) to pick the parser and the X/Y columns yourself, with a
@@ -18,6 +19,7 @@ preview. Right-click spectra to rename, duplicate, reorder, export as text
 duplicates, combine results, applied baselines, and accepted mineral IDs.
 
 ## Baseline
+
 Pick a method — **arPLS** is the automatic default; polynomial / spline /
 rubberband fit *through regions you choose*. Type regions like
 `100-400; 1800-2600` or toggle **Add region by dragging** and sweep them
@@ -29,12 +31,14 @@ on the plot. **Preview** shows raw + baseline + subtracted; **Apply** creates a
 the ISG pressure series: λ=1e7 beat a hand-drawn baseline.)
 
 ## Raman (Simple Plot)
+
 Multi-select spectra to overlay them: separate panels or stacked with an
 offset. Load CIF files to overlay predicted Bragg positions (managed per-CIF:
 color, label, visibility). Difference mode shows A−B for exactly two selected
 spectra. Toggle **Annotate on click** to pin peak-position labels.
 
 ## Peak Fitting
+
 Set up components three ways: in the **Fit param.** table, with
 **Auto-find peaks** (its *detection limit* spinner sets how strong a
 candidate must be, in units of the noise — lower it to catch weak peaks), or
@@ -57,6 +61,7 @@ dialog.
 them when quoting true FWHM.
 
 ## XAS
+
 Import EasyXAFS ZIPs, CSVs, or Athena `.prj` from the workspace's own
 buttons. Tabs follow the workflow: Pre-processing (smoothing, Bragg
 angle→energy correction, click-based tie-point alignment) → μ(E) Builder
@@ -65,27 +70,31 @@ repeat scans, difference, linear-combination fitting, PCA species count) →
 Export (Athena formats). Importing an Athena `.prj` needs no Larch.
 
 ## DTA / Thermal
+
 Pick X/Y/dY channels, compute Tg three ways (double tangent, parallel
 tangent, |dY| max) — the result panel says whether the methods agree.
 "Calculs" integrates or finds extrema over a range; Batch processes a folder.
 
-## Mineral ID (RRUFF)
+## Raman ID (RRUFF)
+
 Auto-find (or type) your spectrum's peak positions, then **Find matches**:
 candidates are ranked by peak overlap, each showing its **laser wavelength** —
 relative intensities vary between wavelengths, so judge the overlay yourself.
 The **Database filters** restrict candidates before ranking: laser λ
 (matched ±2 nm, so 532 also covers 532.6), oriented/unoriented, high-res vs
 broad-scan, and quality category. Shift/Ctrl-click several result rows to
-overlay multiple references at once. **Accept** works iteratively for
-mixtures: the accepted phase is recorded, the peaks it explains are removed
-from the query, and the table immediately shows matches for the REMAINING
-peaks (already-accepted references are excluded). Repeat until every peak is
-explained; each accept is one Ctrl+Z away.
-Nothing is labeled until you click **Accept**. One more click overlays the
-matched mineral's predicted XRD pattern (AMCSD structure) in the Raman
-workspace. Requires the one-time local database build (see the README).
+overlay multiple references at once.
+Nothing is labeled until you click **Accept** — and Accept works
+iteratively for mixtures: the accepted phase is recorded, the peaks it
+explains are removed from the query, and the table immediately shows matches
+for the REMAINING peaks (already-accepted references are excluded). Repeat
+until every peak is explained; each accept is one Ctrl+Z away. One more click
+overlays the matched mineral's predicted XRD pattern (AMCSD structure) in
+the Raman workspace. Requires the one-time local database build (see the
+README).
 
 ## HT-XRD
+
 Import a whole folder of patterns; temperatures come from `.rasx`
 metadata or a filename template like `scan_???.xy`. The waterfall is
 colored by temperature. The **Maps** tab adds a 2D heatmap
@@ -100,19 +109,22 @@ click the same peak at two (or more) temperatures — bottom and top, say — th
 intermediate temperature also works for a peak that appears or dies.
 (2) **Auto-track all peaks** finds every peak of the first pattern and
 tracks them all (the generated windows appear in the field for editing).
-(3) Typed windows — `28.5-29.5 @ 28.98; 31-32` — where the `@` anchor picks
-WHICH peak to track when a window holds more than one. In every mode the fit
-is seeded from the previous pattern (so it follows a drifting peak instead of
-jumping to a stronger neighbor), and a peak weaker than the *Absence σ* noise
-threshold is reported as absent instead of a garbage fit — vanished/appeared
-peaks are flagged as transition signatures alongside fit-quality anomalies.
+(3) Typed windows — `28.5-29.5 @ 28.98; 31-32` — where the
+`@` anchor picks WHICH peak to track when a window holds more than
+one. In every mode the fit is seeded from the previous pattern (so it follows
+a drifting peak instead of jumping to a stronger neighbor), and a peak weaker
+than the *Absence σ* noise threshold is reported as absent instead of a
+garbage fit — vanished/appeared peaks are flagged as transition signatures
+alongside fit-quality anomalies.
 
 ## Clustering
+
 Select a series (e.g. a multi-point map), choose KMeans or hierarchical and
 a cluster count: PCA scatter colored by cluster, per-cluster mean spectra, and
 an assignment table.
 
 ## Calculations
+
 Every spectrum operation in one place. Between spectra: add, subtract,
 multiply, divide, average, weighted sum, and **modulated addition**
 (A + w(x)·B with a constant / linear-ramp / Gaussian envelope). Per
@@ -127,22 +139,28 @@ target). Preview shows inputs faint + result bold; Apply adds derived
 spectra to the Library (undoable).
 
 ## XRD ID
-QualX-style phase identification against your merged local database
-(COD inorganic + full COD + PDF-2 — every card keeps its source and code).
+
+QualX-style phase identification against YOUR OWN card databases —
+PRISM ships none. Download any database you have the rights to use (any
+QualX-format .sq works) and register it with **Add database…** (or
+**Add folder…** for several at once): a QualX-format file is indexed
+once locally; a PRISM-format .sq (e.g. shared by a colleague) is used in
+place. Check any number of registered databases to probe them all in one
+search — every card keeps its source and code, and results say which
+database each hit came from.
 Auto-find (or type) the pattern's 2θ peaks, set λ and the match tolerance,
 optionally restrict by chemistry (must-contain / must-exclude elements) or
 source, then **Search match**: candidates ranked by figure of merit
 (intensity-weighted coverage both ways), previewed as stick patterns under
 the query (shift/ctrl-click to compare several). **Accept** is iterative
-for mixtures, exactly like Mineral ID: the phase is recorded, its peaks
+for mixtures, exactly like Raman ID: the phase is recorded, its peaks
 leave the query, the rest is re-searched; Ctrl+Z undoes.
 **Check Raman-identified phases here** overlays the XRD reference lines
-of every phase accepted in Mineral ID — the Raman→XRD cross-check in one
+of every phase accepted in Raman ID — the Raman→XRD cross-check in one
 click. The Card browser tab looks up any card by name/mineral/formula.
-The database is built once with `xrd_id_science.build_xrd_database()`
-from QualX-format .sq files.
 
 ## Figures
+
 Publication-figure building (the Origin-inspired module). **XY builder**:
 stack library spectra as layers — per-layer plot type (line, scatter,
 line+symbols, sticks, filled area, bars, steps), color, vertical offset, and
@@ -156,31 +174,62 @@ color-mapped value column. **Raman ↔ XRD**: the cross-technique figure —
 your Raman spectrum with its accepted Mineral-ID phases above the XRD
 pattern with each accepted phase's reference stick pattern.
 
+## SAXS/WAXS
+
+Small/wide-angle scattering (ported from the author's own POMME suite).
+Import Xenocs-style 1D ASCII curves; **Reduction** subtracts the empty
+capillary with manual, auto, transmission, or physics-based (xraydb)
+scaling; **Analysis** fits Guinier (Rg), generalized Porod (slope +
+background), and pseudo-Bragg peaks (d-spacing, correlation length) with
+auto region detection; **WAXS** auto-finds and fits pseudo-Voigt peaks
+(d-spacings, crystallinity index). Curves can be sent to the Library.
+The XAS workspace also gained a **Sample mass** tab — the Hephaestus
+calculator on oxide compositions (mol%/wt%) or formulas: masses for total
+μt = 1 / 2.5 and edge step Δμt = 1 in a pellet of chosen diameter.
+
+## Glass
+
+Composition-based glass property calculation. Paste (or load as CSV) a
+composition table — header = oxides, one row per sample, mol% or wt% —
+then: **Optical basicity &Lambda;** (oxygen-weighted Duffy mixing with the
+recommended per-oxide values of Rodriguez & McCloy, PNNL-20184 Table B.1),
+and **GlassNet predictions** (Tg, viscosity, density, refractive index and
+~80 more; Cassar 2023, trained on SciGlass — estimates to validate, not
+measurements). Compare against SciGlass, INTERGLAD, glassproperties.com.
+
 ## Shortcuts
+
 `Ctrl+O` import · `Ctrl+I` custom import ·
 `Ctrl+E` export · `Ctrl+S` save project ·
 `Ctrl+Shift+O` open project · `Ctrl+Z` undo ·
 `Ctrl+Q` quit · `F1` this guide.
 View menu: dark mode, Python console (the live app objects are in scope).
 
+
 ---
 
-## Dataapp
+## PRISM 2.5.0
+
+*Platform for Research In Spectroscopy & Materials*
+
 Import, process, and analyze scientific spectra: Raman, XAS/XANES/EXAFS,
-DTA/DSC/TGA, XRD (including high-temperature series), SAXS.
+DTA/DSC/TGA, XRD (including phase identification and high-temperature
+series), SAXS.
 
 Source: `github.com/sams808/PRISM`
 
-### Please cite when the bundled databases contribute to your work
+### Please cite the reference databases that contribute to your work
+
 **RRUFF** (Raman reference spectra): Lafuente B, Downs R T, Yang H,
 Stone N (2015) "The power of databases: the RRUFF project." In: Highlights
 in Mineralogical Crystallography, pp 1–30. Also acknowledge each matched
-sample's owner/source shown in the Mineral ID workspace.
+sample's owner/source shown in the Raman ID workspace.
 
 **AMCSD** (crystal structures used for XRD overlays): Downs R T,
 Hall-Wallace M (2003) "The American Mineralogist Crystal Structure
 Database." American Mineralogist 88, 247–250.
 
 ### Built on
+
 numpy · scipy · pandas · matplotlib · lmfit · rampy · scikit-learn ·
 PySide6 · xraylarch (optional, XAS)

@@ -16,7 +16,7 @@ import rampy as rp
 
 from qt_models import Spectrum, SpectrumLibrary
 from qt_rruff import RruffMatchWorkspace
-from qt_shell import DataappMainWindow
+from qt_shell import PrismMainWindow
 
 
 def _write_fake_cache(cache_dir, raw_dir):
@@ -334,7 +334,7 @@ def test_shell_rruff_send_cifs_adds_to_raman_overlay(qtbot, tmp_path, monkeypatc
     cif_path = tmp_path / "Quartz__0000789.cif"
     cif_path.write_text(_MINIMAL_CIF, encoding="utf-8")
 
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
 
@@ -349,7 +349,7 @@ def test_shell_rruff_send_cifs_adds_to_raman_overlay(qtbot, tmp_path, monkeypatc
 def test_shell_rruff_page_picks_up_library_records(qtbot, raman_example_path):
     from qt_shell import _load_spectrum_from_path
 
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     spectrum = _load_spectrum_from_path(str(raman_example_path))
     window.library.add(spectrum)

@@ -1,11 +1,11 @@
 """
-project_io.py — .dataapp project file save/load (M14), framework-agnostic.
+project_io.py — .prism project file save/load (M14), framework-agnostic.
 
 The starkest gap versus every reference tool (Origin .opju, Spectragryph
-sessions): until now, closing Dataapp lost every imported spectrum, fit
-parameter set, and accepted RRUFF identification. A .dataapp file is a ZIP:
+sessions): until now, closing the app lost every imported spectrum, fit
+parameter set, and accepted RRUFF identification. A .prism file is a ZIP:
 
-    manifest.json     {"format": "dataapp-project", "version": 2, ...}
+    manifest.json     {"format": "prism-project", "version": 2, ...}
     spectra.json      ordered list of Library Spectrum records (id/title/
                       path/kind/meta/status) — everything except the arrays
     data.npz          all arrays: library "{id}_x"/"{id}_y", XAS
@@ -39,7 +39,8 @@ import pandas as pd
 
 from qt_models import Spectrum
 
-PROJECT_FORMAT = "dataapp-project"
+PROJECT_FORMAT = "prism-project"
+LEGACY_FORMATS = {"dataapp-project"}  # pre-rename projects still load
 PROJECT_VERSION = 3  # v3 added cif_overlays.json + baseline_settings.json
 
 
@@ -156,11 +157,11 @@ def save_project(
 def load_project(path: str) -> ProjectData:
     with zipfile.ZipFile(path, "r") as zf:
         manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-        if manifest.get("format") != PROJECT_FORMAT:
-            raise ValueError(f"Not a Dataapp project file: {path}")
+        if manifest.get("format") != PROJECT_FORMAT and manifest.get("format") not in LEGACY_FORMATS:
+            raise ValueError(f"Not a PRISM project file: {path}")
         if int(manifest.get("version", 0)) > PROJECT_VERSION:
             raise ValueError(
-                f"Project was saved by a newer Dataapp (project version "
+                f"Project was saved by a newer PRISM (project version "
                 f"{manifest.get('version')}, this build reads up to {PROJECT_VERSION})."
             )
 

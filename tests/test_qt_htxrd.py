@@ -10,7 +10,7 @@ import pytest
 import rampy as rp
 
 from qt_htxrd import HtxrdWorkspace
-from qt_shell import DataappMainWindow, NAV_ITEMS
+from qt_shell import PrismMainWindow, NAV_ITEMS
 
 
 def _write_series(tmp_path, temps=(100, 200, 300), center_by_temp=None, noise=0.0):
@@ -213,7 +213,7 @@ def test_real_rasx_example_loads_with_metadata_temperature(qtbot, monkeypatch, e
 
 
 def test_shell_htxrd_page_is_htxrd_workspace(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
     assert isinstance(window.htxrd_page, HtxrdWorkspace)

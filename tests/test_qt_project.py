@@ -5,7 +5,7 @@ import numpy as np
 import rampy as rp
 
 from qt_models import Spectrum
-from qt_shell import DataappMainWindow
+from qt_shell import PrismMainWindow
 
 
 def _spectrum(title="s1"):
@@ -15,7 +15,7 @@ def _spectrum(title="s1"):
 
 
 def test_shell_project_round_trip(qtbot, tmp_path, monkeypatch):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
 
@@ -23,13 +23,13 @@ def test_shell_project_round_trip(qtbot, tmp_path, monkeypatch):
     window.library.add(sp)
     window.fit_param_memory.set(sp.id, [{"shape": "G", "shift_val": 505.0}])
 
-    project_path = tmp_path / "roundtrip.dataapp"
+    project_path = tmp_path / "roundtrip.prism"
     monkeypatch.setattr("qt_shell.QFileDialog.getSaveFileName", staticmethod(lambda *a, **k: (str(project_path), "")))
     window.save_project()
     assert project_path.exists()
 
     # Fresh window, load the project back.
-    window2 = DataappMainWindow()
+    window2 = PrismMainWindow()
     qtbot.addWidget(window2)
     qtbot.wait(20)
     monkeypatch.setattr("qt_shell.QFileDialog.getOpenFileName", staticmethod(lambda *a, **k: (str(project_path), "")))
@@ -46,7 +46,7 @@ def test_shell_project_round_trip(qtbot, tmp_path, monkeypatch):
 
 
 def test_save_project_appends_extension(qtbot, tmp_path, monkeypatch):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
     window.library.add(_spectrum())
@@ -54,7 +54,7 @@ def test_save_project_appends_extension(qtbot, tmp_path, monkeypatch):
     bare_path = tmp_path / "noext"
     monkeypatch.setattr("qt_shell.QFileDialog.getSaveFileName", staticmethod(lambda *a, **k: (str(bare_path), "")))
     window.save_project()
-    assert (tmp_path / "noext.dataapp").exists()
+    assert (tmp_path / "noext.prism").exists()
 
 
 _MINIMAL_CIF = """\
@@ -75,7 +75,7 @@ def test_project_v3_round_trips_cif_overlays_and_baseline_settings(qtbot, tmp_pa
     cif_path = tmp_path / "Quartz__0001.cif"
     cif_path.write_text(_MINIMAL_CIF, encoding="utf-8")
 
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
 
@@ -87,11 +87,11 @@ def test_project_v3_round_trips_cif_overlays_and_baseline_settings(qtbot, tmp_pa
     window.raman_page.cif_series[0]["color"] = "royalblue"
     window.baseline_page.settings.set(sp.id, {"method": "poly", "roi_text": "100-400", "p0": "2", "p1": ""})
 
-    project_path = tmp_path / "v3.dataapp"
+    project_path = tmp_path / "v3.prism"
     monkeypatch.setattr("qt_shell.QFileDialog.getSaveFileName", staticmethod(lambda *a, **k: (str(project_path), "")))
     window.save_project()
 
-    window2 = DataappMainWindow()
+    window2 = PrismMainWindow()
     qtbot.addWidget(window2)
     qtbot.wait(20)
     monkeypatch.setattr("qt_shell.QFileDialog.getOpenFileName", staticmethod(lambda *a, **k: (str(project_path), "")))
@@ -110,13 +110,13 @@ def test_project_v3_round_trips_cif_overlays_and_baseline_settings(qtbot, tmp_pa
 
 
 def test_open_project_replaces_existing_library(qtbot, tmp_path, monkeypatch):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
     keeper = _spectrum("in_project")
     window.library.add(keeper)
 
-    project_path = tmp_path / "p.dataapp"
+    project_path = tmp_path / "p.prism"
     monkeypatch.setattr("qt_shell.QFileDialog.getSaveFileName", staticmethod(lambda *a, **k: (str(project_path), "")))
     window.save_project()
 

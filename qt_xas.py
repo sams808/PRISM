@@ -1239,7 +1239,7 @@ class XasWorkspace(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Save Athena column file", "", "Athena column file (*.dat)")
         if not path:
             return
-        header = ["# Athena column file exported from Dataapp", f"# name = {sp.name}", f"# kind = {sp.kind}", f"# label = {sp.label}"]
+        header = ["# Athena column file exported from PRISM", f"# name = {sp.name}", f"# kind = {sp.kind}", f"# label = {sp.label}"]
         if sp.e0 is not None and np.isfinite(sp.e0):
             header.append(f"# e0 = {sp.e0:.6f}")
         try:

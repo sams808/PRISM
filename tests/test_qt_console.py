@@ -5,7 +5,7 @@ import numpy as np
 
 from qt_console import ConsoleDock
 from qt_models import Spectrum, SpectrumLibrary
-from qt_shell import DataappMainWindow
+from qt_shell import PrismMainWindow
 
 
 def test_console_executes_and_shows_output(qtbot):
@@ -53,7 +53,7 @@ def test_console_history_recall(qtbot):
 
 
 def test_shell_console_toggle_creates_dock_with_live_library(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
 

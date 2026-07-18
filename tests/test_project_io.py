@@ -1,4 +1,4 @@
-"""Tests for project_io.py (M14) — .dataapp project save/load."""
+"""Tests for project_io.py (M14) — .prism project save/load."""
 from __future__ import annotations
 
 import numpy as np
@@ -25,7 +25,7 @@ def test_save_load_round_trip_preserves_everything(tmp_path):
     s2 = _spectrum("beta", with_df=False)
     fit_params = {s1.id: [{"shape": "G", "shift_val": 150.0, "fit_shift": True}]}
 
-    path = tmp_path / "session.dataapp"
+    path = tmp_path / "session.prism"
     project_io.save_project(str(path), [s1, s2], fit_params)
     project = project_io.load_project(str(path))
     spectra, loaded_params = project.spectra, project.fit_params
@@ -50,7 +50,7 @@ def test_meta_with_numpy_values_serializes(tmp_path):
     sp.meta["temp_start_C"] = np.float64(21.5)
     sp.meta["indices"] = np.array([1, 2, 3])
 
-    path = tmp_path / "np.dataapp"
+    path = tmp_path / "np.prism"
     project_io.save_project(str(path), [sp], {})
     spectra = project_io.load_project(str(path)).spectra
     assert spectra[0].meta["temp_start_C"] == 21.5
@@ -59,24 +59,24 @@ def test_meta_with_numpy_values_serializes(tmp_path):
 
 def test_load_rejects_non_project_zip(tmp_path):
     import zipfile
-    bad = tmp_path / "notproject.dataapp"
+    bad = tmp_path / "notproject.prism"
     with zipfile.ZipFile(bad, "w") as zf:
         zf.writestr("manifest.json", '{"format": "something-else"}')
-    with pytest.raises(ValueError, match="Not a Dataapp project"):
+    with pytest.raises(ValueError, match="Not a PRISM project"):
         project_io.load_project(str(bad))
 
 
 def test_load_rejects_newer_version(tmp_path):
     import zipfile
-    newer = tmp_path / "future.dataapp"
+    newer = tmp_path / "future.prism"
     with zipfile.ZipFile(newer, "w") as zf:
-        zf.writestr("manifest.json", '{"format": "dataapp-project", "version": 99}')
+        zf.writestr("manifest.json", '{"format": "prism-project", "version": 99}')
     with pytest.raises(ValueError, match="newer"):
         project_io.load_project(str(newer))
 
 
 def test_empty_project_round_trips(tmp_path):
-    path = tmp_path / "empty.dataapp"
+    path = tmp_path / "empty.prism"
     project_io.save_project(str(path), [], {})
     project = project_io.load_project(str(path))
     assert project.spectra == []
@@ -99,7 +99,7 @@ def test_xas_state_round_trips(tmp_path):
         history=[Operation("import", {"source": "beamline.zip"}), Operation("mu_builder", {"log": "ln"})],
     )
 
-    path = tmp_path / "xas.dataapp"
+    path = tmp_path / "xas.prism"
     project_io.save_project(str(path), [], {}, xas_spectra=[sp])
     project = project_io.load_project(str(path))
 
@@ -117,11 +117,13 @@ def test_xas_state_round_trips(tmp_path):
 
 
 def test_bundled_demo_project_loads():
-    """EXAMPLES/demo_project.dataapp is the onboarding demo (File > Open
-    project) — it must always load with the shipped format version."""
+    """EXAMPLES/demo_project.prism is the onboarding demo (File > Open
+    project) — it must always load with the shipped format version. It was
+    saved under the app's former name, so this also covers loading a
+    legacy-format manifest."""
     from conftest import EXAMPLES_DIR
 
-    demo = EXAMPLES_DIR / "demo_project.dataapp"
+    demo = EXAMPLES_DIR / "demo_project.prism"
     assert demo.is_file()
     project = project_io.load_project(str(demo))
     assert len(project.spectra) == 3
@@ -141,7 +143,7 @@ def test_htxrd_state_round_trips(tmp_path):
         HtxrdPattern(path="C:/gone/scan2.rasx", name="scan2", x=x, y=np.cos(x), ramp_value=100.0, ramp_source="metadata"),
     ]
 
-    path = tmp_path / "ht.dataapp"
+    path = tmp_path / "ht.prism"
     project_io.save_project(str(path), [], {}, htxrd_patterns=patterns)
     project = project_io.load_project(str(path))
 

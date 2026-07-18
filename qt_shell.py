@@ -382,7 +382,7 @@ class LibraryPage(QWidget):
             try:
                 sep = "," if path.lower().endswith(".csv") else "\t"
                 data = np.column_stack([np.asarray(sp.x, float), np.asarray(sp.y, float)])
-                np.savetxt(path, data, delimiter=sep, header=f"{sp.title} (exported from Dataapp)", comments="# ")
+                np.savetxt(path, data, delimiter=sep, header=f"{sp.title} (exported from PRISM)", comments="# ")
                 written += 1
             except OSError as exc:
                 errors.append(f"{sp.title}: {exc}")
@@ -793,7 +793,7 @@ class PrismMainWindow(QMainWindow):
 
     def show_about(self) -> None:
         from qt_help import ABOUT_HTML, HelpDialog
-        HelpDialog(self, html=ABOUT_HTML, title="About Dataapp").exec()
+        HelpDialog(self, html=ABOUT_HTML, title="About PRISM").exec()
 
     def _on_rruff_send_cifs(self, cif_paths) -> None:
         """RRUFF→CIF handoff target: add the structures to the Raman
@@ -833,18 +833,17 @@ class PrismMainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     # Project persistence (M14): everything in the shared Library plus the
-    # shared fit-parameter store, in one .dataapp file. The XAS and HT-XRD
-    # workspaces keep their own session state (different data models) and
-    # are not yet included — the file format is versioned so they can be
-    # added later without breaking old projects.
+    # shared fit-parameter store, in one .prism file (legacy-extension
+    # projects still load). The file format is versioned so workspaces can
+    # be added without breaking old projects.
     # ------------------------------------------------------------------
     def save_project(self) -> None:
         import project_io
-        path, _ = QFileDialog.getSaveFileName(self, "Save project as…", "", "PRISM project (*.prism);;Legacy Dataapp project (*.dataapp)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save project as…", "", "PRISM project (*.prism);;Legacy project (*.dataapp)")
         if not path:
             return
-        if not path.lower().endswith(".dataapp"):
-            path += ".dataapp"
+        if not path.lower().endswith((".prism", ".dataapp")):
+            path += ".prism"
         fit_params = {sid: params for sid, params in self.fit_param_memory.items()}
         try:
             cif_overlays = [
@@ -866,7 +865,7 @@ class PrismMainWindow(QMainWindow):
 
     def open_project(self) -> None:
         import project_io
-        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", "PRISM project (*.prism *.dataapp);;All files (*.*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", "PRISM projects (*.prism *.dataapp);;All files (*.*)")
         if not path:
             return
         if len(self.library) > 0:
@@ -938,7 +937,3 @@ class PrismMainWindow(QMainWindow):
             self.multifit_page._refresh_recipe_list()
         elif hasattr(page, "set_spectra"):
             page.set_spectra([s.id for s in self.library.all()])
-
-
-# Backward-compatible alias (pre-rename import sites, incl. old scripts)
-DataappMainWindow = PrismMainWindow

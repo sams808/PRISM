@@ -1,4 +1,4 @@
-Dataapp 2.1.0 — the first hands-on-feedback release, four days after 2.0.0. Everything here came from real use of the app.
+PRISM 2.1.0 (released under the app's former name) — the first hands-on-feedback release, four days after 2.0.0. Everything here came from real use of the app.
 
 ## Fixed
 - **Athena `.prj` import works everywhere now, including the portable exe.** A new pure-Python reader handles both `.prj` on-disk formats; Larch is only needed for normalization/EXAFS (and the error message now says so). Investigating this bug also revealed that the old import path returned *zero* spectra on modern Larch versions, and that `.prj` *export* had been silently failing since Larch dropped `write_athena` — both fixed.
@@ -18,6 +18,6 @@ Dataapp 2.1.0 — the first hands-on-feedback release, four days after 2.0.0. Ev
 ## Library
 - **Undo (Ctrl+Z) extended beyond deletion**: renames, duplicates, combine results, applied baselines, and accepted mineral identifications are all one undo away.
 
-334 tests, all green. Portable build: download `Dataapp-portable.zip`, extract, double-click `Dataapp\Dataapp.exe` (Larch-based XAS normalization/EXAFS still needs the Python + `Dataapp.bat` route).
+334 tests, all green. Portable build: download the portable zip, extract, double-click the exe (Larch-based XAS normalization/EXAFS still needs the Python + launcher-.bat route).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

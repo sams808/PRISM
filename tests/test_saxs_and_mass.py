@@ -8,7 +8,7 @@ import pytest
 import xas_mass
 from qt_models import SpectrumLibrary
 from qt_saxs import SaxsWorkspace
-from qt_shell import MODULES, NAV_ITEMS, DataappMainWindow
+from qt_shell import MODULES, NAV_ITEMS, PrismMainWindow
 from saxs_core.analysis import fit_guinier, fit_pseudo_bragg_peak
 from saxs_core.curve import Curve
 from saxs_core.waxs import auto_find_peaks, fit_waxs_peaks
@@ -86,7 +86,7 @@ def test_saxs_workspace_analysis_tab_guinier(qtbot):
 def test_saxs_module_registered_in_shell(qtbot):
     assert "SAXS/WAXS" in MODULES
     assert "SAXS/WAXS" in NAV_ITEMS
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     window.nav.setCurrentRow(NAV_ITEMS.index("SAXS/WAXS"))
     qtbot.wait(20)

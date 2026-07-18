@@ -1,5 +1,5 @@
 @echo off
-rem Double-click launcher for Dataapp.
+rem Double-click launcher for PRISM.
 rem Uses the Windows py launcher to pick Python 3.11 explicitly — plain
 rem "python" on this machine can resolve to a bare 3.10 install without the
 rem app's dependencies. Starts windowless (pyw); if that fails, falls back

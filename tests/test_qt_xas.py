@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from scipy.special import erf
 
-from qt_shell import NAV_ITEMS, DataappMainWindow
+from qt_shell import NAV_ITEMS, PrismMainWindow
 from qt_xas import XasWorkspace
 from xas_science import Spectrum, _uid
 
@@ -361,7 +361,7 @@ def test_duplicate_and_delete_selected(qtbot):
 
 
 def test_shell_xas_page_is_xas_workspace(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
     assert isinstance(window.xas_page, XasWorkspace)

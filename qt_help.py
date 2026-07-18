@@ -1,7 +1,10 @@
 """
 qt_help.py — in-app Help: the F1 quick-start guide (per-workspace, written
 for a group member opening the app for the first time) and the About
-dialog (versions + the citations the bundled databases ask for).
+dialog (versions + the citations the reference databases ask for).
+
+docs/USER_GUIDE.md is generated from this file — run make_user_guide.py
+after editing, never edit the markdown directly.
 """
 from __future__ import annotations
 
@@ -10,10 +13,8 @@ from typing import Optional
 from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 
 # Single source of the app version: shown in the window title and About,
-# and matched by the git tag (2.0.0 = the completed Qt rebuild; 2.1.0 = the
-# first hands-on-feedback wave: .prj fixes, RRUFF filters, peak picking,
-# true Origin-style stepwise LM, HT-XRD tracking rework + Maps tab).
-APP_VERSION = "2.3.0"
+# and matched by the git tag at release time.
+APP_VERSION = "2.5.0"
 APP_NAME = "PRISM"
 APP_TAGLINE = "Platform for Research In Spectroscopy & Materials"
 
@@ -35,8 +36,9 @@ CREDITS_HTML = """
 <p>Developed in the NOME group, Washington State University.<br>
 Supported by the U.S. Department of Energy.<br>
 Thanks to Prof. John S. McCloy for the trust.</p>
-<p>Databases: RRUFF (Lafuente et al. 2015), AMCSD (Downs &amp; Hall-Wallace 2003),
-COD, ICDD PDF-2 &mdash; full citations in About.</p>
+<p>Reference databases: RRUFF (Lafuente et al. 2015), AMCSD (Downs &amp;
+Hall-Wallace 2003), plus whatever XRD card databases you register yourself
+&mdash; full citations in About.</p>
 <!-- conceived and directed by Sam Souda -->
 <p style='font-size:8pt; color:#888'>made with ChatGPT, improved with Claude&nbsp;&nbsp;&middot;&nbsp;&nbsp;s.s.</p>
 """
@@ -47,7 +49,7 @@ HELP_HTML = """
 workspace for your technique in the left rail. Everything you derive
 (baseline-subtracted, combined, fitted) lands back in the Library as a new
 spectrum. <b>File &rsaquo; Save project</b> keeps the whole session in one
-<code>.dataapp</code> file.</p>
+<code>.prism</code> file (older project files still load).</p>
 
 <h2>Library</h2>
 <p><b>Import files…</b> auto-detects the format (plain XY, TA SDT thermal exports,
@@ -166,8 +168,14 @@ target). Preview shows inputs faint + result bold; Apply adds derived
 spectra to the Library (undoable).</p>
 
 <h2>XRD ID</h2>
-<p>QualX-style phase identification against your merged local database
-(COD inorganic + full COD + PDF-2 — every card keeps its source and code).
+<p>QualX-style phase identification against YOUR OWN card databases —
+PRISM ships none. Download any database you have the rights to use (any
+QualX-format .sq works) and register it with <b>Add database…</b> (or
+<b>Add folder…</b> for several at once): a QualX-format file is indexed
+once locally; a PRISM-format .sq (e.g. shared by a colleague) is used in
+place. Check any number of registered databases to probe them all in one
+search — every card keeps its source and code, and results say which
+database each hit came from.
 Auto-find (or type) the pattern's 2θ peaks, set λ and the match tolerance,
 optionally restrict by chemistry (must-contain / must-exclude elements) or
 source, then <b>Search match</b>: candidates ranked by figure of merit
@@ -177,9 +185,7 @@ for mixtures, exactly like Raman ID: the phase is recorded, its peaks
 leave the query, the rest is re-searched; Ctrl+Z undoes.
 <b>Check Raman-identified phases here</b> overlays the XRD reference lines
 of every phase accepted in Raman ID — the Raman→XRD cross-check in one
-click. The Card browser tab looks up any card by name/mineral/formula.
-The database is built once with <code>xrd_id_science.build_xrd_database()</code>
-from QualX-format .sq files.</p>
+click. The Card browser tab looks up any card by name/mineral/formula.</p>
 
 <h2>Figures</h2>
 <p>Publication-figure building (the Origin-inspired module). <b>XY builder</b>:
@@ -231,7 +237,7 @@ ABOUT_HTML = f"""
 DTA/DSC/TGA, XRD (including phase identification and high-temperature
 series), SAXS.</p>
 <p>Source: <code>github.com/sams808/PRISM</code></p>
-<h3>Please cite when the bundled databases contribute to your work</h3>
+<h3>Please cite the reference databases that contribute to your work</h3>
 <p><b>RRUFF</b> (Raman reference spectra): Lafuente B, Downs R T, Yang H,
 Stone N (2015) "The power of databases: the RRUFF project." In: Highlights
 in Mineralogical Crystallography, pp 1–30. Also acknowledge each matched
@@ -285,8 +291,18 @@ iterations. Save models to reuse in Multi-Fit batches.</li></ol>
 <li>Fit R&sup2; &gt; 0.99 with absurd widths means overlapping components:
 link widths (FWHM=#) or fix &eta;.</li></ul>"""),
     "XRD": _guide("XRD module", """
-<p><b>XRD ID</b> is a QualX-style search-match on your merged COD+PDF-2
-database (692,665 cards, each keeping its source and code).</p>
+<p><b>XRD ID</b> is a QualX-style search-match on card databases YOU
+register — PRISM ships none. Any QualX-format .sq you have the rights to
+use works; enable several at once and one search probes them all.</p>
+<h2>Databases</h2><ol>
+<li><b>Add database…</b> registers one .sq (<b>Add folder…</b> scans a
+folder). A QualX-format file is indexed once locally — minutes for
+hundreds of thousands of cards, then instant forever; a PRISM-format .sq
+is used in place.</li>
+<li>The checkboxes choose which registered databases each search probes;
+every hit shows its source and card code.</li>
+<li>Respect each database's license: only share converted files with
+people covered by the same rights you downloaded it under.</li></ol>
 <h2>Search-match, step by step</h2><ol>
 <li>Auto-find 2&theta; peaks (or type them). Check &lambda; (default Cu K&alpha; 1.5406 &Aring;).</li>
 <li>Restrict chemistry: contains-all with elements you KNOW are present;

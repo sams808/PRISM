@@ -15,7 +15,7 @@ import rampy as rp
 from qt_models import Spectrum, SpectrumLibrary
 from qt_multi_fit import MultiFitWorkspace
 from qt_settings_store import PerItemSettingsStore
-from qt_shell import NAV_ITEMS, DataappMainWindow, _load_spectrum_from_path
+from qt_shell import NAV_ITEMS, PrismMainWindow, _load_spectrum_from_path
 from qt_single_fit import SingleFitWorkspace
 
 
@@ -177,7 +177,7 @@ def test_shell_refreshes_recipes_saved_after_construction_on_nav_switch(qtbot, t
     into the Multi-Fit page, mirroring how spectra are already refreshed."""
     monkeypatch.setattr("qt_multi_fit._default_model_dir", lambda: str(tmp_path))
 
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
 
@@ -194,7 +194,7 @@ def test_shell_refreshes_recipes_saved_after_construction_on_nav_switch(qtbot, t
 
 
 def test_shell_multifit_page_picks_up_library_records(qtbot, raman_example_path):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
 
     spectrum = _load_spectrum_from_path(str(raman_example_path))
@@ -207,7 +207,7 @@ def test_shell_multifit_page_picks_up_library_records(qtbot, raman_example_path)
 
 
 def test_shell_shares_fit_param_memory_between_fitting_and_multifit_pages(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)  # flush any deferred draws queued while constructing all 6 pages
     assert window.fitting_page.fit_param_memory is window.fit_param_memory

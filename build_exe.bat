@@ -3,11 +3,11 @@ rem One-command portable-exe release: PyInstaller build with the exclusion
 rem list this app needs (the shared Python environment contains torch,
 rem transformers, llvmlite, PyQt5 and other heavyweights that would
 rem otherwise be silently bundled - the first unfiltered build was 883 MB
-rem vs 349 MB with these exclusions), then zip dist\Dataapp into a single
+rem vs 349 MB with these exclusions), then zip dist\PRISM into a single
 rem shareable archive.
 rem
 rem Note: the exe excludes xraylarch; Larch-dependent XAS steps
-rem (normalization/EXAFS) need a Python install + Dataapp.bat instead.
+rem (normalization/EXAFS) need a Python install + PRISM.bat instead.
 cd /d "%~dp0"
 
 py -3.11 -m PyInstaller --noconfirm --clean --windowed --name PRISM ^

@@ -6,7 +6,7 @@ import numpy as np
 
 from qt_calc import CalcWorkspace
 from qt_models import Spectrum, SpectrumLibrary
-from qt_shell import NAV_ITEMS, DataappMainWindow
+from qt_shell import NAV_ITEMS, PrismMainWindow
 
 
 def _spectrum(title, value=1.0, n=101):
@@ -120,7 +120,7 @@ def test_derived_added_callback_feeds_undo(qtbot):
 
 
 def test_shell_has_calculations_page_and_nav_refreshes_it(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     window.library.add(_spectrum("in_lib", 2.0))
     window.nav.setCurrentRow(NAV_ITEMS.index("Calculations"))

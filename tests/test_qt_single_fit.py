@@ -12,7 +12,7 @@ import rampy as rp
 
 from qt_fit_params import FitParamDialog
 from qt_models import Spectrum, SpectrumLibrary
-from qt_shell import NAV_ITEMS, DataappMainWindow, _load_spectrum_from_path
+from qt_shell import NAV_ITEMS, PrismMainWindow, _load_spectrum_from_path
 from qt_single_fit import SingleFitWorkspace
 
 
@@ -201,7 +201,7 @@ def test_fit_param_dialog_auto_find_peaks_seeds_component(qtbot):
 
 
 def test_shell_fitting_page_picks_up_library_records(qtbot, raman_example_path):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
 
     spectrum = _load_spectrum_from_path(str(raman_example_path))

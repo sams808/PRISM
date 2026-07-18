@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from qt_help import ABOUT_HTML, HELP_HTML, HelpDialog
-from qt_shell import NAV_ITEMS, DataappMainWindow
+from qt_shell import NAV_ITEMS, PrismMainWindow
 
 
 def test_help_covers_every_workspace():
@@ -50,7 +50,7 @@ def test_help_dialog_constructs_and_renders(qtbot):
 
 
 def test_shell_help_menu_actions_exist(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
     menus = [a.text().replace("&", "") for a in window.menuBar().actions()]

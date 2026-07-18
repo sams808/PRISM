@@ -5,7 +5,7 @@ manage the QApplication/event loop.
 from __future__ import annotations
 
 
-from qt_shell import NAV_ITEMS, DataappMainWindow, _load_spectrum_from_path
+from qt_shell import NAV_ITEMS, PrismMainWindow, _load_spectrum_from_path
 from qt_widgets import PlotWidget
 
 
@@ -25,7 +25,7 @@ def test_load_spectrum_from_path_dta_example(dta_example_path):
 
 
 def test_main_window_constructs_with_nav_and_library_page(qtbot):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     qtbot.wait(20)
     # Tied to NAV_ITEMS rather than a hardcoded count — this assertion broke
@@ -38,7 +38,7 @@ def test_main_window_constructs_with_nav_and_library_page(qtbot):
 
 
 def test_import_and_select_populates_plot(qtbot, dta_example_path):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
 
     spectrum = _load_spectrum_from_path(str(dta_example_path))
@@ -56,7 +56,7 @@ def test_two_imports_with_same_stem_do_not_collide(qtbot, raman_example_path, tm
     """Regression guard for the identity bug this data model fixes: import
     the same file twice (simulating two files that would produce the same
     display title) and confirm both survive as distinct library entries."""
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
 
     copy_path = tmp_path / raman_example_path.name
@@ -87,8 +87,8 @@ def test_modules_cover_every_non_library_nav_item():
 
 
 def test_module_toggle_hides_nav_rows_and_falls_back_to_library(qtbot):
-    from qt_shell import DataappMainWindow, NAV_ITEMS
-    window = DataappMainWindow()
+    from qt_shell import PrismMainWindow, NAV_ITEMS
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     xas_row = NAV_ITEMS.index("XAS")
 
@@ -107,11 +107,11 @@ def test_module_toggle_hides_nav_rows_and_falls_back_to_library(qtbot):
 def test_fresh_install_defaults_to_raman_only(qtbot):
     """User request: a new user starts with only the Raman module on."""
     from PySide6.QtCore import QSettings
-    from qt_shell import MODULES, DataappMainWindow, NAV_ITEMS
+    from qt_shell import MODULES, PrismMainWindow, NAV_ITEMS
     s = QSettings("PRISM", "PRISM")
     for m in MODULES:  # simulate the fresh-install store (no conftest override)
         s.setValue(f"modules/{m}", m == "Raman")
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     assert window.module_checks["Raman"].isChecked()
     assert not window.module_checks["XAS"].isChecked()
@@ -120,13 +120,13 @@ def test_fresh_install_defaults_to_raman_only(qtbot):
 
 
 def test_module_state_persists_via_qsettings(qtbot):
-    from qt_shell import DataappMainWindow, NAV_ITEMS
-    w1 = DataappMainWindow()
+    from qt_shell import PrismMainWindow, NAV_ITEMS
+    w1 = PrismMainWindow()
     qtbot.addWidget(w1)
     w1.module_checks["Thermal"].setChecked(False)
     w1.close()
 
-    w2 = DataappMainWindow()  # same (hermetic, in-memory) settings store
+    w2 = PrismMainWindow()  # same (hermetic, in-memory) settings store
     qtbot.addWidget(w2)
     assert not w2.module_checks["Thermal"].isChecked()
     assert w2.nav.isRowHidden(NAV_ITEMS.index("DTA / Thermal"))
@@ -134,8 +134,8 @@ def test_module_state_persists_via_qsettings(qtbot):
 
 def test_window_title_and_credits(qtbot):
     from qt_help import APP_NAME, APP_VERSION, CREDITS_HTML
-    from qt_shell import DataappMainWindow
-    window = DataappMainWindow()
+    from qt_shell import PrismMainWindow
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     assert window.windowTitle() == f"{APP_NAME} {APP_VERSION}"
     assert APP_NAME == "PRISM"
@@ -152,8 +152,8 @@ def test_window_title_and_credits(qtbot):
 
 
 def test_nav_items_have_module_colors(qtbot):
-    from qt_shell import DataappMainWindow, NAV_ITEMS
-    window = DataappMainWindow()
+    from qt_shell import PrismMainWindow, NAV_ITEMS
+    window = PrismMainWindow()
     qtbot.addWidget(window)
     for row in range(window.nav.count()):
         assert not window.nav.item(row).icon().isNull(), NAV_ITEMS[row]

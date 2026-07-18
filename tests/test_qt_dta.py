@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from qt_dta import DtaWorkspace
-from qt_shell import DataappMainWindow, _load_spectrum_from_path
+from qt_shell import PrismMainWindow, _load_spectrum_from_path
 
 
 def _dta_record(dta_example_path):
@@ -111,7 +111,7 @@ def test_calc_integrate_and_find_max(qtbot, dta_example_path):
 
 
 def test_shell_dta_page_picks_up_library_records(qtbot, dta_example_path):
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     qtbot.addWidget(window)
 
     spectrum = _load_spectrum_from_path(str(dta_example_path))

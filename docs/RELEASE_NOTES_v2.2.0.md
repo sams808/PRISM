@@ -1,4 +1,4 @@
-**Dataapp is now PRISM** — *Platform for Research In Spectroscopy & Materials* — with a new logo, a startup splash, and the biggest feature release yet: 13 workspaces, organized into activatable modules.
+**The app is now PRISM** — *Platform for Research In Spectroscopy & Materials* — with a new logo, a startup splash, and the biggest feature release yet: 13 workspaces, organized into activatable modules.
 
 > **Upgrading from 2.x**: the portable build is renamed — extract `PRISM-portable.zip` and double-click `PRISM\PRISM.exe`. Your projects and local databases are untouched. The GitHub repository moved to `github.com/sams808/PRISM` (old links redirect).
 
@@ -8,7 +8,7 @@
 
 ## New workspaces
 - **Calculations** — 30 operations: spectrum arithmetic (add/subtract/multiply/divide/average/weighted sum), modulated addition A + w(x)·B, normalizations, log/exp/√/power transforms, x-axis calibration, crop/resample, smoothing, cosmic-ray despiking, derivatives, integrals, linear-combination fitting with R² and percentages, statistics.
-- **XRD ID** — QualX-style phase identification, rebuilt inside PRISM: search-match your 2θ peaks against a locally merged **692,665-card database** (COD inorganic + full COD + ICDD PDF-2 — every card keeps its source and code), with chemistry/source filters, figure-of-merit ranking, stick-pattern previews, and iterative Accept for mixtures. Searches take ~1 s. One-time local database build required (F1 help).
+- **XRD ID** — QualX-style phase identification, rebuilt inside PRISM: search-match your 2θ peaks against your own locally indexed card databases (hundreds of thousands of cards — every card keeps its source and code), with chemistry/source filters, figure-of-merit ranking, stick-pattern previews, and iterative Accept for mixtures. Searches take ~1 s. One-time local database setup required (F1 help).
 - **Figures** — publication figure building: layered XY plots (7 plot types, multi-panel, style presets, export at exact cm size/dpi), Origin's classic point-fit models with ±1σ and R², native ternary composition plots from CSV, and the **Raman ↔ XRD identification figure** (your Raman spectrum with accepted Mineral-ID phases over the XRD pattern with accepted phase reference lines).
 
 ## From the second feedback wave
