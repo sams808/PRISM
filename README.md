@@ -1,7 +1,5 @@
 # PRISM — Platform for Research In Spectroscopy & Materials
 
-*(repository name: Dataapp)*
-
 A desktop application for importing, processing, and analyzing scientific spectra:
 Raman, XAS/XANES/EXAFS, DTA/DSC/TGA thermal analysis, XRD (including phase
 identification and high-temperature series), and SAXS.

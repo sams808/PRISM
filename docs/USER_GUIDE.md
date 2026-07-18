@@ -169,7 +169,7 @@ View menu: dark mode, Python console (the live app objects are in scope).
 Import, process, and analyze scientific spectra: Raman, XAS/XANES/EXAFS,
 DTA/DSC/TGA, XRD (including high-temperature series), SAXS.
 
-Source: `github.com/sams808/Dataapp`
+Source: `github.com/sams808/PRISM`
 
 ### Please cite when the bundled databases contribute to your work
 **RRUFF** (Raman reference spectra): Lafuente B, Downs R T, Yang H,

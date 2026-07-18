@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 # and matched by the git tag (2.0.0 = the completed Qt rebuild; 2.1.0 = the
 # first hands-on-feedback wave: .prj fixes, RRUFF filters, peak picking,
 # true Origin-style stepwise LM, HT-XRD tracking rework + Maps tab).
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 APP_NAME = "PRISM"
 APP_TAGLINE = "Platform for Research In Spectroscopy & Materials"
 
@@ -217,7 +217,7 @@ ABOUT_HTML = f"""
 <p>Import, process, and analyze scientific spectra: Raman, XAS/XANES/EXAFS,
 DTA/DSC/TGA, XRD (including phase identification and high-temperature
 series), SAXS.</p>
-<p>Source: <code>github.com/sams808/Dataapp</code></p>
+<p>Source: <code>github.com/sams808/PRISM</code></p>
 <h3>Please cite when the bundled databases contribute to your work</h3>
 <p><b>RRUFF</b> (Raman reference spectra): Lafuente B, Downs R T, Yang H,
 Stone N (2015) "The power of databases: the RRUFF project." In: Highlights
