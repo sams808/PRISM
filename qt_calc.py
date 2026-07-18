@@ -85,6 +85,13 @@ class CalcWorkspace(QWidget):
         self.param_edits: Dict[str, QLineEdit] = {}
         self._rebuild_params(self.op_combo.currentText())
 
+        self.pick_btn = QPushButton("Pick on plot")
+        self.pick_btn.setCheckable(True)
+        self.pick_btn.setToolTip("Click the plot to fill this operation's position parameters: "
+                                 "Despike: each click adds a spike position. Crop/ranges: clicks fill min then max.")
+        self.pick_btn.toggled.connect(self._on_pick_toggled)
+        left_layout.addWidget(self.pick_btn)
+
         preview_btn = QPushButton("Preview")
         preview_btn.clicked.connect(self.preview)
         left_layout.addWidget(preview_btn)
@@ -109,6 +116,37 @@ class CalcWorkspace(QWidget):
         right_layout.addWidget(self.report_text)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
+
+    def _on_pick_toggled(self, checked: bool) -> None:
+        from PySide6.QtCore import Qt
+        if checked:
+            mode = str(self.plot.toolbar.mode)
+            if "zoom" in mode:
+                self.plot.toolbar.zoom()
+            elif "pan" in mode:
+                self.plot.toolbar.pan()
+            self.plot.canvas.setCursor(Qt.CrossCursor)
+            self._pick_cid = self.plot.canvas.mpl_connect("button_press_event", self._on_pick_click)
+        else:
+            if getattr(self, "_pick_cid", None) is not None:
+                self.plot.canvas.mpl_disconnect(self._pick_cid)
+                self._pick_cid = None
+            self.plot.canvas.unsetCursor()
+
+    def _on_pick_click(self, event) -> None:
+        if event.inaxes is None or event.xdata is None or self.plot.toolbar.mode:
+            return
+        xv = f"{float(event.xdata):.4g}"
+        if "positions" in self.param_edits:  # despike: accumulate clicks
+            cur = self.param_edits["positions"].text().strip()
+            self.param_edits["positions"].setText(f"{cur}, {xv}" if cur else xv)
+        elif "xmin" in self.param_edits and "xmax" in self.param_edits:  # ranges: fill min then max
+            target = "xmin" if not self.param_edits["xmin"].text().strip() or self.param_edits["xmax"].text().strip() else "xmax"
+            self.param_edits[target].setText(xv)
+        elif "x1" in self.param_edits and "x2" in self.param_edits:
+            target = "x1" if not self.param_edits["x1"].text().strip() or self.param_edits["x2"].text().strip() else "x2"
+            self.param_edits[target].setText(xv)
+        self.status_label.setText(f"Picked x = {xv}")
 
     def _rebuild_params(self, label: str) -> None:
         while self.param_rows_layout.count():
@@ -246,8 +284,10 @@ class CalcWorkspace(QWidget):
                     x, y = cs.smooth(s.x, s.y, method=op, window=int(_to_float(self._param("window"), 11)),
                                      polyorder=int(_to_float(self._param("polyorder"), 3)))
                 elif group == "despike":
+                    pos = [float(t) for t in (self._param("positions") or "").split(",") if t.strip()]
                     x, y = cs.despike(s.x, s.y, z=_to_float(self._param("z"), 6.0),
-                                      window=int(_to_float(self._param("window"), 7)))
+                                      window=int(_to_float(self._param("window"), 7)),
+                                      positions=pos or None)
                 elif group == "derivative":
                     x, y = cs.derivative(s.x, s.y, order=int(op),
                                          window=int(_to_float(self._param("window"), 11)),

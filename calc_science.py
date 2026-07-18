@@ -188,9 +188,13 @@ def smooth(x: np.ndarray, y: np.ndarray, *, method: str = "savgol",
     raise ValueError(f"Unknown smoothing method: {method!r}")
 
 
-def despike(x: np.ndarray, y: np.ndarray, *, z: float = 6.0, window: int = 7) -> XY:
+def despike(x: np.ndarray, y: np.ndarray, *, z: float = 6.0, window: int = 7,
+            positions=None) -> XY:
     """Remove cosmic-ray spikes: points more than z robust-sigmas from the
-    rolling median are replaced by it."""
+    rolling median are replaced by it. `positions` (list of x values, e.g.
+    clicked on the plot) additionally forces removal AT those spots
+    regardless of the statistical test — each is replaced by a linear
+    interpolation across the surrounding window."""
     from scipy.signal import medfilt
     x, y = _clean(x, y)
     win = max(3, int(window) | 1)
@@ -199,6 +203,14 @@ def despike(x: np.ndarray, y: np.ndarray, *, z: float = 6.0, window: int = 7) ->
     mad = float(np.median(np.abs(resid - np.median(resid))))
     sigma = 1.4826 * mad if mad > 1e-30 else float(np.std(resid)) or 1.0
     out = np.where(np.abs(resid) > float(z) * sigma, med, y)
+    if positions:
+        half = max(1, int(window) // 2)
+        for pos in positions:
+            i = int(np.argmin(np.abs(x - float(pos))))
+            lo, hi = max(0, i - half), min(len(out) - 1, i + half)
+            out[lo:hi + 1] = np.interp(x[lo:hi + 1],
+                                       [x[max(0, lo - 1)], x[min(len(x) - 1, hi + 1)]],
+                                       [out[max(0, lo - 1)], out[min(len(x) - 1, hi + 1)]])
     return x, out
 
 
@@ -314,7 +326,7 @@ CALC_OPERATIONS: Dict[str, Dict] = {
     "Smooth (Savitzky-Golay)": {"group": "smooth", "op": "savgol", "params": [("window", "window", "11"), ("polyorder", "poly order", "3")]},
     "Smooth (moving average)": {"group": "smooth", "op": "moving_average", "params": [("window", "window", "11")]},
     "Smooth (median)": {"group": "smooth", "op": "median", "params": [("window", "window", "11")]},
-    "Despike (cosmic rays)": {"group": "despike", "op": "despike", "params": [("z", "z threshold", "6.0"), ("window", "window", "7")]},
+    "Despike (cosmic rays)": {"group": "despike", "op": "despike", "params": [("z", "z threshold", "6.0"), ("window", "window", "7"), ("positions", "spike x (click or type, comma-sep)", "")]},
     "Derivative dy/dx": {"group": "derivative", "op": "1", "params": [("window", "window", "11"), ("polyorder", "poly order", "3")]},
     "Derivative d²y/dx²": {"group": "derivative", "op": "2", "params": [("window", "window", "11"), ("polyorder", "poly order", "3")]},
     "Cumulative integral ∫y dx": {"group": "integral", "op": "cumulative", "params": []},

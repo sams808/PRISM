@@ -83,6 +83,12 @@ class XrdIdWorkspace(QWidget):
         auto_row.addWidget(self.detection_edit)
         left_layout.addLayout(auto_row)
 
+        self.pick_peaks_btn = QPushButton("Pick peaks on plot")
+        self.pick_peaks_btn.setCheckable(True)
+        self.pick_peaks_btn.setToolTip("Toggle, then click peaks on the Phase ID preview — each click appends a 2θ value.")
+        self.pick_peaks_btn.toggled.connect(self._on_pick_peaks_toggled)
+        left_layout.addWidget(self.pick_peaks_btn)
+
         left_layout.addWidget(QLabel("Peaks 2θ (comma-sep — editable)"))
         self.peaks_edit = QLineEdit()
         left_layout.addWidget(self.peaks_edit)
@@ -229,6 +235,30 @@ class XrdIdWorkspace(QWidget):
             QMessageBox.information(self, "Auto-find peaks", "No clear peaks — lower the detection limit.")
             return
         self.peaks_edit.setText(", ".join(f"{c:.3f}" for c in sorted(centers)))
+
+    def _on_pick_peaks_toggled(self, checked: bool) -> None:
+        from PySide6.QtCore import Qt
+        if checked:
+            mode = str(self.plot.toolbar.mode)
+            if "zoom" in mode:
+                self.plot.toolbar.zoom()
+            elif "pan" in mode:
+                self.plot.toolbar.pan()
+            self.plot.canvas.setCursor(Qt.CrossCursor)
+            self._pick_cid = self.plot.canvas.mpl_connect("button_press_event", self._on_pick_peak_click)
+            self.plot.request_redraw(self.render_preview)
+        else:
+            if getattr(self, "_pick_cid", None) is not None:
+                self.plot.canvas.mpl_disconnect(self._pick_cid)
+                self._pick_cid = None
+            self.plot.canvas.unsetCursor()
+
+    def _on_pick_peak_click(self, event) -> None:
+        if event.inaxes is None or event.xdata is None or self.plot.toolbar.mode:
+            return
+        cur = self.peaks_edit.text().strip()
+        xv = f"{float(event.xdata):.3f}"
+        self.peaks_edit.setText(f"{cur}, {xv}" if cur else xv)
 
     def _parse_peaks(self):
         vals = []

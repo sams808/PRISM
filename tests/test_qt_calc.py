@@ -150,3 +150,29 @@ def test_cluster_operation_reports_and_adds_means(qtbot):
     assert "Clustering" in report and "cluster" in report
     means = [s for s in library.all() if "cluster" in s.title and "_mean" in s.title]
     assert len(means) == 2
+
+
+def test_despike_manual_positions_and_pick_click(qtbot):
+    from types import SimpleNamespace
+    library = SpectrumLibrary()
+    x = np.linspace(0, 100, 201)
+    y = np.sin(x / 10.0)
+    y[100] += 50.0  # a spike the statistical test may or may not catch
+    library.add(Spectrum(id=Spectrum.new_id(), title="spiky", path="", kind="raman_xy", x=x, y=y))
+    widget = CalcWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()
+    widget.op_combo.setCurrentText("Despike (cosmic rays)")
+    widget.param_edits["z"].setText("999")  # disable the statistical test entirely
+
+    # simulate a pick click at the spike position
+    widget.pick_btn.setChecked(True)
+    widget._on_pick_click(SimpleNamespace(inaxes=widget.plot.figure.gca(), xdata=50.0, ydata=0.0))
+    assert widget.param_edits["positions"].text().startswith("50")
+    widget.pick_btn.setChecked(False)
+
+    widget.apply_selected()
+    qtbot.wait(20)
+    derived = [s for s in library.all() if s.status == "derived"][0]
+    assert abs(derived.y[100]) < 2.0  # clicked spike removed despite z=999
