@@ -34,6 +34,7 @@ from qt_settings_store import PerItemSettingsStore
 from qt_simple_plot import SimplePlotWorkspace
 from qt_single_fit import SingleFitWorkspace
 from qt_baseline import BaselineWorkspace
+from qt_calc import CalcWorkspace
 from qt_cluster import ClusterWorkspace
 from qt_htxrd import HtxrdWorkspace
 from qt_rruff import RruffMatchWorkspace
@@ -57,7 +58,8 @@ NAV_BASELINE = "Baseline"
 # test_qt_dta.py's test_shell_dta_page_picks_up_library_records hardcodes
 # setCurrentRow(3), and there's no reason to reorder the rail just to churn
 # that index.
-NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE]
+NAV_CALC = "Calculations"
+NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC]
 DTA_KINDS = {"ta_sdt", "dta_table"}
 
 
@@ -590,6 +592,11 @@ class DataappMainWindow(QMainWindow):
             on_derived_added=lambda ids: self.library_page.push_undo(("add", list(ids))),
         )
         self.stack.addWidget(self.baseline_page)
+        self.calc_page = CalcWorkspace(
+            library=self.library,
+            on_derived_added=lambda ids: self.library_page.push_undo(("add", list(ids))),
+        )
+        self.stack.addWidget(self.calc_page)
         outer.addWidget(self.stack, 1)
 
         self.nav.setCurrentRow(0)
@@ -805,3 +812,5 @@ class DataappMainWindow(QMainWindow):
             self.cluster_page.set_spectra([s.id for s in self.library.all()])
         elif self.stack.widget(row) is self.baseline_page:
             self.baseline_page.set_spectra([s.id for s in self.library.all()])
+        elif self.stack.widget(row) is self.calc_page:
+            self.calc_page.set_spectra([s.id for s in self.library.all()])

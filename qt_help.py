@@ -126,6 +126,20 @@ alongside fit-quality anomalies.</p>
 a cluster count: PCA scatter colored by cluster, per-cluster mean spectra, and
 an assignment table.</p>
 
+<h2>Calculations</h2>
+<p>Every spectrum operation in one place. Between spectra: add, subtract,
+multiply, divide, average, weighted sum, and <b>modulated addition</b>
+(A + w(x)·B with a constant / linear-ramp / Gaussian envelope). Per
+spectrum: scale/offset, normalizations (max, area, min-max), log/ln/exp/√/
+power/reciprocal/|y|, x-shift and x-scale calibration, crop, resample,
+smoothing (Savitzky-Golay, moving average, median), cosmic-ray despiking,
+Savitzky-Golay derivatives, cumulative integral. Analysis:
+<b>linear-combination fitting</b> (target ≈ Σ cᵢ·refᵢ, free or non-negative
+coefficients, with R² and percentages) and summary statistics.
+<i>Selection order matters</i>: the first-selected spectrum is A (or the LCF
+target). Preview shows inputs faint + result bold; Apply adds derived
+spectra to the Library (undoable).</p>
+
 <h2>Shortcuts</h2>
 <p><code>Ctrl+O</code> import · <code>Ctrl+I</code> custom import ·
 <code>Ctrl+E</code> export · <code>Ctrl+S</code> save project ·
