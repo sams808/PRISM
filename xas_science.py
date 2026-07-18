@@ -53,9 +53,11 @@ DEFAULT_LATTICE_A_ANG: Dict[str, float] = {"si": 5.4310205, "ge": 5.6575}
 # =====================================================================
 
 def larch_available() -> bool:
+    # find_spec: "is it installed" without paying larch's multi-second import
+    # at app startup — the real import happens on first Larch-based step.
+    import importlib.util
     try:
-        import larch  # noqa: F401
-        return True
+        return importlib.util.find_spec("larch") is not None
     except Exception:
         return False
 
@@ -121,8 +123,8 @@ def require_larch():
     except Exception as exc:
         raise ImportError(
             "Larch is required for this step (normalization/EXAFS).\n"
-            "Note: the portable Dataapp.exe deliberately does not bundle Larch — "
-            "run the app via Dataapp.bat (Python install) for Larch-based steps.\n"
+            "Note: the portable PRISM.exe deliberately does not bundle Larch — "
+            "run the app via PRISM.bat (Python install) for Larch-based steps.\n"
             f"Import error: {exc}"
         ) from exc
 

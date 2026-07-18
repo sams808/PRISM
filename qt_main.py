@@ -3,6 +3,11 @@ qt_main.py — PRISM application entry point.
 
 Run:
     python qt_main.py
+
+Import order matters here: the splash screen goes up FIRST, and only then
+do the heavyweight imports (qt_shell pulls in matplotlib, scipy, pandas,
+lmfit, every workspace) run — so the user sees the logo within ~1 s instead
+of staring at nothing for the whole import phase.
 """
 from __future__ import annotations
 
@@ -11,10 +16,6 @@ import os
 import sys
 
 from PySide6.QtWidgets import QApplication
-
-from qt_shell import PrismMainWindow
-from qt_theme import apply_theme
-import qt_exception_hook
 
 
 def main() -> int:
@@ -39,6 +40,11 @@ def main() -> int:
         splash.show()
         splash_shown_at = time.time()
         app.processEvents()
+
+    # Heavy imports happen behind the splash, not before it.
+    from qt_shell import PrismMainWindow
+    from qt_theme import apply_theme
+    import qt_exception_hook
 
     apply_theme(app)
     qt_exception_hook.install(app)

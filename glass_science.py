@@ -92,9 +92,12 @@ def optical_basicity(components: Sequence[Tuple[str, float]], basis: str = "mol"
 
 
 def glassnet_available() -> bool:
+    # find_spec: "is it installed" without importing glasspy (which pulls in
+    # PyTorch — tens of seconds cold). The real import happens on first
+    # "GlassNet predict" click.
+    import importlib.util
     try:
-        from glasspy.predict import GlassNet  # noqa: F401
-        return True
+        return importlib.util.find_spec("glasspy") is not None
     except Exception:
         return False
 

@@ -143,12 +143,26 @@ class GlassWorkspace(QWidget):
         self.status_label.setText(gs.OPTICAL_BASICITY_SOURCE)
 
     def run_glassnet(self) -> None:
+        # The first call imports glasspy/PyTorch and loads the model (tens of
+        # seconds cold) — run it in a worker so the UI never freezes.
         try:
             df = self._parse()
-            pred = gs.glassnet_predict(df)
         except Exception as exc:
-            QMessageBox.critical(self, "GlassNet", str(exc))
+            QMessageBox.warning(self, "GlassNet", str(exc))
             return
+        self.gn_btn.setEnabled(False)
+        self.gn_btn.setText("Predicting… (first run loads the model)")
+        from qt_worker import run_in_thread
+        run_in_thread(lambda: gs.glassnet_predict(df), self._on_glassnet_done, self._on_glassnet_error)
+
+    def _on_glassnet_error(self, traceback_text: str) -> None:
+        self.gn_btn.setEnabled(True)
+        self.gn_btn.setText("GlassNet predict")
+        QMessageBox.critical(self, "GlassNet", traceback_text)
+
+    def _on_glassnet_done(self, pred) -> None:
+        self.gn_btn.setEnabled(True)
+        self.gn_btn.setText("GlassNet predict")
         filt = self.gn_filter_edit.text().strip().lower()
         if filt:
             keep = [c for c in pred.columns if filt in str(c).lower()]
