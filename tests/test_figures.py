@@ -168,3 +168,61 @@ def test_shell_has_figures_page(qtbot):
     qtbot.wait(20)
     assert window.stack.currentWidget() is window.figures_page
     assert window.figures_page.spectra_list.count() == 1
+
+
+def test_difference_vs_first_layer(qtbot):
+    library = SpectrumLibrary()
+    library.add(_spectrum("ref", value=1.0))
+    library.add(_spectrum("s", value=3.0))
+    widget = FiguresWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.spectra_list.selectAll()
+    widget._add_layers()
+    widget.diff_check.setChecked(True)
+    widget.render_xy()
+    qtbot.wait(20)
+    ax = widget.xy_plot.figure.get_axes()[0]
+    diff_line = ax.lines[1]  # second layer, plotted as (s − ref) = 2.0
+    assert np.allclose(diff_line.get_ydata(), 2.0)
+
+
+def test_series_tab_heatmap_and_waterfall(qtbot):
+    import rampy as rp
+    library = SpectrumLibrary()
+    x = np.linspace(0, 100, 300)
+    for i in range(4):
+        library.add(Spectrum(id=Spectrum.new_id(), title=f"t{i}", path="", kind="raman_xy",
+                             x=x, y=rp.gaussian(x, 10.0, 40.0 + 5 * i, 5.0)))
+    widget = FiguresWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.spectra_list.selectAll()
+    widget._add_layers()
+    widget.series_y_edit.setText("100, 200, 300, 400")
+    for kind in ("Heatmap", "Contour (filled)", "Waterfall 3D"):
+        widget.series_type_combo.setCurrentText(kind)
+        widget.render_series()
+        qtbot.wait(20)
+        assert len(widget.series_plot.figure.get_axes()) >= 1, kind
+
+
+def test_table_plots_from_csv(qtbot, tmp_path):
+    csv = tmp_path / "t.csv"
+    csv.write_text("a,b,c\n1,2,3\n2,4,6\n3,6,9\n4,8,12\n")
+    widget = FiguresWorkspace(library=SpectrumLibrary())
+    qtbot.addWidget(widget)
+    import qt_figures
+    from unittest.mock import patch
+    with patch.object(qt_figures.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(csv), ""))):
+        widget.load_table_csv()
+    assert "4 rows" in widget.table_status.text()
+    for kind in ("Histogram", "Box plot", "Violin plot", "Correlation matrix", "Scatter (col vs col)"):
+        widget.table_plot_combo.setCurrentText(kind)
+        widget.render_table_plot()
+        qtbot.wait(20)
+    # correlation of perfectly linear columns = 1
+    widget.table_plot_combo.setCurrentText("Correlation matrix")
+    widget.render_table_plot()
+    qtbot.wait(20)
+    assert len(widget.table_plot.figure.get_axes()) >= 1

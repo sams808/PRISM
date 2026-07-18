@@ -63,6 +63,8 @@ class FiguresWorkspace(QWidget):
         self.tabs = QTabWidget()
         root.addWidget(self.tabs)
         self._build_xy_tab()
+        self._build_series_tab()
+        self._build_table_tab()
         self._build_fit_tab()
         self._build_ternary_tab()
         self._build_link_tab()
@@ -90,8 +92,8 @@ class FiguresWorkspace(QWidget):
         ll.addWidget(add_btn)
 
         ll.addWidget(QLabel("Layers (edit Type/Color/Offset/Panel in place)"))
-        self.layers_table = QTableWidget(0, 5)
-        self.layers_table.setHorizontalHeaderLabels(["Spectrum", "Type", "Color", "Offset", "Panel"])
+        self.layers_table = QTableWidget(0, 6)
+        self.layers_table.setHorizontalHeaderLabels(["Spectrum", "Type", "Color", "Offset", "Panel", "Axis"])
         self.layers_table.cellChanged.connect(lambda *_: self._sync_layers_from_table())
         ll.addWidget(self.layers_table, 1)
         rm_btn = QPushButton("Remove selected layer")
@@ -123,6 +125,9 @@ class FiguresWorkspace(QWidget):
         ll.addLayout(lab_row)
 
         opt_row = QHBoxLayout()
+        self.diff_check = QCheckBox("difference vs 1st layer")
+        self.diff_check.setToolTip("Plot every layer after the first as (layer − first), interpolated onto the first layer's grid — difference-spectra figures in one click.")
+        opt_row.addWidget(self.diff_check)
         self.logx_check = QCheckBox("log x")
         self.logy_check = QCheckBox("log y")
         self.legend_check = QCheckBox("legend")
@@ -191,7 +196,7 @@ class FiguresWorkspace(QWidget):
                 sp = all_specs[r]
                 self.layers.append({"id": sp.id, "title": sp.title, "type": "Line",
                                     "color": LAYER_COLORS[len(self.layers) % len(LAYER_COLORS)],
-                                    "offset": 0.0, "panel": 1})
+                                    "offset": 0.0, "panel": 1, "axis": "L"})
         self._rebuild_layers_table()
 
     def _remove_layer(self) -> None:
@@ -206,7 +211,8 @@ class FiguresWorkspace(QWidget):
         self.layers_table.setRowCount(len(self.layers))
         for row, layer in enumerate(self.layers):
             for col, val in enumerate([layer["title"], layer["type"], layer["color"],
-                                       f"{layer['offset']:g}", str(layer["panel"])]):
+                                       f"{layer['offset']:g}", str(layer["panel"]),
+                                       layer.get("axis", "L")]):
                 self.layers_table.setItem(row, col, QTableWidgetItem(val))
         self.layers_table.blockSignals(False)
 
@@ -227,6 +233,9 @@ class FiguresWorkspace(QWidget):
                     layer["panel"] = max(1, int(float(p.text())))
                 except (TypeError, ValueError):
                     pass
+            a = self.layers_table.item(row, 5)
+            if a is not None and a.text().strip().upper() in ("L", "R"):
+                layer["axis"] = a.text().strip().upper()
 
     def render_xy(self) -> None:
         import matplotlib
@@ -239,13 +248,24 @@ class FiguresWorkspace(QWidget):
         with matplotlib.rc_context(preset):
             axes = fig.subplots(n_rows, n_cols, squeeze=False)
             flat = axes.ravel()
-            for layer in self.layers:
+            twins = {}
+            first_sp = self.library.get(self.layers[0]["id"]) if self.layers else None
+            for li, layer in enumerate(self.layers):
                 sp = self.library.get(layer["id"])
                 if sp is None:
                     continue
                 ax = flat[min(layer["panel"] - 1, n_panels - 1)]
+                if layer.get("axis", "L") == "R":
+                    if id(ax) not in twins:
+                        twins[id(ax)] = ax.twinx()
+                    ax = twins[id(ax)]
                 x = np.asarray(sp.x, float)
-                y = np.asarray(sp.y, float) + float(layer["offset"])
+                y = np.asarray(sp.y, float)
+                if self.diff_check.isChecked() and li > 0 and first_sp is not None:
+                    x0 = np.asarray(first_sp.x, float)
+                    y = np.interp(x0, x, y) - np.asarray(first_sp.y, float)
+                    x = x0
+                y = y + float(layer["offset"])
                 kind, color, label = layer["type"].lower(), layer["color"], layer["title"]
                 try:
                     if kind.startswith("scatter"):
@@ -284,7 +304,8 @@ class FiguresWorkspace(QWidget):
 
     def export_figure(self) -> None:
         """Export whichever tab's figure is current, at exact cm size + dpi."""
-        plots = {0: self.xy_plot, 1: self.fit_plot, 2: self.ternary_plot, 3: self.link_plot}
+        plots = {0: self.xy_plot, 1: self.series_plot, 2: self.table_plot,
+                 3: self.fit_plot, 4: self.ternary_plot, 5: self.link_plot}
         plot = plots.get(self.tabs.currentIndex(), self.xy_plot)
         path, _ = QFileDialog.getSaveFileName(self, "Export figure", "",
                                               "PNG (*.png);;SVG (*.svg);;PDF (*.pdf);;TIFF (*.tiff)")
@@ -302,6 +323,183 @@ class FiguresWorkspace(QWidget):
             fig.set_size_inches(*old)
             plot.canvas.draw_idle()
         QMessageBox.information(self, "Export", f"Saved {os.path.basename(path)} at {dpi} dpi.")
+
+    # ------------------------------------------------------------------
+    # 2D / Series (user request: heatmaps, projections… of spectral series)
+    # ------------------------------------------------------------------
+    def _build_series_tab(self) -> None:
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        left = QWidget()
+        left.setObjectName("Card")
+        left.setMaximumWidth(320)
+        ll = QVBoxLayout(left)
+        ll.addWidget(QLabel("Series = the XY-builder layer list, in order.\nY axis = series index (or values below)"))
+        self.series_type_combo = QComboBox()
+        self.series_type_combo.addItems(["Heatmap", "Contour (filled)", "Contour (lines)", "Waterfall 3D"])
+        ll.addWidget(self.series_type_combo)
+        self.series_cmap_combo = QComboBox()
+        self.series_cmap_combo.addItems(["viridis", "magma", "inferno", "plasma", "jet", "RdBu_r", "Greys"])
+        ll.addWidget(self.series_cmap_combo)
+        self.series_scale_combo = QComboBox()
+        self.series_scale_combo.addItems(["linear", "log", "sqrt"])
+        ll.addWidget(self.series_scale_combo)
+        ll.addWidget(QLabel("Series y values (opt, comma-sep\ne.g. temperatures / compositions)"))
+        self.series_y_edit = QLineEdit()
+        ll.addWidget(self.series_y_edit)
+        render_btn = QPushButton("Render series plot")
+        render_btn.setObjectName("Primary")
+        render_btn.clicked.connect(lambda: self.series_plot.request_redraw(self.render_series))
+        ll.addWidget(render_btn)
+        ll.addStretch(1)
+        layout.addWidget(left)
+        self.series_plot = PlotWidget(figsize=(7, 5))
+        layout.addWidget(self.series_plot, 1)
+        self.tabs.addTab(tab, "2D / Series")
+
+    def render_series(self) -> None:
+        import matplotlib.colors as mcolors
+        fig = self.series_plot.figure
+        fig.clf()
+        specs = [self.library.get(l["id"]) for l in self.layers]
+        specs = [s for s in specs if s is not None]
+        if len(specs) < 2:
+            ax = fig.add_subplot(111)
+            ax.set_title("Add at least 2 layers in the XY builder first")
+            self.series_plot.canvas.draw_idle()
+            return
+        lo = max(float(np.nanmin(s.x)) for s in specs)
+        hi = min(float(np.nanmax(s.x)) for s in specs)
+        if hi <= lo:
+            ax = fig.add_subplot(111)
+            ax.set_title("Layers share no common x range")
+            self.series_plot.canvas.draw_idle()
+            return
+        grid = np.linspace(lo, hi, 1500)
+        data = np.vstack([np.interp(grid, np.asarray(s.x, float), np.asarray(s.y, float)) for s in specs])
+        yvals_txt = [t for t in self.series_y_edit.text().split(",") if t.strip()]
+        try:
+            yvals = np.array([float(t) for t in yvals_txt], float) if len(yvals_txt) == len(specs) else np.arange(len(specs), dtype=float)
+        except ValueError:
+            yvals = np.arange(len(specs), dtype=float)
+        cmap = self.series_cmap_combo.currentText()
+        scale = self.series_scale_combo.currentText()
+        if scale == "log":
+            pos = data[data > 0]
+            norm = mcolors.LogNorm(vmin=float(pos.min()), vmax=float(pos.max())) if pos.size else None
+            show = np.where(data > 0, data, np.nan)
+        elif scale == "sqrt":
+            norm = mcolors.PowerNorm(gamma=0.5)
+            show = data
+        else:
+            norm = None
+            show = data
+        kind = self.series_type_combo.currentText()
+        if kind == "Waterfall 3D":
+            ax = fig.add_subplot(111, projection="3d")
+            X, Y = np.meshgrid(grid, yvals)
+            ax.plot_surface(X, Y, np.where(np.isfinite(show), show, 0.0), cmap=cmap, linewidth=0)
+            ax.set_zticks([])
+        else:
+            ax = fig.add_subplot(111)
+            if kind == "Heatmap":
+                mesh = ax.pcolormesh(grid, yvals, show, cmap=cmap, norm=norm, shading="nearest")
+                fig.colorbar(mesh, ax=ax)
+            elif kind == "Contour (filled)":
+                cs_ = ax.contourf(grid, yvals, np.where(np.isfinite(show), show, 0.0), levels=30, cmap=cmap, norm=norm)
+                fig.colorbar(cs_, ax=ax)
+            else:
+                ax.contour(grid, yvals, np.where(np.isfinite(show), show, 0.0), levels=20, cmap=cmap, norm=norm)
+        ax.set_xlabel(self.xlabel_edit.text())
+        ax.set_ylabel("series value")
+        fig.tight_layout()
+        self.series_plot.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Table plots (histograms / box / violin / correlation from any CSV)
+    # ------------------------------------------------------------------
+    def _build_table_tab(self) -> None:
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        left = QWidget()
+        left.setObjectName("Card")
+        left.setMaximumWidth(320)
+        ll = QVBoxLayout(left)
+        load_btn = QPushButton("Load table (CSV)…")
+        load_btn.clicked.connect(self.load_table_csv)
+        ll.addWidget(load_btn)
+        self.table_status = QLabel("No table loaded.")
+        self.table_status.setWordWrap(True)
+        ll.addWidget(self.table_status)
+        self.table_plot_combo = QComboBox()
+        self.table_plot_combo.addItems(["Histogram", "Box plot", "Violin plot", "Correlation matrix", "Scatter (col vs col)"])
+        ll.addWidget(self.table_plot_combo)
+        ll.addWidget(QLabel("Columns (comma-sep; scatter = X,Y)"))
+        self.table_cols_edit = QLineEdit()
+        ll.addWidget(self.table_cols_edit)
+        render_btn = QPushButton("Render table plot")
+        render_btn.setObjectName("Primary")
+        render_btn.clicked.connect(lambda: self.table_plot.request_redraw(self.render_table_plot))
+        ll.addWidget(render_btn)
+        ll.addStretch(1)
+        layout.addWidget(left)
+        self.table_plot = PlotWidget(figsize=(7, 5))
+        layout.addWidget(self.table_plot, 1)
+        self.tabs.addTab(tab, "Table plots")
+        self._table_df = None
+
+    def load_table_csv(self) -> None:
+        import pandas as pd
+        path, _ = QFileDialog.getOpenFileName(self, "Load table", "", "CSV (*.csv *.txt);;All files (*.*)")
+        if not path:
+            return
+        try:
+            self._table_df = pd.read_csv(path, sep=None, engine="python")
+        except Exception as exc:
+            QMessageBox.critical(self, "Table", str(exc))
+            return
+        numeric = [c for c in self._table_df.columns if np.issubdtype(self._table_df[c].dtype, np.number)]
+        self.table_cols_edit.setText(", ".join(str(c) for c in numeric[:4]))
+        self.table_status.setText(f"{os.path.basename(path)}: {len(self._table_df)} rows; numeric: {numeric}")
+
+    def render_table_plot(self) -> None:
+        fig = self.table_plot.figure
+        fig.clf()
+        ax = fig.add_subplot(111)
+        df = self._table_df
+        if df is None:
+            ax.set_title("Load a table first")
+            self.table_plot.canvas.draw_idle()
+            return
+        cols = [c.strip() for c in self.table_cols_edit.text().split(",") if c.strip() in df.columns]
+        kind = self.table_plot_combo.currentText()
+        if not cols:
+            ax.set_title("Pick at least one valid column")
+        elif kind == "Histogram":
+            for c in cols:
+                ax.hist(df[c].dropna(), bins=25, alpha=0.6, label=str(c))
+            ax.legend(fontsize=8)
+        elif kind == "Box plot":
+            ax.boxplot([df[c].dropna() for c in cols], labels=cols)
+        elif kind == "Violin plot":
+            ax.violinplot([df[c].dropna() for c in cols], showmedians=True)
+            ax.set_xticks(range(1, len(cols) + 1), cols)
+        elif kind == "Correlation matrix":
+            corr = df[cols].corr()
+            im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
+            ax.set_xticks(range(len(cols)), cols, rotation=45, ha="right")
+            ax.set_yticks(range(len(cols)), cols)
+            for i in range(len(cols)):
+                for j in range(len(cols)):
+                    ax.text(j, i, f"{corr.iloc[i, j]:.2f}", ha="center", va="center", fontsize=8)
+            fig.colorbar(im, ax=ax)
+        elif kind == "Scatter (col vs col)" and len(cols) >= 2:
+            ax.scatter(df[cols[0]], df[cols[1]], s=18, edgecolor="black", lw=0.3)
+            ax.set_xlabel(cols[0])
+            ax.set_ylabel(cols[1])
+        ax.grid(alpha=0.25)
+        fig.tight_layout()
+        self.table_plot.canvas.draw_idle()
 
     # ------------------------------------------------------------------
     # Point fitting
