@@ -210,6 +210,29 @@ def test_quality_filter_populated_from_databases(qtbot, db_path):
     assert set(widget.quality_filter._actions) == {"A"}  # the fixture DB's only quality code
 
 
+def test_zoom_preserved_when_testing_other_cards(qtbot, db_path):
+    """User request: a zoom on some peaks must survive re-renders (e.g.
+    selecting another candidate card); Clear autoscales again."""
+    widget, _, _ = _workspace(qtbot, db_path)
+    widget.auto_find_peaks()
+    widget.run_search()
+    qtbot.wait(200)  # results preview rendered
+    ax = widget.plot.figure.get_axes()[0]
+    widget.plot.toolbar.push_current()  # what a real toolbar zoom does first
+    ax.set_xlim(25.0, 28.0)
+    ax.set_ylim(-20.0, 60.0)
+
+    widget.plot.request_redraw(widget.render_preview)  # another card clicked
+    qtbot.wait(200)
+    ax2 = widget.plot.figure.get_axes()[0]
+    assert ax2.get_xlim() == (25.0, 28.0)
+    assert ax2.get_ylim() == (-20.0, 60.0)
+
+    widget.clear_session()  # starting over zooms back out
+    qtbot.wait(250)
+    assert widget.plot.figure.get_axes()[0].get_xlim() != (25.0, 28.0)
+
+
 def test_shell_has_xrd_id_page(qtbot):
     window = PrismMainWindow()
     qtbot.addWidget(window)

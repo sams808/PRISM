@@ -61,6 +61,8 @@ class PlotWidget(QWidget):
         self._debounce.setInterval(debounce_ms)
         self._debounce.timeout.connect(self._flush_redraw)
         self._pending: Optional[tuple] = None
+        self._zoom_key = None
+        self._zoom_saved: Optional[tuple] = None
 
     def _on_mouse_move(self, event) -> None:
         if event.inaxes is None or event.xdata is None:
@@ -76,6 +78,39 @@ class PlotWidget(QWidget):
         """
         self._pending = (fn, args, kwargs)
         self._debounce.start()
+
+    def preserve_zoom(self, key) -> None:
+        """Call at the START of a render fn, before clearing the figure:
+        remembers the current axes limits when the user has zoomed/panned
+        AND the content key (e.g. the selected spectrum's id) is unchanged
+        — so re-rendering to preview another candidate card keeps the view
+        instead of zooming back out. Apply with restore_zoom(ax) after
+        drawing. A changed key (different spectrum) autoscales again."""
+        axes = self.figure.get_axes()
+        try:
+            navigated = len(self.toolbar._nav_stack._elements) > 0
+        except Exception:  # private-API drift: keep preserving once a view was saved
+            navigated = self._zoom_saved is not None
+        if axes and navigated and key == self._zoom_key:
+            self._zoom_saved = (axes[0].get_xlim(), axes[0].get_ylim())
+        else:
+            self._zoom_saved = None
+        self._zoom_key = key
+
+    def restore_zoom(self, ax) -> None:
+        if self._zoom_saved is not None:
+            ax.set_xlim(self._zoom_saved[0])
+            ax.set_ylim(self._zoom_saved[1])
+
+    def reset_zoom_memory(self) -> None:
+        """Forget the preserved view AND the toolbar's zoom history — the
+        next render autoscales (Clear buttons, start-over flows)."""
+        self._zoom_key = None
+        self._zoom_saved = None
+        try:
+            self.toolbar._nav_stack.clear()
+        except Exception:
+            pass
 
     def cancel_pending(self) -> None:
         """Drop any queued debounced render. Call before drawing the figure

@@ -576,6 +576,8 @@ class XrdIdWorkspace(QWidget):
         self.plot.request_redraw(self.render_preview)
 
     def render_preview(self) -> None:
+        # keep the user's zoom across candidate-card re-renders (same spectrum)
+        self.plot.preserve_zoom(("phase_id", self.spec_combo.currentData()))
         fig = self.plot.figure
         fig.clf()
         ax = fig.add_subplot(111)
@@ -617,6 +619,7 @@ class XrdIdWorkspace(QWidget):
         if sp is not None or peaks or state["accepted"]:
             ax.legend(fontsize=7)
         ax.grid(alpha=0.2)
+        self.plot.restore_zoom(ax)
         fig.tight_layout()
         self.plot.canvas.draw_idle()
 
@@ -632,6 +635,7 @@ class XrdIdWorkspace(QWidget):
         self._query_peaks = []
         self._query_int = []
         self.results_table.setRowCount(0)
+        self.plot.reset_zoom_memory()  # starting over autoscales again
         self.plot.request_redraw(self.render_preview)
 
     # ------------------------------------------------------------------
@@ -766,6 +770,7 @@ class XrdIdWorkspace(QWidget):
             self.browse_list.addItem("(no cards found)")
 
     def render_browse(self) -> None:
+        self.browse_plot.preserve_zoom("browse")  # keep zoom across card clicks
         fig = self.browse_plot.figure
         fig.clf()
         ax = fig.add_subplot(111)
@@ -783,5 +788,6 @@ class XrdIdWorkspace(QWidget):
         ax.set_xlabel("2θ (deg)")
         ax.set_ylabel("relative intensity")
         ax.grid(alpha=0.2)
+        self.browse_plot.restore_zoom(ax)
         fig.tight_layout()
         self.browse_plot.canvas.draw_idle()

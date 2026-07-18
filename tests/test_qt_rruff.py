@@ -133,6 +133,30 @@ def test_accept_keeps_overlay_state_and_clear_resets(qtbot, tmp_path):
     assert widget.results_table.rowCount() == 0
 
 
+def test_zoom_preserved_across_candidate_renders(qtbot, tmp_path):
+    """Same zoom-preservation rule as XRD ID."""
+    cache_dir = tmp_path / "rruff_cache"
+    _write_fake_cache(cache_dir, cache_dir / "raw")
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    qtbot.wait(200)
+
+    widget.peaks_edit.setText("464.0, 1085.0")
+    widget.find_matches()
+    qtbot.wait(20)
+    ax = widget.plot.figure.get_axes()[0]
+    widget.plot.toolbar.push_current()
+    ax.set_xlim(440.0, 500.0)
+
+    widget._render_preview(widget._selected_candidates())  # another card clicked
+    qtbot.wait(20)
+    assert widget.plot.figure.get_axes()[0].get_xlim() == (440.0, 500.0)
+
+
 def test_entry_preview_renders_spectrum(qtbot, tmp_path):
     """Arriving on the page renders the query spectrum immediately."""
     library = SpectrumLibrary()

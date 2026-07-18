@@ -365,6 +365,8 @@ class RruffMatchWorkspace(QWidget):
         """Overlay the query against one or several candidates (shift/ctrl-
         click rows to compare references side by side)."""
         self.plot.cancel_pending()  # direct draws supersede any queued entry render
+        # keep the user's zoom across candidate re-renders (same spectrum)
+        self.plot.preserve_zoom(("raman_id", self.spec_combo.currentData()))
         fig = self.plot.figure
         fig.clf()
         ax = fig.add_subplot(111)
@@ -417,6 +419,7 @@ class RruffMatchWorkspace(QWidget):
         ax.set_ylabel("Normalized intensity")
         ax.legend(fontsize=8)
         ax.grid(alpha=0.25)
+        self.plot.restore_zoom(ax)
         fig.tight_layout()
         self.plot.canvas.draw_idle()
 
@@ -432,6 +435,7 @@ class RruffMatchWorkspace(QWidget):
         self._query_peaks = []
         self._results = []
         self._populate_results_table()
+        self.plot.reset_zoom_memory()  # starting over autoscales again
         self.plot.request_redraw(lambda: self._render_preview([]))
 
     # ------------------------------------------------------------------
