@@ -30,24 +30,16 @@ def asset_path(name: str) -> str:
 # Credits — shown from the Modules toolbar and the Help menu.
 # <!-- PRISM was imagined, specified, and battle-tested by Sam Souda. -->
 CREDITS_HTML = """
-<div style='text-align:center'>
-<h2>PRISM</h2>
-<p><i>Platform for Research In Spectroscopy &amp; Materials</i></p>
-</div>
-<p style='margin-top:14px'>Developed within the <b>NOME group</b> — Nuclear, Optical,
-Magnetic &amp; Electronic materials — at Washington State University, whose
-day-to-day science shaped every workspace of this suite.</p>
-<p>This work was made possible by the support of the
-<b>U.S.&nbsp;Department of Energy</b>.</p>
-<p>Our sincere gratitude to <b>Prof.&nbsp;John&nbsp;S.&nbsp;McCloy</b>, whose trust and
-scientific vision gave this project the room to become what it is.</p>
-<p style='margin-top:16px'>Reference databases: RRUFF (Lafuente et&nbsp;al., 2015),
-AMCSD (Downs &amp; Hall-Wallace, 2003), the Crystallography Open Database, and
-the ICDD PDF-2 — see About for full citations.</p>
-<!-- conceived and directed by Sam Souda — the s.s. below is him -->
-<p style='margin-top:18px; font-size:8pt; color:#888'>made with ChatGPT, improved with Claude&nbsp;&nbsp;·&nbsp;&nbsp;s.s.</p>
+<div style='text-align:center'><h2>PRISM</h2>
+<p><i>Platform for Research In Spectroscopy &amp; Materials</i></p></div>
+<p>Developed in the NOME group, Washington State University.<br>
+Supported by the U.S. Department of Energy.<br>
+Thanks to Prof. John S. McCloy for the trust.</p>
+<p>Databases: RRUFF (Lafuente et al. 2015), AMCSD (Downs &amp; Hall-Wallace 2003),
+COD, ICDD PDF-2 &mdash; full citations in About.</p>
+<!-- conceived and directed by Sam Souda -->
+<p style='font-size:8pt; color:#888'>made with ChatGPT, improved with Claude&nbsp;&nbsp;&middot;&nbsp;&nbsp;s.s.</p>
 """
-
 HELP_HTML = """
 <h1>PRISM — quick-start guide</h1>
 
@@ -115,7 +107,7 @@ Export (Athena formats). Importing an Athena <code>.prj</code> needs no Larch.</
 tangent, |dY| max) — the result panel says whether the methods agree.
 "Calculs" integrates or finds extrema over a range; Batch processes a folder.</p>
 
-<h2>Mineral ID (RRUFF)</h2>
+<h2>Raman ID (RRUFF)</h2>
 <p>Auto-find (or type) your spectrum's peak positions, then <b>Find matches</b>:
 candidates are ranked by peak overlap, each showing its <b>laser wavelength</b> —
 relative intensities vary between wavelengths, so judge the overlay yourself.
@@ -181,10 +173,10 @@ optionally restrict by chemistry (must-contain / must-exclude elements) or
 source, then <b>Search match</b>: candidates ranked by figure of merit
 (intensity-weighted coverage both ways), previewed as stick patterns under
 the query (shift/ctrl-click to compare several). <b>Accept</b> is iterative
-for mixtures, exactly like Mineral ID: the phase is recorded, its peaks
+for mixtures, exactly like Raman ID: the phase is recorded, its peaks
 leave the query, the rest is re-searched; Ctrl+Z undoes.
 <b>Check Raman-identified phases here</b> overlays the XRD reference lines
-of every phase accepted in Mineral ID — the Raman→XRD cross-check in one
+of every phase accepted in Raman ID — the Raman→XRD cross-check in one
 click. The Card browser tab looks up any card by name/mineral/formula.
 The database is built once with <code>xrd_id_science.build_xrd_database()</code>
 from QualX-format .sq files.</p>
@@ -234,7 +226,7 @@ series), SAXS.</p>
 <p><b>RRUFF</b> (Raman reference spectra): Lafuente B, Downs R T, Yang H,
 Stone N (2015) "The power of databases: the RRUFF project." In: Highlights
 in Mineralogical Crystallography, pp 1–30. Also acknowledge each matched
-sample's owner/source shown in the Mineral ID workspace.</p>
+sample's owner/source shown in the Raman ID workspace.</p>
 <p><b>AMCSD</b> (crystal structures used for XRD overlays): Downs R T,
 Hall-Wallace M (2003) "The American Mineralogist Crystal Structure
 Database." American Mineralogist 88, 247–250.</p>
@@ -254,3 +246,125 @@ class HelpDialog(QDialog):
         self.browser.setOpenExternalLinks(True)
         self.browser.setHtml(html)
         layout.addWidget(self.browser)
+
+
+# Per-module in-depth guides (Help > Module guides). Deliberately verbose --
+# these are the training documents for new group members.
+def _guide(title, body):
+    return "<h1>" + title + "</h1>" + body
+
+
+MODULE_GUIDES = {
+    "Raman": _guide("Raman module", """
+<p>The Raman block covers plotting (<b>Raman</b>), identification
+(<b>Raman ID</b>), and fitting (<b>Peak Fitting</b>/<b>Multi-Fit</b>).</p>
+<h2>Workflow</h2><ol>
+<li>Import spectra in the Library (auto-detected; Custom import if not).</li>
+<li>Baseline-subtract in <b>Baseline</b>: arPLS &lambda;&asymp;1e7 for broad glass
+bands &mdash; at 1e5 the baseline eats the band. Verify with Preview before Apply.</li>
+<li>Identify in <b>Raman ID</b>: auto-find peaks (lower the &times;&sigma; limit for
+weak bands), filter the database by your laser &lambda; and sample type, then judge
+the overlay yourself &mdash; the ranking assists, you decide. Accept iteratively
+for mixtures; every accept is Ctrl+Z-undoable and excluded from re-searches.</li>
+<li>Fit in <b>Peak Fitting</b>: pick components by clicking apexes, auto-find,
+or the table. G/GL/V/EMG shapes; widths are HWHM (double for true FWHM).
+Classic = one-shot Levenberg-Marquardt; Origin-like = visible step-by-step
+iterations. Save models to reuse in Multi-Fit batches.</li></ol>
+<h2>Pitfalls</h2><ul><li>Compare intensities only within one laser wavelength
+&mdash; resonance changes relative heights between 532 and 785 nm.</li>
+<li>Cosmic-ray spikes bias fits: despike first (Calculations).</li>
+<li>Fit R&sup2; &gt; 0.99 with absurd widths means overlapping components:
+link widths (FWHM=#) or fix &eta;.</li></ul>"""),
+    "XRD": _guide("XRD module", """
+<p><b>XRD ID</b> is a QualX-style search-match on your merged COD+PDF-2
+database (692,665 cards, each keeping its source and code).</p>
+<h2>Search-match, step by step</h2><ol>
+<li>Auto-find 2&theta; peaks (or type them). Check &lambda; (default Cu K&alpha; 1.5406 &Aring;).</li>
+<li>Restrict chemistry: contains-all with elements you KNOW are present;
+excludes with those that cannot be. This is the biggest ranking help.</li>
+<li>Read the FoM as intensity-weighted coverage both ways: a phase whose
+strong lines are absent from your pattern is penalized even if every one of
+your peaks matches it.</li>
+<li>Accept per phase; explained peaks leave the query and the remainder is
+re-searched &mdash; repeat until everything is explained.</li></ol>
+<h2>HT-XRD</h2><p>Temperature series: waterfall + Maps (a heatmap with
+log/sqrt scaling reveals weak reflections; the difference map vs a reference
+slice localizes transitions). Track peaks by clicking the same reflection at
+two temperatures on the waterfall &mdash; absence detection reports where a peak
+genuinely vanishes instead of fitting noise; vanished/appeared flags are the
+transition candidates.</p>
+<h2>Cross-check</h2><p>Check Raman-identified phases here overlays the XRD
+reference lines of everything accepted in Raman ID &mdash; agreement between the
+two techniques is strong evidence; disagreement usually means an amorphous
+phase (Raman-visible, XRD-silent) or trace crystallites (the reverse).</p>"""),
+    "XAS": _guide("XAS module", """
+<p>The pipeline follows the tabs left to right.</p>
+<ol><li><b>Import</b>: EasyXAFS ZIP (I0/It channels), CSV, Athena .prj
+(no Larch needed for import).</li>
+<li><b>Pre-processing</b>: smooth only for e0-finding, never the data you
+quantify; Bragg-glitch energy correction; tie-point alignment for scan
+drift (Mode C: click matching features BEFORE and AFTER).</li>
+<li><b>&mu;(E) Builder</b>: ln(I0/It); deglitch with z&asymp;6 removes monochromator
+glitches without touching EXAFS oscillations.</li>
+<li><b>Normalization / EXAFS</b> (needs Larch &rarr; run via the Python install,
+not the portable exe): pre/post-edge ranges are passed EXPLICITLY (a silent
+Larch pitfall this app fixes); autobk rbkg &asymp; 1.0; k-weight 2 is the usual
+glass choice.</li>
+<li><b>Analysis</b>: average repeat scans (or sum partial acquisitions),
+difference spectra, linear-combination fitting against reference standards
+(coefficients = phase fractions), PCA species count.</li>
+<li><b>Sample mass</b>: paste your oxide composition (mol% or wt%), pick
+element+edge and pellet diameter &rarr; masses for total &mu;t = 1 / 2.5 and step
+&Delta;&mu;t = 1 (Hephaestus rules of thumb). If &Delta;&mu;t = 1 needs several times the
+&mu;t = 2.5 mass, the absorber is dilute: measure in fluorescence.</li></ol>"""),
+    "Thermal": _guide("Thermal module", """
+<p><b>DTA / Thermal</b> computes Tg three independent ways &mdash; double tangent,
+parallel tangent, |dY| max &mdash; and says whether they agree. Trust the value
+only when the spread is small; a disagreement flag usually means a poorly
+chosen baseline window (adjust LOW/HIGH) or an overlapping event. Calculs
+integrates peaks and finds extrema; Batch processes a whole folder.</p>
+<p>Convention: onset temperatures (tangent methods) are the reportable Tg;
+|dY| max is the inflection &mdash; systematically higher. State which you quote.</p>"""),
+    "Processing": _guide("Processing module", """
+<p><b>Baseline</b>: arPLS (automatic; &lambda; stiffness &mdash; 1e7 for broad glass
+bands), ALS, polynomial/spline/rubberband through picked regions. Settings
+are remembered per spectrum; batch Apply creates _bl spectra.</p>
+<p><b>Calculations</b> is the everything-else toolbox: arithmetic between
+spectra (selection ORDER defines A), modulated addition (blend a reference
+in over a chosen range via ramp/gaussian envelopes), normalizations,
+log/exp/power transforms, x-calibration (shift/scale), crop, resample,
+smoothing (SG keeps peak shapes; median kills spikes), despiking,
+derivatives, integrals, linear-combination fitting (non-negative for
+physical mixtures), statistics, and cluster analysis of spectral series
+(KMeans/hierarchical over a common grid, PCA scores, per-cluster means &mdash;
+for multi-point maps, find which spectra group together before averaging).</p>"""),
+    "SAXS/WAXS": _guide("SAXS/WAXS module", """
+<p>Ported from POMME. <b>Reduction</b>: subtract the empty capillary &mdash;
+auto matches the high-q tail, transmission uses measured T, physics computes
+both attenuations from compositions via xraydb; inspect the corrected curve
+before analyzing.</p>
+<p><b>Analysis</b>: Guinier is only valid for qRg &#8818; 1.3 &mdash; the report
+prints qRg max, take it seriously; Rg &rarr; sphere-equivalent diameter shown.
+The generalized Porod slope m reads surface character (4 = smooth interface,
+3&ndash;4 rough, &lt;3 mass fractal). Pseudo-Bragg peaks give d = 2&pi;/q0 and an
+apparent correlation length from the width.</p>
+<p><b>WAXS</b>: pseudo-Voigt multi-peak fit with amorphous-hump detection &mdash;
+the crystallinity index is crystalline area / total area, comparable only
+between samples measured identically.</p>"""),
+    "Figures": _guide("Figures module", """
+<p>Build the figure ONCE, export at the journal exact size.
+<b>XY builder</b>: add spectra as layers; each layer has type, color,
+offset, panel; presets set publication-grade fonts/ticks. Export at cm
+size + dpi (600 for line art). <b>Point fitting</b>: model library with
+&plusmn;1&sigma; and R&sup2; &mdash; fit Tg vs composition, Arrhenius, sigmoids.
+<b>Ternary</b>: composition tables from CSV, color-mapped property.
+<b>Raman &harr; XRD</b>: the two-panel identification figure with accepted
+phases annotated.</p>"""),
+    "Fitting": _guide("Fitting module", """
+<p><b>Peak Fitting</b> for one spectrum, <b>Multi-Fit</b> for batches &mdash; the
+same JSON models serve both, so refine interactively then apply to a series.
+Widths are HWHM everywhere (historic convention; double for true FWHM). Use
+confidence intervals (F-test) when a parameter matters for the conclusion,
+not just the covariance &plusmn;1&sigma;. In Origin-like mode each iteration is one
+damped LM update: watch parameters walk, stop when &chi;&sup2; stalls.</p>"""),
+}

@@ -119,6 +119,8 @@ def _hermetic_qsettings(monkeypatch):
             pass
 
         def value(self, key, default=None, type=None):  # noqa: A002 - Qt's own kwarg name
+            if key.startswith("modules/") and key not in store:
+                return True  # tests see the full app; the Raman-only default is seeded explicitly where tested
             if key in store:
                 v = store[key]
                 if type is bool:

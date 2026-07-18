@@ -35,7 +35,6 @@ from qt_simple_plot import SimplePlotWorkspace
 from qt_single_fit import SingleFitWorkspace
 from qt_baseline import BaselineWorkspace
 from qt_calc import CalcWorkspace
-from qt_cluster import ClusterWorkspace
 from qt_figures import FiguresWorkspace
 from qt_saxs import SaxsWorkspace
 from qt_xrd import XrdIdWorkspace
@@ -52,7 +51,7 @@ NAV_XAS = "XAS"
 NAV_DTA = "DTA / Thermal"
 NAV_FITTING = "Peak Fitting"
 NAV_MULTIFIT = "Multi-Fit"
-NAV_RRUFF = "Mineral ID"
+NAV_RRUFF = "Raman ID"
 NAV_HTXRD = "HT-XRD"
 NAV_CLUSTER = "Clustering"
 NAV_BASELINE = "Baseline"
@@ -65,7 +64,11 @@ NAV_CALC = "Calculations"
 NAV_XRD_ID = "XRD ID"
 NAV_FIGURES = "Figures"
 NAV_SAXS = "SAXS/WAXS"
-NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC, NAV_XRD_ID, NAV_FIGURES, NAV_SAXS]
+# Ordered PER TECHNIQUE (user request): Raman block, then XRD, XAS,
+# Thermal, SAXS, cross-technique processing, Figures.
+NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_RRUFF, NAV_FITTING, NAV_MULTIFIT,
+             NAV_BASELINE, NAV_XRD_ID, NAV_HTXRD, NAV_XAS, NAV_DTA,
+             NAV_SAXS, NAV_CALC, NAV_FIGURES]
 
 # Activatable modules (user request: a Raman-only or XRD-only user should
 # see a simple app). Each module = (accent color, its nav pages); the
@@ -77,7 +80,7 @@ MODULES = {
     "XRD":        ("#e0563c", [NAV_XRD_ID, NAV_HTXRD]),
     "XAS":        ("#8b5cf6", [NAV_XAS]),
     "Thermal":    ("#d43f6e", [NAV_DTA]),
-    "Processing": ("#3b82f6", [NAV_BASELINE, NAV_CALC, NAV_CLUSTER]),
+    "Processing": ("#3b82f6", [NAV_BASELINE, NAV_CALC]),
     "Figures":    ("#14b8a6", [NAV_FIGURES]),
     "SAXS/WAXS":  ("#b08f26", [NAV_SAXS]),
 }
@@ -632,8 +635,6 @@ class DataappMainWindow(QMainWindow):
         self.stack.addWidget(self.rruff_page)
         self.htxrd_page = HtxrdWorkspace()
         self.stack.addWidget(self.htxrd_page)
-        self.cluster_page = ClusterWorkspace(library=self.library)
-        self.stack.addWidget(self.cluster_page)
         self.baseline_page = BaselineWorkspace(
             library=self.library,
             on_derived_added=lambda ids: self.library_page.push_undo(("add", list(ids))),
@@ -658,6 +659,17 @@ class DataappMainWindow(QMainWindow):
         self.stack.addWidget(self.saxs_page)
         outer.addWidget(self.stack, 1)
 
+        # Nav row -> page by NAME (the rail is ordered per technique, the
+        # stack in construction order — never map the two positionally).
+        self._pages_by_nav = {
+            NAV_LIBRARY: self.library_page, NAV_RAMAN: self.raman_page,
+            NAV_XAS: self.xas_page, NAV_DTA: self.dta_page,
+            NAV_FITTING: self.fitting_page, NAV_MULTIFIT: self.multifit_page,
+            NAV_RRUFF: self.rruff_page, NAV_HTXRD: self.htxrd_page,
+            NAV_BASELINE: self.baseline_page, NAV_CALC: self.calc_page,
+            NAV_XRD_ID: self.xrd_id_page, NAV_FIGURES: self.figures_page,
+            NAV_SAXS: self.saxs_page,
+        }
         self.nav.setCurrentRow(0)
 
         file_menu = self.menuBar().addMenu("&File")
@@ -677,45 +689,40 @@ class DataappMainWindow(QMainWindow):
         self.dark_mode_action = view_menu.addAction("Dark mode")
         self.dark_mode_action.setCheckable(True)
         self.dark_mode_action.toggled.connect(self._on_dark_mode_toggled)
+        self.dark_mode_action.setChecked(True)  # PRISM starts in dark mode
 
         self.console_action = view_menu.addAction("Python console")
         self.console_action.setCheckable(True)
         self.console_action.toggled.connect(self._on_console_toggled)
         self._console_dock = None  # created lazily on first open
 
+        # --- Modules menu (between View and Help): checkable per-module
+        # entries; default = everything off except Raman, so a new user
+        # starts with the simplest app.
+        from PySide6.QtCore import QSettings
+        settings = QSettings("PRISM", "PRISM")
+        modules_menu = self.menuBar().addMenu("&Modules")
+        self.module_checks: dict = {}
+        from PySide6.QtGui import QAction, QColor, QPixmap, QIcon
+        for mod_name, (color, _pages) in MODULES.items():
+            act = QAction(mod_name, self)
+            act.setCheckable(True)
+            square = QPixmap(10, 10)
+            square.fill(QColor(color))
+            act.setIcon(QIcon(square))
+            act.setChecked(settings.value(f"modules/{mod_name}", mod_name == "Raman", type=bool))
+            act.toggled.connect(lambda on, m=mod_name: self._on_module_toggled(m, on))
+            self.module_checks[mod_name] = act
+            modules_menu.addAction(act)
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Quick-start guide", self.show_help, "F1")
+        from qt_help import MODULE_GUIDES
+        guides_menu = help_menu.addMenu("Module guides")
+        for gname in MODULE_GUIDES:
+            guides_menu.addAction(gname, lambda g=gname: self.show_module_guide(g))
         help_menu.addAction("About", self.show_about)
         help_menu.addAction("Credits", self.show_credits)
 
-        # --- Modules toolbar: per-module colored checkboxes (user request:
-        # a Raman-only user unchecks the rest and sees a simple app) +
-        # Credits, persisted per user.
-        from PySide6.QtCore import QSettings
-        from PySide6.QtWidgets import QToolBar
-        settings = QSettings("Dataapp", "Dataapp")
-        toolbar = QToolBar("Modules")
-        toolbar.setMovable(False)
-        toolbar.setObjectName("ModulesBar")
-        self.addToolBar(toolbar)
-        lbl = QLabel("  Modules:  ")
-        toolbar.addWidget(lbl)
-        self.module_checks: dict = {}
-        for mod_name, (color, _pages) in MODULES.items():
-            cb = QCheckBox(mod_name)
-            cb.setStyleSheet(f"QCheckBox {{ color: {color}; font-weight: 600; margin-right: 8px; }}")
-            cb.setChecked(settings.value(f"modules/{mod_name}", True, type=bool))
-            cb.toggled.connect(lambda on, m=mod_name: self._on_module_toggled(m, on))
-            self.module_checks[mod_name] = cb
-            toolbar.addWidget(cb)
-        spacer = QWidget()
-        from PySide6.QtWidgets import QSizePolicy
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        toolbar.addWidget(spacer)
-        credits_btn = QPushButton("Credits")
-        credits_btn.setFlat(True)
-        credits_btn.clicked.connect(self.show_credits)
-        toolbar.addWidget(credits_btn)
         self._apply_module_visibility()
 
         self.statusBar().showMessage("Ready.")
@@ -736,7 +743,16 @@ class DataappMainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _on_module_toggled(self, module: str, enabled: bool) -> None:
         from PySide6.QtCore import QSettings
-        QSettings("Dataapp", "Dataapp").setValue(f"modules/{module}", bool(enabled))
+        QSettings("PRISM", "PRISM").setValue(f"modules/{module}", bool(enabled))
+        help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction("Quick-start guide", self.show_help, "F1")
+        from qt_help import MODULE_GUIDES
+        guides_menu = help_menu.addMenu("Module guides")
+        for gname in MODULE_GUIDES:
+            guides_menu.addAction(gname, lambda g=gname: self.show_module_guide(g))
+        help_menu.addAction("About", self.show_about)
+        help_menu.addAction("Credits", self.show_credits)
+
         self._apply_module_visibility()
 
     def _apply_module_visibility(self) -> None:
@@ -752,13 +768,17 @@ class DataappMainWindow(QMainWindow):
         if current >= 0 and self.nav.isRowHidden(current):
             self.nav.setCurrentRow(NAV_ITEMS.index(NAV_LIBRARY))
 
+    def show_module_guide(self, name: str) -> None:
+        from qt_help import MODULE_GUIDES, HelpDialog
+        HelpDialog(self, html=MODULE_GUIDES[name], title=f"{name} — guide").exec()
+
     def show_credits(self) -> None:
         from qt_help import CREDITS_HTML, HelpDialog
         HelpDialog(self, html=CREDITS_HTML, title="Credits").exec()
 
     def closeEvent(self, event) -> None:
         from PySide6.QtCore import QSettings
-        settings = QSettings("Dataapp", "Dataapp")
+        settings = QSettings("PRISM", "PRISM")
         settings.setValue("geometry", self.saveGeometry())
         settings.setValue("nav_row", self.nav.currentRow())
         super().closeEvent(event)
@@ -900,32 +920,17 @@ class DataappMainWindow(QMainWindow):
         return records
 
     def _on_nav_changed(self, row: int) -> None:
-        self.stack.setCurrentIndex(row)
-        if self.stack.widget(row) is self.dta_page:
+        if not (0 <= row < len(NAV_ITEMS)):
+            return
+        # Resolve by NAME: the rail is ordered per technique while the stack
+        # keeps construction order — never map the two positionally.
+        page = self._pages_by_nav[NAV_ITEMS[row]]
+        self.stack.setCurrentWidget(page)
+        if page is self.dta_page:
             self.dta_page.set_records(self._dta_records_from_library())
-        elif self.stack.widget(row) is self.raman_page:
-            self.raman_page.set_spectra([s.id for s in self.library.all()])
-        elif self.stack.widget(row) is self.fitting_page:
-            self.fitting_page.set_spectra([s.id for s in self.library.all()])
-        elif self.stack.widget(row) is self.multifit_page:
+        elif page is self.multifit_page:
             self.multifit_page.set_spectra([s.id for s in self.library.all()])
-            # A recipe saved via Peak Fitting's "Save as model..." while the
-            # user was on a different tab wouldn't otherwise show up here
-            # until they clicked the page's own manual Refresh button —
-            # found via a manual smoke test that saved a recipe after the
-            # shell was already constructed, the realistic order of events,
-            # rather than the unit tests' write-file-then-construct-widget
-            # order, which structurally couldn't hit this gap.
+            # recipes saved while on another page must appear on entry
             self.multifit_page._refresh_recipe_list()
-        elif self.stack.widget(row) is self.rruff_page:
-            self.rruff_page.set_spectra([s.id for s in self.library.all()])
-        elif self.stack.widget(row) is self.cluster_page:
-            self.cluster_page.set_spectra([s.id for s in self.library.all()])
-        elif self.stack.widget(row) is self.baseline_page:
-            self.baseline_page.set_spectra([s.id for s in self.library.all()])
-        elif self.stack.widget(row) is self.calc_page:
-            self.calc_page.set_spectra([s.id for s in self.library.all()])
-        elif self.stack.widget(row) is self.xrd_id_page:
-            self.xrd_id_page.set_spectra([s.id for s in self.library.all()])
-        elif self.stack.widget(row) is self.figures_page:
-            self.figures_page.set_spectra([s.id for s in self.library.all()])
+        elif hasattr(page, "set_spectra"):
+            page.set_spectra([s.id for s in self.library.all()])

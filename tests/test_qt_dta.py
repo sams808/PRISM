@@ -117,7 +117,8 @@ def test_shell_dta_page_picks_up_library_records(qtbot, dta_example_path):
     spectrum = _load_spectrum_from_path(str(dta_example_path))
     window.library.add(spectrum)
 
-    window.nav.setCurrentRow(3)  # DTA workspace
+    from qt_shell import NAV_ITEMS
+    window.nav.setCurrentRow(NAV_ITEMS.index("DTA / Thermal"))
     qtbot.wait(20)
 
     assert window.dta_page.record_combo.count() == 1

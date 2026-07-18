@@ -51,6 +51,18 @@ _FONT_FAMILY = '"Segoe UI", -apple-system, sans-serif'
 _MONO_FAMILY = '"Cascadia Mono", Consolas, monospace'
 
 
+CHECK_QSS = """
+QCheckBox::indicator, QMenu::indicator {
+    width: 13px; height: 13px; border: 1px solid #8a97b5; border-radius: 3px;
+    background: transparent;
+}
+QCheckBox::indicator:checked, QMenu::indicator:checked {
+    background: #3b82f6; border-color: #3b82f6;
+    image: none;
+}
+"""
+
+
 def build_stylesheet(palette: dict = PALETTE) -> str:
     p = palette
     return f"""

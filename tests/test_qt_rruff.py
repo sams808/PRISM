@@ -354,7 +354,8 @@ def test_shell_rruff_page_picks_up_library_records(qtbot, raman_example_path):
     spectrum = _load_spectrum_from_path(str(raman_example_path))
     window.library.add(spectrum)
 
-    window.nav.setCurrentRow(6)  # Mineral ID workspace
+    from qt_shell import NAV_ITEMS
+    window.nav.setCurrentRow(NAV_ITEMS.index("Raman ID"))
     qtbot.wait(20)
 
     assert window.rruff_page.spec_combo.count() == 1

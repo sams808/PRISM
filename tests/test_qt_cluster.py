@@ -71,14 +71,3 @@ def test_run_clustering_k_not_smaller_than_n_warns(qtbot):
     widget.run_clustering()
     assert widget._last_result is None
 
-
-def test_shell_cluster_page_picks_up_library_records(qtbot, raman_example_path):
-    from qt_shell import _load_spectrum_from_path
-
-    window = DataappMainWindow()
-    qtbot.addWidget(window)
-    window.library.add(_load_spectrum_from_path(str(raman_example_path)))
-
-    window.nav.setCurrentRow(NAV_ITEMS.index("Clustering"))
-    qtbot.wait(20)
-    assert window.cluster_page.file_list.count() == 1

@@ -92,7 +92,7 @@ def test_module_toggle_hides_nav_rows_and_falls_back_to_library(qtbot):
     qtbot.addWidget(window)
     xas_row = NAV_ITEMS.index("XAS")
 
-    assert not window.nav.isRowHidden(xas_row)
+    assert not window.nav.isRowHidden(xas_row)  # conftest enables all modules
     window.nav.setCurrentRow(xas_row)
     qtbot.wait(20)
 
@@ -100,9 +100,23 @@ def test_module_toggle_hides_nav_rows_and_falls_back_to_library(qtbot):
     assert window.nav.isRowHidden(xas_row)
     # current page vanished -> back to the Library
     assert window.nav.currentRow() == NAV_ITEMS.index("Library")
-
     window.module_checks["XAS"].setChecked(True)
     assert not window.nav.isRowHidden(xas_row)
+
+
+def test_fresh_install_defaults_to_raman_only(qtbot):
+    """User request: a new user starts with only the Raman module on."""
+    from PySide6.QtCore import QSettings
+    from qt_shell import MODULES, DataappMainWindow, NAV_ITEMS
+    s = QSettings("PRISM", "PRISM")
+    for m in MODULES:  # simulate the fresh-install store (no conftest override)
+        s.setValue(f"modules/{m}", m == "Raman")
+    window = DataappMainWindow()
+    qtbot.addWidget(window)
+    assert window.module_checks["Raman"].isChecked()
+    assert not window.module_checks["XAS"].isChecked()
+    assert window.nav.isRowHidden(NAV_ITEMS.index("XAS"))
+    assert not window.nav.isRowHidden(NAV_ITEMS.index("Raman ID"))
 
 
 def test_module_state_persists_via_qsettings(qtbot):
@@ -116,7 +130,6 @@ def test_module_state_persists_via_qsettings(qtbot):
     qtbot.addWidget(w2)
     assert not w2.module_checks["Thermal"].isChecked()
     assert w2.nav.isRowHidden(NAV_ITEMS.index("DTA / Thermal"))
-    w2.module_checks["Thermal"].setChecked(True)  # leave clean for other tests
 
 
 def test_window_title_and_credits(qtbot):

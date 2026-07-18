@@ -10,7 +10,7 @@ import pytest
 import rampy as rp
 
 from qt_htxrd import HtxrdWorkspace
-from qt_shell import DataappMainWindow
+from qt_shell import DataappMainWindow, NAV_ITEMS
 
 
 def _write_series(tmp_path, temps=(100, 200, 300), center_by_temp=None, noise=0.0):
@@ -217,7 +217,7 @@ def test_shell_htxrd_page_is_htxrd_workspace(qtbot):
     qtbot.addWidget(window)
     qtbot.wait(20)
     assert isinstance(window.htxrd_page, HtxrdWorkspace)
-    window.nav.setCurrentRow(7)  # HT-XRD workspace
+    window.nav.setCurrentRow(NAV_ITEMS.index("HT-XRD"))
     qtbot.wait(20)
     assert window.stack.currentWidget() is window.htxrd_page
 

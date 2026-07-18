@@ -29,12 +29,15 @@ def main() -> int:
         app.setWindowIcon(QIcon(icon_path))
 
     splash = None
+    splash_shown_at = 0.0
     splash_path = asset_path("prism_splash.png")
     if os.path.isfile(splash_path):
+        import time
         from PySide6.QtGui import QPixmap
         from PySide6.QtWidgets import QSplashScreen
         splash = QSplashScreen(QPixmap(splash_path))
         splash.show()
+        splash_shown_at = time.time()
         app.processEvents()
 
     apply_theme(app)
@@ -43,6 +46,11 @@ def main() -> int:
     window = DataappMainWindow()
     window.show()
     if splash is not None:
+        # keep the logo up for at least 3 seconds (user request)
+        import time
+        while time.time() - splash_shown_at < 3.0:
+            app.processEvents()
+            time.sleep(0.02)
         splash.finish(window)
     return app.exec()
 
