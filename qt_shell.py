@@ -43,7 +43,7 @@ from qt_rruff import RruffMatchWorkspace
 from qt_widgets import PlotWidget
 from qt_xas import XasWorkspace
 
-logger = logging.getLogger("dataapp")
+logger = logging.getLogger("prism")
 
 NAV_LIBRARY = "Library"
 NAV_RAMAN = "Raman"
@@ -53,7 +53,6 @@ NAV_FITTING = "Peak Fitting"
 NAV_MULTIFIT = "Multi-Fit"
 NAV_RRUFF = "Raman ID"
 NAV_HTXRD = "HT-XRD"
-NAV_CLUSTER = "Clustering"
 NAV_BASELINE = "Baseline"
 # NAV_FITTING/NAV_MULTIFIT/NAV_RRUFF/NAV_HTXRD are appended at the end (not
 # inserted after Raman) so the DTA page keeps nav row 3 —
@@ -573,7 +572,7 @@ class PlaceholderPage(QWidget):
         layout.addWidget(label)
 
 
-class DataappMainWindow(QMainWindow):
+class PrismMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         import os
@@ -836,7 +835,7 @@ class DataappMainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def save_project(self) -> None:
         import project_io
-        path, _ = QFileDialog.getSaveFileName(self, "Save project as…", "", "Dataapp project (*.dataapp)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save project as…", "", "PRISM project (*.prism);;Legacy Dataapp project (*.dataapp)")
         if not path:
             return
         if not path.lower().endswith(".dataapp"):
@@ -862,7 +861,7 @@ class DataappMainWindow(QMainWindow):
 
     def open_project(self) -> None:
         import project_io
-        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", "Dataapp project (*.dataapp);;All files (*.*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Open project", "", "PRISM project (*.prism *.dataapp);;All files (*.*)")
         if not path:
             return
         if len(self.library) > 0:
@@ -934,3 +933,7 @@ class DataappMainWindow(QMainWindow):
             self.multifit_page._refresh_recipe_list()
         elif hasattr(page, "set_spectra"):
             page.set_spectra([s.id for s in self.library.all()])
+
+
+# Backward-compatible alias (pre-rename import sites, incl. old scripts)
+DataappMainWindow = PrismMainWindow

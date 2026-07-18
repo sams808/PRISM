@@ -14,7 +14,7 @@ import logging
 import sys
 import traceback
 
-logger = logging.getLogger("dataapp")
+logger = logging.getLogger("prism")
 
 
 def install(app) -> None:

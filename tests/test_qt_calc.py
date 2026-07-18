@@ -128,3 +128,25 @@ def test_shell_has_calculations_page_and_nav_refreshes_it(qtbot):
     qtbot.wait(20)
     assert window.stack.currentWidget() is window.calc_page
     assert window.calc_page.file_list.count() == 1
+
+
+def test_cluster_operation_reports_and_adds_means(qtbot):
+    import rampy as rp
+    library = SpectrumLibrary()
+    x = np.linspace(0, 100, 200)
+    for i, c in enumerate((30.0, 31.0, 70.0, 71.0)):
+        library.add(Spectrum(id=Spectrum.new_id(), title=f"s{i}", path="", kind="raman_xy",
+                             x=x, y=rp.gaussian(x, 10.0, c, 5.0)))
+    widget = CalcWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.file_list.selectAll()
+    widget.op_combo.setCurrentText("Cluster (KMeans)")
+    widget.param_edits["n_clusters"].setText("2")
+    widget.apply_selected()
+    qtbot.wait(20)
+
+    report = widget.report_text.toPlainText()
+    assert "Clustering" in report and "cluster" in report
+    means = [s for s in library.all() if "cluster" in s.title and "_mean" in s.title]
+    assert len(means) == 2

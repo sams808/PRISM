@@ -164,7 +164,10 @@ class CalcWorkspace(QWidget):
         selected = self._selected_spectra()
         results, report = [], ""
 
-        if group in ("multi", "modulated", "lcf"):
+        if group == "cluster":
+            if len(selected) < 3:
+                raise ValueError("Clustering needs at least 3 spectra.")
+        elif group in ("multi", "modulated", "lcf"):
             need = 2
             if len(selected) < need:
                 raise ValueError(f"'{label}' needs at least {need} selected spectra (first = A/target).")
@@ -205,6 +208,19 @@ class CalcWorkspace(QWidget):
             report = "\n".join(lines)
             results = [(res.grid, res.y_fit, f"{target.title}_lcf_fit"),
                        (res.grid, res.residual, f"{target.title}_lcf_residual")]
+
+        elif group == "cluster":
+            import cluster_science as cl
+            n = int(_to_float(self._param("n_clusters"), 3) or 3)
+            matrix, cgrid = cl.build_feature_matrix([(s.x, s.y) for s in selected])
+            res = cl.cluster_spectra(matrix, method=op, n_clusters=n)
+            sil = res["silhouette"]
+            lines = [f"Clustering ({op}, k={n}): silhouette = " + (f"{sil:.3f}" if sil is not None else "n/a")]
+            for s_obj, lab in zip(selected, res["labels"]):
+                lines.append(f"  {s_obj.title}: cluster {lab}")
+            report = "\n".join(lines)
+            for k, mean_y in cl.cluster_means(matrix, res["labels"]).items():
+                results.append((cgrid, mean_y, f"cluster{k}_mean"))
 
         elif group == "stats":
             lines = []

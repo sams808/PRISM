@@ -12,7 +12,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from qt_shell import DataappMainWindow
+from qt_shell import PrismMainWindow
 from qt_theme import apply_theme
 import qt_exception_hook
 
@@ -43,7 +43,7 @@ def main() -> int:
     apply_theme(app)
     qt_exception_hook.install(app)
 
-    window = DataappMainWindow()
+    window = PrismMainWindow()
     window.show()
     if splash is not None:
         # keep the logo up for at least 3 seconds (user request)

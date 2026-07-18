@@ -321,4 +321,6 @@ CALC_OPERATIONS: Dict[str, Dict] = {
     # analysis
     "Linear-combination fit (target ≈ Σ cᵢ·refᵢ)": {"group": "lcf", "op": "lcf", "params": [("non_negative", "non-negative (1/0)", "1")]},
     "Statistics": {"group": "stats", "op": "stats", "params": []},
+    "Cluster (KMeans)": {"group": "cluster", "op": "kmeans", "params": [("n_clusters", "clusters", "3")]},
+    "Cluster (hierarchical)": {"group": "cluster", "op": "hierarchical", "params": [("n_clusters", "clusters", "3")]},
 }
