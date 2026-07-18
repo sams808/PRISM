@@ -310,8 +310,15 @@ excludes with those that cannot be. This is the biggest ranking help.</li>
 <li>Read the FoM as intensity-weighted coverage both ways: a phase whose
 strong lines are absent from your pattern is penalized even if every one of
 your peaks matches it.</li>
-<li>Accept per phase; explained peaks leave the query and the remainder is
-re-searched &mdash; repeat until everything is explained.</li></ol>
+<li>Narrow with the card filters when you know the crystallography:
+symmetry (crystal system) and card quality are check-droplists, the
+space-group field matches by substring. Identical cards carried by
+several databases are shown once.</li>
+<li>Accept per phase; the accepted phase's reference bars STAY on the
+plot (muted color) and the query peaks it explains turn gray while the
+remainder is re-searched &mdash; repeat until everything is explained.
+<b>Clear</b> starts the session over (recorded identifications are
+untouched; undo those with Ctrl+Z in the Library).</li></ol>
 <h2>HT-XRD</h2><p>Temperature series: waterfall + Maps (a heatmap with
 log/sqrt scaling reveals weak reflections; the difference map vs a reference
 slice localizes transitions). Track peaks by clicking the same reflection at
