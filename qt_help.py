@@ -140,6 +140,22 @@ coefficients, with R² and percentages) and summary statistics.
 target). Preview shows inputs faint + result bold; Apply adds derived
 spectra to the Library (undoable).</p>
 
+<h2>XRD ID</h2>
+<p>QualX-style phase identification against your merged local database
+(COD inorganic + full COD + PDF-2 — every card keeps its source and code).
+Auto-find (or type) the pattern's 2θ peaks, set λ and the match tolerance,
+optionally restrict by chemistry (must-contain / must-exclude elements) or
+source, then <b>Search match</b>: candidates ranked by figure of merit
+(intensity-weighted coverage both ways), previewed as stick patterns under
+the query (shift/ctrl-click to compare several). <b>Accept</b> is iterative
+for mixtures, exactly like Mineral ID: the phase is recorded, its peaks
+leave the query, the rest is re-searched; Ctrl+Z undoes.
+<b>Check Raman-identified phases here</b> overlays the XRD reference lines
+of every phase accepted in Mineral ID — the Raman→XRD cross-check in one
+click. The Card browser tab looks up any card by name/mineral/formula.
+The database is built once with <code>xrd_id_science.build_xrd_database()</code>
+from QualX-format .sq files.</p>
+
 <h2>Shortcuts</h2>
 <p><code>Ctrl+O</code> import · <code>Ctrl+I</code> custom import ·
 <code>Ctrl+E</code> export · <code>Ctrl+S</code> save project ·

@@ -36,6 +36,7 @@ from qt_single_fit import SingleFitWorkspace
 from qt_baseline import BaselineWorkspace
 from qt_calc import CalcWorkspace
 from qt_cluster import ClusterWorkspace
+from qt_xrd import XrdIdWorkspace
 from qt_htxrd import HtxrdWorkspace
 from qt_rruff import RruffMatchWorkspace
 from qt_widgets import PlotWidget
@@ -59,7 +60,8 @@ NAV_BASELINE = "Baseline"
 # setCurrentRow(3), and there's no reason to reorder the rail just to churn
 # that index.
 NAV_CALC = "Calculations"
-NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC]
+NAV_XRD_ID = "XRD ID"
+NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC, NAV_XRD_ID]
 DTA_KINDS = {"ta_sdt", "dta_table"}
 
 
@@ -468,6 +470,15 @@ class LibraryPage(QWidget):
                     sp.meta.pop("rruff_matches", None)
                 else:  # legacy single-match record
                     sp.meta["rruff_match"] = old
+        elif kind == "xrd_ident":
+            sp = self.library.get(action[1])
+            if sp is not None:
+                old = action[2] or {}
+                for key in ("xrd_match", "xrd_matches"):
+                    if old.get(key) is None:
+                        sp.meta.pop(key, None)
+                    else:
+                        sp.meta[key] = old[key]
         self.undo_btn.setEnabled(bool(self._undo_stack))
         self._refresh_table()
 
@@ -597,6 +608,11 @@ class DataappMainWindow(QMainWindow):
             on_derived_added=lambda ids: self.library_page.push_undo(("add", list(ids))),
         )
         self.stack.addWidget(self.calc_page)
+        self.xrd_id_page = XrdIdWorkspace(
+            library=self.library,
+            on_accept=lambda sid, old: self.library_page.push_undo(("xrd_ident", sid, old)),
+        )
+        self.stack.addWidget(self.xrd_id_page)
         outer.addWidget(self.stack, 1)
 
         self.nav.setCurrentRow(0)
@@ -814,3 +830,5 @@ class DataappMainWindow(QMainWindow):
             self.baseline_page.set_spectra([s.id for s in self.library.all()])
         elif self.stack.widget(row) is self.calc_page:
             self.calc_page.set_spectra([s.id for s in self.library.all()])
+        elif self.stack.widget(row) is self.xrd_id_page:
+            self.xrd_id_page.set_spectra([s.id for s in self.library.all()])
