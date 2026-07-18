@@ -434,10 +434,21 @@ class XrdIdWorkspace(QWidget):
 
     # ------------------------------------------------------------------
     def browse_cards(self) -> None:
+        """Text lookup PLUS element-set lookup: 'TiO2' also finds cards whose
+        formula is written 'O2 Ti' (user-reported gap) — exact element set
+        first, then contains-these-elements, then plain text; deduplicated."""
         text = self.browse_edit.text().strip()
         if not text:
             return
-        self._browse_hits = xid.find_cards_by_text(text, limit=50, db_path=self.db_path)
+        hits, seen = [], set()
+        for batch in (xid.find_cards_by_elements(text, mode="exact", db_path=self.db_path),
+                      xid.find_cards_by_elements(text, mode="contains", limit=40, db_path=self.db_path),
+                      xid.find_cards_by_text(text, limit=50, db_path=self.db_path)):
+            for h in batch:
+                if h["card_id"] not in seen:
+                    seen.add(h["card_id"])
+                    hits.append(h)
+        self._browse_hits = hits[:100]
         self.browse_list.clear()
         for h in self._browse_hits:
             label = h["mineral"] or h["name"] or h["formula"]

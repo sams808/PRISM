@@ -355,6 +355,59 @@ def search_match(
     return results[:top_n]
 
 
+def _rows_to_cards(rows) -> List[Dict[str, Any]]:
+    out = []
+    for (cid, source, code, name, mineral, formula, sg, quality, d_text, i_text) in rows:
+        out.append({
+            "card_id": cid, "source": source, "source_code": code, "name": name,
+            "mineral": mineral, "formula": formula, "spacegroup": sg, "quality": quality,
+            "d": np.array([float(v) for v in d_text.split(",")], float),
+            "i": np.array([float(v) for v in i_text.split(",")], float),
+        })
+    return out
+
+
+def find_cards_by_elements(query: str, *, mode: str = "exact", limit: int = 100,
+                           db_path: str = XRD_ID_DB_PATH) -> List[Dict[str, Any]]:
+    """Element-set card lookup (user report: text-searching 'TiO2' missed
+    cards whose formula is written 'O2 Ti'). The query is parsed as a
+    chemical formula; cards are matched on their ELEMENT SET, so formula
+    spelling/order/stoichiometry writing don't matter.
+    mode='exact'  — card contains exactly these elements and no others
+    mode='contains' — card contains at least these elements."""
+    import xraydb
+    if not os.path.isfile(db_path):
+        return []
+    try:
+        elements = sorted({el.capitalize() for el in xraydb.chemparse(query.strip())})
+    except (ValueError, KeyError):
+        return []  # not a chemical formula — the text search handles it
+    if not elements:
+        return []
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    marks = ",".join("?" * len(elements))
+    if mode == "exact":
+        ids = [r[0] for r in con.execute(
+            f"SELECT card_id FROM elements GROUP BY card_id "
+            f"HAVING SUM(CASE WHEN element IN ({marks}) THEN 1 ELSE 0 END) = COUNT(DISTINCT element) "
+            f"AND COUNT(DISTINCT element) = ?", (*elements, len(elements))).fetchall()]
+    else:
+        keep = None
+        for el in elements:
+            got = {r[0] for r in con.execute("SELECT card_id FROM elements WHERE element = ?", (el,))}
+            keep = got if keep is None else (keep & got)
+        ids = sorted(keep or set())
+    ids = ids[:limit]
+    if not ids:
+        con.close()
+        return []
+    rows = con.execute(
+        f"SELECT card_id, source, source_code, name, mineral, formula, spacegroup, quality, d, i "
+        f"FROM cards WHERE card_id IN ({','.join('?' * len(ids))})", ids).fetchall()
+    con.close()
+    return _rows_to_cards(rows)
+
+
 def find_cards_by_text(text: str, *, limit: int = 50, db_path: str = XRD_ID_DB_PATH) -> List[Dict[str, Any]]:
     """Name/mineral/formula substring lookup — the Raman↔XRD bridge uses
     this to pull reference patterns for an already-identified mineral."""

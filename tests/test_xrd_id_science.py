@@ -128,3 +128,21 @@ def test_find_cards_by_text(unified_db):
     assert all(len(h["d"]) == len(QUARTZ_D) for h in hits)
     hits = xid.find_cards_by_text("Ca O3", db_path=unified_db)
     assert len(hits) == 1 and hits[0]["mineral"] == "Calcite"
+
+
+def test_find_cards_by_elements_matches_regardless_of_formula_order(tmp_path):
+    """User report: text search for 'TiO2' missed cards written 'O2 Ti'."""
+    src = tmp_path / "src_ti.sq"
+    _make_source_sq(src, [
+        (1, "Anatase", "Anatase", "O2 Ti", "I 41/a m d", "A", [3.52, 2.38, 1.89], [100.0, 20.0, 30.0], ["Ti", "O"]),
+        (2, "Rutile", "Rutile", "Ti O2", "P 42/m n m", "A", [3.25, 2.49, 1.69], [100.0, 50.0, 60.0], ["Ti", "O"]),
+        (3, "LiTi oxide", "", "Li0.5 O2 Ti", "", "B", [4.0, 2.0, 1.5], [100.0, 40.0, 20.0], ["Li", "Ti", "O"]),
+    ])
+    db = tmp_path / "uni_ti.sq"
+    xid.build_xrd_database([(str(src), "T")], out_path=str(db), log=lambda *a: None)
+
+    exact = xid.find_cards_by_elements("TiO2", mode="exact", db_path=str(db))
+    assert sorted(h["mineral"] or h["formula"] for h in exact) == ["Anatase", "Rutile"]
+    contains = xid.find_cards_by_elements("TiO2", mode="contains", db_path=str(db))
+    assert len(contains) == 3  # the Li-bearing card included
+    assert xid.find_cards_by_elements("Zr2O", mode="exact", db_path=str(db)) == []
