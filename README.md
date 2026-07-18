@@ -102,3 +102,17 @@ Qt layer:
 If a file fails to import in the Library, the parser registry may have
 misdetected the format — check `io_universal.py`'s parser list; every parser
 records its decision in the returned metadata (`selected_parser`).
+
+## Sharing the local databases with colleagues
+
+Both reference databases are single files once built:
+
+| Database | File | Size | Share it? |
+|---|---|---|---|
+| XRD ID (COD + PDF-2) | `~/.raman_cache/xrd_id/xrdid.sq` | ~840 MB | **Privately only** — it embeds ICDD PDF-2 content, which is licensed; hand it to group members covered by the same institutional license (USB/network drive), never post it publicly. |
+| RRUFF Raman | run `rruff_science.pack_rruff_database()` → one `rruff_pack.sq` | ~1 GB | Yes, with attribution (Lafuente et al. 2015). Import on the other machine with `rruff_science.unpack_rruff_database(path)`. |
+
+Neither file can live in this git repository: GitHub hard-rejects files
+over 100 MB (and LFS quotas don't fit multi-GB scientific databases).
+Rebuild instead from sources (`build_xrd_database()`, `build_index()`), or
+copy the single files above directly.

@@ -347,3 +347,25 @@ def test_filter_rruff_index_by_each_criterion():
     # no constraints = everything; combined constraints intersect
     assert len(filter_rruff_index(index)) == 4
     assert [r["mineral"] for r in filter_rruff_index(index, wavelength_nm=532.0, oriented=False)] == ["B"]
+
+
+def test_pack_and_unpack_rruff_database_round_trip(tmp_path):
+    """User request: one shareable file for the whole RRUFF cache."""
+    import json
+    from rruff_science import pack_rruff_database, unpack_rruff_database
+    src_cache = tmp_path / "cache_a"
+    raw = src_cache / "raw"
+    raw.mkdir(parents=True)
+    (raw / "Quartz__R1__Raman__532____Processed__x.txt").write_text("##NAMES=Quartz\n100.0, 5.0\n")
+    index = [{"mineral": "Quartz", "rruff_id": "R1", "peaks": [464.0],
+              "raw_path": str(raw / "Quartz__R1__Raman__532____Processed__x.txt")}]
+    (src_cache / "index.json").write_text(json.dumps(index))
+
+    pack = pack_rruff_database(str(src_cache), str(tmp_path / "share.sq"))
+    dest_cache = tmp_path / "cache_b"
+    n = unpack_rruff_database(pack, str(dest_cache))
+    assert n == 1
+    restored = json.loads((dest_cache / "index.json").read_text())
+    assert restored[0]["mineral"] == "Quartz"
+    assert str(dest_cache) in restored[0]["raw_path"]  # rewritten to the new machine
+    assert (dest_cache / "raw" / "Quartz__R1__Raman__532____Processed__x.txt").exists()

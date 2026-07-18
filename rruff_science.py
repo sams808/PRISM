@@ -448,3 +448,58 @@ def find_cifs_for_mineral(mineral: str, *, cache_dir: str = AMCSD_CACHE_DIR, max
     cif_dir = os.path.join(cache_dir, "cif")
     out = [os.path.join(cif_dir, n) for n in names[:max_results]]
     return [p for p in out if os.path.isfile(p)]
+
+
+# =============================================================================
+# Shareable single-file cache (user request: hand colleagues ONE file).
+# =============================================================================
+
+def pack_rruff_database(cache_dir: str = RRUFF_CACHE_DIR, out_path: Optional[str] = None) -> str:
+    """Pack the whole RRUFF cache (index.json + raw spectra) into ONE
+    SQLite file a colleague can import with unpack_rruff_database().
+    RRUFF data is redistributable with attribution (Lafuente et al. 2015)."""
+    import json
+    import sqlite3
+    out_path = out_path or os.path.join(cache_dir, "rruff_pack.sq")
+    index_path = os.path.join(cache_dir, "index.json")
+    with open(index_path, encoding="utf-8") as f:
+        index = json.load(f)
+    if os.path.exists(out_path):
+        os.remove(out_path)
+    con = sqlite3.connect(out_path)
+    con.executescript("CREATE TABLE meta (key TEXT, value TEXT);"
+                      "CREATE TABLE raw (filename TEXT PRIMARY KEY, content TEXT);"
+                      "CREATE TABLE idx (json TEXT);")
+    con.execute("INSERT INTO meta VALUES ('citation', ?)", (RRUFF_CITATION,))
+    con.execute("INSERT INTO idx VALUES (?)", (json.dumps(index),))
+    for rec in index:
+        p = rec.get("raw_path") or ""
+        if p and os.path.isfile(p):
+            with open(p, encoding="utf-8", errors="replace") as f:
+                con.execute("INSERT OR IGNORE INTO raw VALUES (?, ?)", (os.path.basename(p), f.read()))
+    con.commit()
+    con.close()
+    return out_path
+
+
+def unpack_rruff_database(sq_path: str, cache_dir: str = RRUFF_CACHE_DIR) -> int:
+    """Restore a pack_rruff_database() file into a local cache; raw_path
+    entries are rewritten to this machine's cache location."""
+    import json
+    import sqlite3
+    raw_dir = os.path.join(cache_dir, "raw")
+    os.makedirs(raw_dir, exist_ok=True)
+    con = sqlite3.connect(f"file:{sq_path}?mode=ro", uri=True)
+    index = json.loads(con.execute("SELECT json FROM idx").fetchone()[0])
+    n = 0
+    for filename, content in con.execute("SELECT filename, content FROM raw"):
+        with open(os.path.join(raw_dir, filename), "w", encoding="utf-8") as f:
+            f.write(content)
+        n += 1
+    con.close()
+    for rec in index:
+        if rec.get("raw_path"):
+            rec["raw_path"] = os.path.join(raw_dir, os.path.basename(rec["raw_path"]))
+    with open(os.path.join(cache_dir, "index.json"), "w", encoding="utf-8") as f:
+        json.dump(index, f)
+    return n
