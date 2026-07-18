@@ -112,6 +112,50 @@ Select a series (e.g. a multi-point map), choose KMeans or hierarchical and
 a cluster count: PCA scatter colored by cluster, per-cluster mean spectra, and
 an assignment table.
 
+## Calculations
+Every spectrum operation in one place. Between spectra: add, subtract,
+multiply, divide, average, weighted sum, and **modulated addition**
+(A + w(x)·B with a constant / linear-ramp / Gaussian envelope). Per
+spectrum: scale/offset, normalizations (max, area, min-max), log/ln/exp/√/
+power/reciprocal/|y|, x-shift and x-scale calibration, crop, resample,
+smoothing (Savitzky-Golay, moving average, median), cosmic-ray despiking,
+Savitzky-Golay derivatives, cumulative integral. Analysis:
+**linear-combination fitting** (target ≈ Σ cᵢ·refᵢ, free or non-negative
+coefficients, with R² and percentages) and summary statistics.
+*Selection order matters*: the first-selected spectrum is A (or the LCF
+target). Preview shows inputs faint + result bold; Apply adds derived
+spectra to the Library (undoable).
+
+## XRD ID
+QualX-style phase identification against your merged local database
+(COD inorganic + full COD + PDF-2 — every card keeps its source and code).
+Auto-find (or type) the pattern's 2θ peaks, set λ and the match tolerance,
+optionally restrict by chemistry (must-contain / must-exclude elements) or
+source, then **Search match**: candidates ranked by figure of merit
+(intensity-weighted coverage both ways), previewed as stick patterns under
+the query (shift/ctrl-click to compare several). **Accept** is iterative
+for mixtures, exactly like Mineral ID: the phase is recorded, its peaks
+leave the query, the rest is re-searched; Ctrl+Z undoes.
+**Check Raman-identified phases here** overlays the XRD reference lines
+of every phase accepted in Mineral ID — the Raman→XRD cross-check in one
+click. The Card browser tab looks up any card by name/mineral/formula.
+The database is built once with `xrd_id_science.build_xrd_database()`
+from QualX-format .sq files.
+
+## Figures
+Publication-figure building (the Origin-inspired module). **XY builder**:
+stack library spectra as layers — per-layer plot type (line, scatter,
+line+symbols, sticks, filled area, bars, steps), color, vertical offset, and
+multi-panel assignment — with Publication/Presentation/Poster style presets,
+log axes, and export at exact centimeter size and dpi (PNG/SVG/PDF/TIFF).
+**Point fitting**: Origin's classic models (linear, polynomials,
+exponential decay/growth, power law, logarithmic, Boltzmann sigmoid,
+Gaussian, Lorentzian, Arrhenius) with parameters ±1σ and R².
+**Ternary**: barycentric composition plots from a CSV table, optional
+color-mapped value column. **Raman ↔ XRD**: the cross-technique figure —
+your Raman spectrum with its accepted Mineral-ID phases above the XRD
+pattern with each accepted phase's reference stick pattern.
+
 ## Shortcuts
 `Ctrl+O` import · `Ctrl+I` custom import ·
 `Ctrl+E` export · `Ctrl+S` save project ·

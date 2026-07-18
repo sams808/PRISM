@@ -91,6 +91,14 @@ def _parse_lines_text(d_text, i_text) -> Tuple[np.ndarray, np.ndarray]:
     return d[:n], i[:n]
 
 
+def _safe_float(v) -> Optional[float]:
+    """PDF-2 stores empty numerics as runs of spaces — not None, not ''."""
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _clean_name(name: Optional[str]) -> str:
     """PDF-2 names carry $-prefixed typesetting codes ('$GB-...')."""
     s = (name or "").strip()
@@ -152,7 +160,7 @@ def build_xrd_database(
             rows_cards.append((
                 tag, str(cid), _clean_name(name), _clean_name(mineral),
                 (formula or "").strip().strip('"'), (sg or "").strip(),
-                (quality or "").strip(), float(rir) if rir not in (None, "", " ") else None,
+                (quality or "").strip(), _safe_float(rir),
                 len(d), ",".join(f"{v:.5f}" for v in d), ",".join(f"{v:.2f}" for v in i),
             ))
             n_in += 1

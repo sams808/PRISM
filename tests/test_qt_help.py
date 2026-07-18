@@ -22,6 +22,7 @@ def test_help_covers_every_workspace():
         "Baseline": "Baseline",
         "Calculations": "Calculations",
         "XRD ID": "XRD ID",
+        "Figures": "Figures",
     }
     assert set(expected_mentions) == set(NAV_ITEMS), "nav changed — update the help guide and this map"
     for nav, needle in expected_mentions.items():

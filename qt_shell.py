@@ -36,6 +36,7 @@ from qt_single_fit import SingleFitWorkspace
 from qt_baseline import BaselineWorkspace
 from qt_calc import CalcWorkspace
 from qt_cluster import ClusterWorkspace
+from qt_figures import FiguresWorkspace
 from qt_xrd import XrdIdWorkspace
 from qt_htxrd import HtxrdWorkspace
 from qt_rruff import RruffMatchWorkspace
@@ -61,7 +62,8 @@ NAV_BASELINE = "Baseline"
 # that index.
 NAV_CALC = "Calculations"
 NAV_XRD_ID = "XRD ID"
-NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC, NAV_XRD_ID]
+NAV_FIGURES = "Figures"
+NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC, NAV_XRD_ID, NAV_FIGURES]
 DTA_KINDS = {"ta_sdt", "dta_table"}
 
 
@@ -613,6 +615,8 @@ class DataappMainWindow(QMainWindow):
             on_accept=lambda sid, old: self.library_page.push_undo(("xrd_ident", sid, old)),
         )
         self.stack.addWidget(self.xrd_id_page)
+        self.figures_page = FiguresWorkspace(library=self.library)
+        self.stack.addWidget(self.figures_page)
         outer.addWidget(self.stack, 1)
 
         self.nav.setCurrentRow(0)
@@ -832,3 +836,5 @@ class DataappMainWindow(QMainWindow):
             self.calc_page.set_spectra([s.id for s in self.library.all()])
         elif self.stack.widget(row) is self.xrd_id_page:
             self.xrd_id_page.set_spectra([s.id for s in self.library.all()])
+        elif self.stack.widget(row) is self.figures_page:
+            self.figures_page.set_spectra([s.id for s in self.library.all()])

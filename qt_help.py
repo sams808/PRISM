@@ -156,6 +156,20 @@ click. The Card browser tab looks up any card by name/mineral/formula.
 The database is built once with <code>xrd_id_science.build_xrd_database()</code>
 from QualX-format .sq files.</p>
 
+<h2>Figures</h2>
+<p>Publication-figure building (the Origin-inspired module). <b>XY builder</b>:
+stack library spectra as layers — per-layer plot type (line, scatter,
+line+symbols, sticks, filled area, bars, steps), color, vertical offset, and
+multi-panel assignment — with Publication/Presentation/Poster style presets,
+log axes, and export at exact centimeter size and dpi (PNG/SVG/PDF/TIFF).
+<b>Point fitting</b>: Origin's classic models (linear, polynomials,
+exponential decay/growth, power law, logarithmic, Boltzmann sigmoid,
+Gaussian, Lorentzian, Arrhenius) with parameters ±1σ and R².
+<b>Ternary</b>: barycentric composition plots from a CSV table, optional
+color-mapped value column. <b>Raman ↔ XRD</b>: the cross-technique figure —
+your Raman spectrum with its accepted Mineral-ID phases above the XRD
+pattern with each accepted phase's reference stick pattern.</p>
+
 <h2>Shortcuts</h2>
 <p><code>Ctrl+O</code> import · <code>Ctrl+I</code> custom import ·
 <code>Ctrl+E</code> export · <code>Ctrl+S</code> save project ·
