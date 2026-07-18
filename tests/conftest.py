@@ -112,15 +112,27 @@ def _hermetic_qsettings(monkeypatch):
         yield
         return
 
+    store = {}  # in-memory, per-test: hermetic, but persistence testable
+
     class _FakeQSettings:
         def __init__(self, *args, **kwargs):
             pass
 
         def value(self, key, default=None, type=None):  # noqa: A002 - Qt's own kwarg name
+            if key in store:
+                v = store[key]
+                if type is bool:
+                    return v in (True, "true", "True", 1)
+                if type is int:
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        return default
+                return v
             return default
 
         def setValue(self, key, value):
-            pass
+            store[key] = value
 
     import PySide6.QtCore
     monkeypatch.setattr(PySide6.QtCore, "QSettings", _FakeQSettings)

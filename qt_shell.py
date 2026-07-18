@@ -64,6 +64,28 @@ NAV_CALC = "Calculations"
 NAV_XRD_ID = "XRD ID"
 NAV_FIGURES = "Figures"
 NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_XAS, NAV_DTA, NAV_FITTING, NAV_MULTIFIT, NAV_RRUFF, NAV_HTXRD, NAV_CLUSTER, NAV_BASELINE, NAV_CALC, NAV_XRD_ID, NAV_FIGURES]
+
+# Activatable modules (user request: a Raman-only or XRD-only user should
+# see a simple app). Each module = (accent color, its nav pages); the
+# Library is the always-on core. Toggled from the Modules toolbar,
+# persisted via QSettings, and the colors mark the nav rail entries.
+MODULES = {
+    "Raman":      ("#3fa66a", [NAV_RAMAN, NAV_RRUFF]),
+    "Fitting":    ("#c9873a", [NAV_FITTING, NAV_MULTIFIT]),
+    "XRD":        ("#e0563c", [NAV_XRD_ID, NAV_HTXRD]),
+    "XAS":        ("#8b5cf6", [NAV_XAS]),
+    "Thermal":    ("#d43f6e", [NAV_DTA]),
+    "Processing": ("#3b82f6", [NAV_BASELINE, NAV_CALC, NAV_CLUSTER]),
+    "Figures":    ("#14b8a6", [NAV_FIGURES]),
+}
+CORE_COLOR = "#8a97b5"  # Library
+
+
+def _nav_color(name: str) -> str:
+    for color, pages in MODULES.values():
+        if name in pages:
+            return color
+    return CORE_COLOR
 DTA_KINDS = {"ta_sdt", "dta_table"}
 
 
@@ -548,8 +570,13 @@ class PlaceholderPage(QWidget):
 class DataappMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        from qt_help import APP_VERSION
-        self.setWindowTitle(f"Dataapp {APP_VERSION}")
+        import os
+        from qt_help import APP_NAME, APP_VERSION, asset_path
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        icon_path = asset_path("prism_logo.png")
+        if os.path.isfile(icon_path):
+            from PySide6.QtGui import QIcon
+            self.setWindowIcon(QIcon(icon_path))
         self.resize(1280, 820)
 
         self.library = SpectrumLibrary()
@@ -572,8 +599,12 @@ class DataappMainWindow(QMainWindow):
 
         self.nav = QListWidget()
         self.nav.setObjectName("NavList")
+        from PySide6.QtGui import QColor, QIcon, QPixmap
         for name in NAV_ITEMS:
-            QListWidgetItem(name, self.nav)
+            item = QListWidgetItem(name, self.nav)
+            square = QPixmap(10, 10)
+            square.fill(QColor(_nav_color(name)))
+            item.setIcon(QIcon(square))
         self.nav.currentRowChanged.connect(self._on_nav_changed)
         sidebar_layout.addWidget(self.nav)
         outer.addWidget(sidebar)
@@ -646,24 +677,76 @@ class DataappMainWindow(QMainWindow):
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Quick-start guide", self.show_help, "F1")
-        help_menu.addAction("About Dataapp", self.show_about)
+        help_menu.addAction("About", self.show_about)
+        help_menu.addAction("Credits", self.show_credits)
+
+        # --- Modules toolbar: per-module colored checkboxes (user request:
+        # a Raman-only user unchecks the rest and sees a simple app) +
+        # Credits, persisted per user.
+        from PySide6.QtCore import QSettings
+        from PySide6.QtWidgets import QToolBar
+        settings = QSettings("Dataapp", "Dataapp")
+        toolbar = QToolBar("Modules")
+        toolbar.setMovable(False)
+        toolbar.setObjectName("ModulesBar")
+        self.addToolBar(toolbar)
+        lbl = QLabel("  Modules:  ")
+        toolbar.addWidget(lbl)
+        self.module_checks: dict = {}
+        for mod_name, (color, _pages) in MODULES.items():
+            cb = QCheckBox(mod_name)
+            cb.setStyleSheet(f"QCheckBox {{ color: {color}; font-weight: 600; margin-right: 8px; }}")
+            cb.setChecked(settings.value(f"modules/{mod_name}", True, type=bool))
+            cb.toggled.connect(lambda on, m=mod_name: self._on_module_toggled(m, on))
+            self.module_checks[mod_name] = cb
+            toolbar.addWidget(cb)
+        spacer = QWidget()
+        from PySide6.QtWidgets import QSizePolicy
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+        credits_btn = QPushButton("Credits")
+        credits_btn.setFlat(True)
+        credits_btn.clicked.connect(self.show_credits)
+        toolbar.addWidget(credits_btn)
+        self._apply_module_visibility()
 
         self.statusBar().showMessage("Ready.")
 
         # Restore window geometry + last-used workspace from the previous
         # session (QSettings, per-user registry on Windows).
-        from PySide6.QtCore import QSettings
-        settings = QSettings("Dataapp", "Dataapp")
         geometry = settings.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
         nav_row = settings.value("nav_row", 0, type=int)
-        if 0 <= nav_row < self.nav.count():
+        if 0 <= nav_row < self.nav.count() and not self.nav.isRowHidden(nav_row):
             self.nav.setCurrentRow(nav_row)
             # setCurrentRow doesn't fire currentRowChanged when the row is
             # unchanged, and the per-workspace refresh hook must still run
             # for whatever page we restored into.
             self._on_nav_changed(self.nav.currentRow())
+
+    # ------------------------------------------------------------------
+    def _on_module_toggled(self, module: str, enabled: bool) -> None:
+        from PySide6.QtCore import QSettings
+        QSettings("Dataapp", "Dataapp").setValue(f"modules/{module}", bool(enabled))
+        self._apply_module_visibility()
+
+    def _apply_module_visibility(self) -> None:
+        """Hide the nav rows of every disabled module; the Library is
+        always-on. If the current page just vanished, fall back to it."""
+        hidden_pages = set()
+        for mod_name, (color, pages) in MODULES.items():
+            if not self.module_checks[mod_name].isChecked():
+                hidden_pages.update(pages)
+        for row, name in enumerate(NAV_ITEMS):
+            self.nav.setRowHidden(row, name in hidden_pages)
+        current = self.nav.currentRow()
+        if current >= 0 and self.nav.isRowHidden(current):
+            self.nav.setCurrentRow(NAV_ITEMS.index(NAV_LIBRARY))
+
+    def show_credits(self) -> None:
+        from qt_help import CREDITS_HTML, HelpDialog
+        HelpDialog(self, html=CREDITS_HTML, title="Credits").exec()
 
     def closeEvent(self, event) -> None:
         from PySide6.QtCore import QSettings

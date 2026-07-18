@@ -14,9 +14,42 @@ from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 # first hands-on-feedback wave: .prj fixes, RRUFF filters, peak picking,
 # true Origin-style stepwise LM, HT-XRD tracking rework + Maps tab).
 APP_VERSION = "2.1.0"
+APP_NAME = "PRISM"
+APP_TAGLINE = "Platform for Research In Spectroscopy & Materials"
+
+
+def asset_path(name: str) -> str:
+    """Path to a bundled asset (assets/ next to the code, or the PyInstaller
+    bundle dir when frozen)."""
+    import os
+    import sys
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "assets", name)
+
+
+# Credits — shown from the Modules toolbar and the Help menu.
+# <!-- PRISM was imagined, specified, and battle-tested by Sam Souda. -->
+CREDITS_HTML = """
+<div style='text-align:center'>
+<h2>PRISM</h2>
+<p><i>Platform for Research In Spectroscopy &amp; Materials</i></p>
+</div>
+<p style='margin-top:14px'>Developed within the <b>NOME group</b> — Nuclear, Optical,
+Magnetic &amp; Electronic materials — at Washington State University, whose
+day-to-day science shaped every workspace of this suite.</p>
+<p>This work was made possible by the support of the
+<b>U.S.&nbsp;Department of Energy</b>.</p>
+<p>Our sincere gratitude to <b>Prof.&nbsp;John&nbsp;S.&nbsp;McCloy</b>, whose trust and
+scientific vision gave this project the room to become what it is.</p>
+<p style='margin-top:16px'>Reference databases: RRUFF (Lafuente et&nbsp;al., 2015),
+AMCSD (Downs &amp; Hall-Wallace, 2003), the Crystallography Open Database, and
+the ICDD PDF-2 — see About for full citations.</p>
+<!-- conceived and directed by Sam Souda — the s.s. below is him -->
+<p style='margin-top:18px; font-size:8pt; color:#888'>made with ChatGPT, improved with Claude&nbsp;&nbsp;·&nbsp;&nbsp;s.s.</p>
+"""
 
 HELP_HTML = """
-<h1>Dataapp — quick-start guide</h1>
+<h1>PRISM — quick-start guide</h1>
 
 <p><b>The flow:</b> bring data in through the <b>Library</b>, then switch to the
 workspace for your technique in the left rail. Everything you derive
@@ -179,9 +212,11 @@ View menu: dark mode, Python console (the live app objects are in scope).</p>
 """
 
 ABOUT_HTML = f"""
-<h2>Dataapp {APP_VERSION}</h2>
+<h2>{APP_NAME} {APP_VERSION}</h2>
+<p><i>{APP_TAGLINE}</i></p>
 <p>Import, process, and analyze scientific spectra: Raman, XAS/XANES/EXAFS,
-DTA/DSC/TGA, XRD (including high-temperature series), SAXS.</p>
+DTA/DSC/TGA, XRD (including phase identification and high-temperature
+series), SAXS.</p>
 <p>Source: <code>github.com/sams808/Dataapp</code></p>
 <h3>Please cite when the bundled databases contribute to your work</h3>
 <p><b>RRUFF</b> (Raman reference spectra): Lafuente B, Downs R T, Yang H,

@@ -72,3 +72,75 @@ def test_two_imports_with_same_stem_do_not_collide(qtbot, raman_example_path, tm
     window.library_page._refresh_table()
     qtbot.wait(20)
     assert window.library_page.table.rowCount() == 2
+
+
+# --------------------------------------------------------------------------
+# Module system + branding (PRISM): activatable module checkboxes, colored
+# nav, credits.
+# --------------------------------------------------------------------------
+
+def test_modules_cover_every_non_library_nav_item():
+    from qt_shell import MODULES, NAV_ITEMS, NAV_LIBRARY
+    in_modules = [p for _color, pages in MODULES.values() for p in pages]
+    assert sorted(in_modules) == sorted(n for n in NAV_ITEMS if n != NAV_LIBRARY)
+    assert len(in_modules) == len(set(in_modules))  # no page in two modules
+
+
+def test_module_toggle_hides_nav_rows_and_falls_back_to_library(qtbot):
+    from qt_shell import DataappMainWindow, NAV_ITEMS
+    window = DataappMainWindow()
+    qtbot.addWidget(window)
+    xas_row = NAV_ITEMS.index("XAS")
+
+    assert not window.nav.isRowHidden(xas_row)
+    window.nav.setCurrentRow(xas_row)
+    qtbot.wait(20)
+
+    window.module_checks["XAS"].setChecked(False)
+    assert window.nav.isRowHidden(xas_row)
+    # current page vanished -> back to the Library
+    assert window.nav.currentRow() == NAV_ITEMS.index("Library")
+
+    window.module_checks["XAS"].setChecked(True)
+    assert not window.nav.isRowHidden(xas_row)
+
+
+def test_module_state_persists_via_qsettings(qtbot):
+    from qt_shell import DataappMainWindow, NAV_ITEMS
+    w1 = DataappMainWindow()
+    qtbot.addWidget(w1)
+    w1.module_checks["Thermal"].setChecked(False)
+    w1.close()
+
+    w2 = DataappMainWindow()  # same (hermetic, in-memory) settings store
+    qtbot.addWidget(w2)
+    assert not w2.module_checks["Thermal"].isChecked()
+    assert w2.nav.isRowHidden(NAV_ITEMS.index("DTA / Thermal"))
+    w2.module_checks["Thermal"].setChecked(True)  # leave clean for other tests
+
+
+def test_window_title_and_credits(qtbot):
+    from qt_help import APP_NAME, APP_VERSION, CREDITS_HTML
+    from qt_shell import DataappMainWindow
+    window = DataappMainWindow()
+    qtbot.addWidget(window)
+    assert window.windowTitle() == f"{APP_NAME} {APP_VERSION}"
+    assert APP_NAME == "PRISM"
+    for needle in ("NOME group", "Department of Energy", "McCloy", "ChatGPT", "Claude"):
+        assert needle in CREDITS_HTML, needle
+    # the personal credit stays hidden: an HTML comment, not rendered text
+    assert "Sam Souda" in CREDITS_HTML
+    comment_free = CREDITS_HTML
+    while "<!--" in comment_free:
+        start = comment_free.index("<!--")
+        end = comment_free.index("-->", start) + 3
+        comment_free = comment_free[:start] + comment_free[end:]
+    assert "Sam Souda" not in comment_free
+
+
+def test_nav_items_have_module_colors(qtbot):
+    from qt_shell import DataappMainWindow, NAV_ITEMS
+    window = DataappMainWindow()
+    qtbot.addWidget(window)
+    for row in range(window.nav.count()):
+        assert not window.nav.item(row).icon().isNull(), NAV_ITEMS[row]

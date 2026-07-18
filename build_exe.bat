@@ -10,7 +10,8 @@ rem Note: the exe excludes xraylarch; Larch-dependent XAS steps
 rem (normalization/EXAFS) need a Python install + Dataapp.bat instead.
 cd /d "%~dp0"
 
-py -3.11 -m PyInstaller --noconfirm --clean --windowed --name Dataapp ^
+py -3.11 -m PyInstaller --noconfirm --clean --windowed --name PRISM ^
+  --icon assets\prism.ico --add-data "assets;assets" ^
   --exclude-module larch --exclude-module wx --exclude-module tkinter ^
   --exclude-module PyQt5 --exclude-module PyQt6 ^
   --exclude-module IPython --exclude-module jupyter --exclude-module nbformat ^
@@ -27,7 +28,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Zipping dist\Dataapp ...
-powershell -NoProfile -Command "Compress-Archive -Path 'dist\Dataapp' -DestinationPath 'dist\Dataapp-portable.zip' -Force"
-echo Done: dist\Dataapp-portable.zip
+echo Zipping dist\PRISM ...
+powershell -NoProfile -Command "Compress-Archive -Path 'dist\PRISM' -DestinationPath 'dist\PRISM-portable.zip' -Force"
+echo Done: dist\PRISM-portable.zip
 pause

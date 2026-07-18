@@ -1,11 +1,15 @@
-# Dataapp
+# PRISM — Platform for Research In Spectroscopy & Materials
+
+*(repository name: Dataapp)*
 
 A desktop application for importing, processing, and analyzing scientific spectra:
-Raman, XAS/XANES/EXAFS, DTA/DSC/TGA thermal analysis, XRD (including
-high-temperature series), and SAXS.
+Raman, XAS/XANES/EXAFS, DTA/DSC/TGA thermal analysis, XRD (including phase
+identification and high-temperature series), and SAXS.
 
 The app is PySide6/Qt-based, organized as one main window with a left navigation
-rail of technique workspaces. (The original Tkinter application was retired after
+rail of technique workspaces, color-coded by module — and each module (Raman,
+Fitting, XRD, XAS, Thermal, Processing, Figures) can be switched off in the
+Modules toolbar, so a single-technique user sees a simple app. (The original Tkinter application was retired after
 the Qt migration completed; it remains available in git history.)
 
 ## Workspaces
