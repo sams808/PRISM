@@ -177,6 +177,12 @@ class CalcWorkspace(QWidget):
         for row in selected:
             if row < self.file_list.count():
                 self.file_list.item(row).setSelected(True)
+        # Arriving on the page must show a spectrum immediately (user
+        # request): auto-select the first one when nothing is selected yet;
+        # render_preview draws selected inputs even before any computation.
+        if not self.file_list.selectedItems() and self.file_list.count():
+            self.file_list.item(0).setSelected(True)
+        self.plot.request_redraw(self.render_preview)
 
     def _selected_spectra(self) -> List[Spectrum]:
         """In SELECTION order (click order), not list order — A/target first."""

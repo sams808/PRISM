@@ -146,6 +146,13 @@ class BaselineWorkspace(QWidget):
             if sid in selected:
                 item.setSelected(True)
         self.file_list.blockSignals(False)
+        # Arriving on the page must show a spectrum immediately (user
+        # request): auto-select the first one when nothing is selected yet,
+        # and draw the raw curve without waiting for a Preview click.
+        if not self.file_list.selectedItems() and self.file_list.count():
+            self.file_list.item(0).setSelected(True)  # unblocked -> selection hook runs
+        else:
+            self.plot.request_redraw(self.render_raw)
 
     def _selected_spectra(self):
         out = []
@@ -163,6 +170,26 @@ class BaselineWorkspace(QWidget):
         self._current_id = selected[0].id if selected else None
         if self._current_id is not None and self.settings.has(self._current_id):
             self._load_settings(self._current_id)
+        self.plot.request_redraw(self.render_raw)
+
+    def render_raw(self) -> None:
+        """The immediate raw view (page entry / selection change) — Preview
+        then adds the computed baseline on top."""
+        selected = self._selected_spectra()
+        fig = self.plot.figure
+        fig.clf()
+        ax = fig.add_subplot(111)
+        if selected:
+            sp = selected[0]
+            ax.plot(sp.x, sp.y, lw=1.0, color="0.3", label="raw")
+            ax.set_title(sp.title, fontsize=10)
+            ax.legend(fontsize=8)
+        ax.grid(alpha=0.25)
+        ax.set_xlabel("x")
+        fig.tight_layout()
+        self.plot.canvas.draw_idle()
+        if self.pick_roi_btn.isChecked():
+            self._attach_span_selector()  # the redraw replaced the axes it was bound to
 
     def _store_settings(self, sid: str) -> None:
         vals = [e.text() for e in self.param_edits]
@@ -268,6 +295,7 @@ class BaselineWorkspace(QWidget):
         self._store_settings(sp.id)
         self._last_preview = (sp.id, x, y_sub, base)
 
+        self.plot.cancel_pending()  # this direct draw supersedes any queued entry render
         fig = self.plot.figure
         fig.clf()
         ax_top, ax_bottom = fig.subplots(2, 1, sharex=True)

@@ -292,7 +292,13 @@ class SimplePlotWorkspace(QWidget):
     # ------------------------------------------------------------------
     def set_spectra(self, spectrum_ids: List[str]) -> None:
         """Populate the file list from the given library spectrum ids,
-        called by the shell when this workspace becomes active."""
+        called by the shell when this workspace becomes active. The previous
+        selection is preserved, and the first spectrum is auto-selected when
+        nothing was — arriving on the page always shows a plot, never an
+        empty axes (user request)."""
+        selected = {self.file_list.item(i).data(Qt.UserRole)
+                    for i in range(self.file_list.count()) if self.file_list.item(i).isSelected()}
+        self.file_list.blockSignals(True)
         self.file_list.clear()
         for sid in spectrum_ids:
             spectrum = self.library.get(sid)
@@ -301,6 +307,13 @@ class SimplePlotWorkspace(QWidget):
             item = QListWidgetItem(spectrum.title)
             item.setData(Qt.UserRole, sid)
             self.file_list.addItem(item)
+            if sid in selected:
+                item.setSelected(True)
+        self.file_list.blockSignals(False)
+        if not self.file_list.selectedItems() and self.file_list.count():
+            self.file_list.item(0).setSelected(True)  # fires the render hook
+        else:
+            self.plot.request_redraw(self.render)
 
     def _selected_spectra(self):
         out = []

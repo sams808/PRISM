@@ -748,15 +748,6 @@ class PrismMainWindow(QMainWindow):
     def _on_module_toggled(self, module: str, enabled: bool) -> None:
         from PySide6.QtCore import QSettings
         QSettings("PRISM", "PRISM").setValue(f"modules/{module}", bool(enabled))
-        help_menu = self.menuBar().addMenu("&Help")
-        help_menu.addAction("Quick-start guide", self.show_help, "F1")
-        from qt_help import MODULE_GUIDES
-        guides_menu = help_menu.addMenu("Module guides")
-        for gname in MODULE_GUIDES:
-            guides_menu.addAction(gname, lambda g=gname: self.show_module_guide(g))
-        help_menu.addAction("About", self.show_about)
-        help_menu.addAction("Credits", self.show_credits)
-
         self._apply_module_visibility()
 
     def _apply_module_visibility(self) -> None:

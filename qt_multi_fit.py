@@ -99,6 +99,8 @@ class MultiFitWorkspace(QWidget):
         left_layout.addWidget(QLabel("Select spectra to batch-fit"))
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.file_list.itemSelectionChanged.connect(
+            lambda: self.plot.request_redraw(self._draw_inputs_preview))
         left_layout.addWidget(self.file_list, 1)
 
         recipe_row = QHBoxLayout()
@@ -186,6 +188,29 @@ class MultiFitWorkspace(QWidget):
             self.file_list.addItem(item)
             if sid in selected_ids:
                 item.setSelected(True)
+        # Page entry never opens blank (user request): show the selected —
+        # or first — spectra raw until a batch result takes over the plot.
+        if not self.file_list.selectedItems() and self.file_list.count():
+            self.file_list.item(0).setSelected(True)  # fires the preview hook
+        else:
+            self.plot.request_redraw(self._draw_inputs_preview)
+
+    def _draw_inputs_preview(self) -> None:
+        """Pre-batch view (page entry / selection change): the selected
+        input spectra, raw. A computed batch preview is never clobbered."""
+        if self._results:
+            return
+        fig = self.plot.figure
+        fig.clf()
+        ax = fig.add_subplot(111)
+        spectra = self._selected_spectra()
+        for i, sp in enumerate(spectra):
+            ax.plot(sp.x, sp.y, lw=0.9, color=COLORS[i % len(COLORS)], alpha=0.85, label=sp.title)
+        if spectra:
+            ax.legend(fontsize=7)
+        ax.grid(alpha=0.25)
+        fig.tight_layout()
+        self.plot.canvas.draw_idle()
 
     def _selected_spectra(self):
         out = []
@@ -369,6 +394,7 @@ class MultiFitWorkspace(QWidget):
         self._draw_preview(target)
 
     def _draw_preview(self, res: _BatchFitResult) -> None:
+        self.plot.cancel_pending()  # direct draw supersedes any queued inputs preview
         fig = self.plot.figure
         fig.clf()
         ax = fig.add_subplot(111)

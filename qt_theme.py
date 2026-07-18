@@ -52,11 +52,14 @@ _MONO_FAMILY = '"Cascadia Mono", Consolas, monospace'
 
 
 CHECK_QSS = """
-QCheckBox::indicator, QMenu::indicator {
+QCheckBox::indicator, QMenu::indicator, QListView::indicator,
+QTreeView::indicator, QTableView::indicator {
     width: 13px; height: 13px; border: 1px solid #8a97b5; border-radius: 3px;
     background: transparent;
 }
-QCheckBox::indicator:checked, QMenu::indicator:checked {
+QCheckBox::indicator:checked, QMenu::indicator:checked,
+QListView::indicator:checked, QTreeView::indicator:checked,
+QTableView::indicator:checked {
     background: #3b82f6; border-color: #3b82f6;
     image: none;
 }

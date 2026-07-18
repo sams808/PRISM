@@ -157,6 +157,30 @@ def _hermetic_qsettings(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _flush_pending_qt_draws():
+    """Auto-preview-on-entry means many actions queue a render through
+    PlotWidget's 120ms debounce; matplotlib's draw_idle() then schedules an
+    UNPARENTED QTimer.singleShot(0). A test that ends inside that window
+    leaves the callback to fire on a torn-down canvas, poisoning the NEXT
+    test with 'Internal C++ object already deleted'. Flush the event loop
+    for a beat after each Qt test so every pending debounce + idle draw
+    completes while the widgets are still alive."""
+    yield
+    import sys
+    import time
+    if "PySide6.QtWidgets" not in sys.modules:
+        return
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return
+    deadline = time.time() + 0.25
+    while time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+
+
+@pytest.fixture(autouse=True)
 def _prevent_blocking_qt_dialogs(monkeypatch):
     """Autouse safety net for Qt tests: an accidental REAL (unmocked)
     QMessageBox.information/warning/critical/question call opens a real

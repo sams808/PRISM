@@ -24,6 +24,21 @@ def test_load_spectrum_from_path_dta_example(dta_example_path):
     assert spectrum.title == "DTA_example"
 
 
+def test_module_toggle_does_not_duplicate_help_menu(qtbot):
+    """Regression (user screenshot: five Help menus): _on_module_toggled
+    once contained a copy-pasted Help-menu construction block, so every
+    module toggle grew the menu bar."""
+    window = PrismMainWindow()
+    qtbot.addWidget(window)
+    titles_before = [a.text() for a in window.menuBar().actions()]
+    assert titles_before.count("&Help") == 1
+    window.module_checks["XRD"].setChecked(False)
+    window.module_checks["XRD"].setChecked(True)
+    window.module_checks["Glass"].setChecked(False)
+    titles_after = [a.text() for a in window.menuBar().actions()]
+    assert titles_after == titles_before
+
+
 def test_main_window_constructs_with_nav_and_library_page(qtbot):
     window = PrismMainWindow()
     qtbot.addWidget(window)
