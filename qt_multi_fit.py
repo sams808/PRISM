@@ -360,8 +360,9 @@ class MultiFitWorkspace(QWidget):
             for i, d in enumerate(res.params_struct):
                 area = float(np.trapz(res.peaks[i], res.x)) if i < len(res.peaks) else float("nan")
                 centroid = peak_centroid(res.x, res.peaks[i]) if i < len(res.peaks) else float("nan")
+                comp_label = f"{i + 1} ({d['name']})" if d.get("name") else str(i + 1)
                 rows.append((
-                    res.spectrum_title, str(i + 1), f"{d['shift_val']:.2f}", f"{d['fwhm_val']:.2f}",
+                    res.spectrum_title, comp_label, f"{d['shift_val']:.2f}", f"{d['fwhm_val']:.2f}",
                     f"{d.get('amp_val', float('nan')):.4g}", f"{area:.2f}", f"{centroid:.2f}",
                     f"{res.chi2_red:.4g}", f"{res.r2:.4f}",
                 ))
@@ -401,7 +402,9 @@ class MultiFitWorkspace(QWidget):
         ax.plot(res.x, res.y, color="black", lw=1.1, label="Data")
         ax.plot(res.x, res.y_fit, color="red", lw=1.8, ls="--", label="Fit")
         for i, pk in enumerate(res.peaks):
-            ax.plot(res.x, pk, lw=1.0, color=COLORS[(i + 2) % len(COLORS)], alpha=0.7)
+            name = res.params_struct[i].get("name") if i < len(res.params_struct) else None
+            ax.plot(res.x, pk, lw=1.0, color=COLORS[(i + 2) % len(COLORS)], alpha=0.7,
+                    label=name or None)
         ax.set_title(f"{res.spectrum_title}  (chi2_red={res.chi2_red:.3g}, R2={res.r2:.3f})", fontsize=9)
         ax.legend(fontsize=7)
         ax.grid(alpha=0.25)
@@ -429,7 +432,7 @@ class MultiFitWorkspace(QWidget):
                         centroid = peak_centroid(res.x, res.peaks[i]) if i < len(res.peaks) else float("nan")
                         eta = d.get("eta_val", "") if d.get("shape", "G") == "GL" else ""
                         writer.writerow([
-                            res.spectrum_title, i + 1, d["shift_val"], d["fwhm_val"],
+                            res.spectrum_title, d.get("name") or i + 1, d["shift_val"], d["fwhm_val"],
                             d.get("amp_val", ""), area, centroid, d.get("shape", "G"), eta,
                             res.chi2_red, res.r2, "",
                         ])

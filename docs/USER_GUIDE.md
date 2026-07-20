@@ -45,7 +45,9 @@ candidate must be, in units of the noise — lower it to catch weak peaks), or
 with **Pick peaks on plot** — toggle it and click each peak apex.
 Then **Fit !**. Shapes: G (Gaussian), GL (pseudo-Voigt), V (true Voigt),
 EMG (asymmetric, signed skew). The `FWHM=#` column links a component's
-width to another's. Reports include R², ±1σ errors, and peak centroids;
+width to another's, and the **Name** column labels a component (e.g.
+"ν1 PO4") — names follow into the legend, reports, and CSV exports.
+Reports include R², ±1σ errors, and peak centroids;
 **Conf. intervals** runs rigorous F-test profiling. Save a configuration as a
 *model* to reuse it — models are also the recipes **Multi-Fit** applies
 across many spectra at once.

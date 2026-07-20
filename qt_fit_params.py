@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 # model, but the value has always been passed to rampy's HWHM slot — see the
 # width-convention note in fitting_science.py.
 COLUMNS = [
-    "Comp", "Shift min", "Shift val", "Shift max", "Vary",
+    "Comp", "Name", "Shift min", "Shift val", "Shift max", "Vary",
     "FWHM min", "FWHM val", "FWHM max", "Vary",
     "Eta min", "Eta val", "Eta max", "Vary",
     "Skew min", "Skew val", "Skew max", "Vary",
@@ -44,16 +44,17 @@ _DEFAULTS: Dict[str, Any] = {
     "shape": "G", "amp_val": 1.0, "fit_amp": True,
 }
 
+_NAME_COL = 1   # A FAIRE item 9: optional user name per component ("ν1 PO4", …)
 _NUMERIC_COLS = {
-    1: "shift_min", 2: "shift_val", 3: "shift_max",
-    5: "fwhm_min", 6: "fwhm_val", 7: "fwhm_max",
-    9: "eta_min", 10: "eta_val", 11: "eta_max",
-    13: "skew_min", 14: "skew_val", 15: "skew_max",
-    18: "amp_val",
+    2: "shift_min", 3: "shift_val", 4: "shift_max",
+    6: "fwhm_min", 7: "fwhm_val", 8: "fwhm_max",
+    10: "eta_min", 11: "eta_val", 12: "eta_max",
+    14: "skew_min", 15: "skew_val", 16: "skew_max",
+    19: "amp_val",
 }
-_VARY_COLS = {4: "fit_shift", 8: "fit_fwhm", 12: "fit_eta", 16: "fit_skew", 19: "fit_amp"}
-_SHAPE_COL = 17
-_LINK_COL = 20  # Origin-style "share this FWHM with peak N" (1-based in UI, blank = no link)
+_VARY_COLS = {5: "fit_shift", 9: "fit_fwhm", 13: "fit_eta", 17: "fit_skew", 20: "fit_amp"}
+_SHAPE_COL = 18
+_LINK_COL = 21  # Origin-style "share this FWHM with peak N" (1-based in UI, blank = no link)
 SHAPES = ["G", "GL", "V", "EMG"]
 
 
@@ -157,6 +158,8 @@ class FitParamDialog(QDialog):
             label_item.setFlags(label_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(i, 0, label_item)
 
+            self.table.setItem(i, _NAME_COL, QTableWidgetItem(str(row.get("name", ""))))
+
             for col, key in _NUMERIC_COLS.items():
                 item = QTableWidgetItem(f"{row.get(key, _DEFAULTS.get(key, 0.0)):.4g}")
                 self.table.setItem(i, col, item)
@@ -180,6 +183,12 @@ class FitParamDialog(QDialog):
     def _sync_rows_from_table(self) -> None:
         for i in range(self.table.rowCount()):
             row = self.rows[i]
+            name_item = self.table.item(i, _NAME_COL)
+            name_text = (name_item.text() if name_item is not None else "").strip()
+            if name_text:
+                row["name"] = name_text
+            else:
+                row.pop("name", None)
             for col, key in _NUMERIC_COLS.items():
                 item = self.table.item(i, col)
                 try:

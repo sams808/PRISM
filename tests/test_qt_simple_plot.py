@@ -198,6 +198,8 @@ def test_click_to_annotate_adds_and_clears_annotations(qtbot, raman_example_path
 
     ax = widget.plot.figure.get_axes()[0]
     assert any("981.4" in t.get_text() for t in ax.texts)
+    # …and a dot marker right at the clicked point (A FAIRE item 16)
+    assert any(len(ln.get_xdata()) == 1 and ln.get_marker() == "o" for ln in ax.lines)
 
     # Annotations persist across an unrelated re-render (the whole point of
     # storing them as data, not artists).

@@ -383,6 +383,9 @@ class SimplePlotWorkspace(QWidget):
                 xlo, xhi = sorted(ax.get_xlim())
                 if not (xlo <= ann["x"] <= xhi):
                     continue
+                # a visible dot right where the user clicked (A FAIRE item 16)
+                ax.plot([ann["x"]], [ann["y"]], marker="o", ms=6, mew=0,
+                        color="#8a3033", zorder=5)
                 ax.annotate(
                     f"{ann['x']:.1f}", xy=(ann["x"], ann["y"]),
                     xytext=(0, 12), textcoords="offset points",

@@ -464,7 +464,10 @@ class SingleFitWorkspace(QWidget):
         if y_fit is not None:
             ax_main.plot(x, y_fit, color="red", lw=2, ls="--", label="Fit")
             for i, pk in enumerate(peaks):
-                ax_main.plot(x, pk, lw=1.1, color=COLORS[(i + 2) % len(COLORS)], alpha=0.7)
+                # named components (A FAIRE item 9) join the legend
+                name = params_struct[i].get("name") if i < len(params_struct) else None
+                ax_main.plot(x, pk, lw=1.1, color=COLORS[(i + 2) % len(COLORS)], alpha=0.7,
+                             label=name or None)
         ax_main.set_ylabel(self.y_title_edit.text())
         ax_main.set_title("Fit preview")
         ax_main.legend(fontsize=8)
@@ -647,15 +650,27 @@ class SingleFitWorkspace(QWidget):
         y_fit = self._current_yfit
         residual = y - y_fit if y_fit is not None else np.full_like(x, np.nan)
 
+        params_struct = self.get_current_params() or []
+
+        def _comp_label(i: int) -> str:
+            name = params_struct[i].get("name", "") if i < len(params_struct) else ""
+            return name or f"comp{i + 1}"
+
+        def _comp_slug(i: int) -> str:
+            import re
+            name = params_struct[i].get("name", "") if i < len(params_struct) else ""
+            slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")
+            return f"comp{i + 1}" + (f"_{slug}" if slug else "")
+
         try:
-            header = ["x", "data", "fit", "residual"] + [f"comp{i + 1}" for i in range(len(self._current_peaks))]
+            header = ["x", "data", "fit", "residual"] + [_comp_label(i) for i in range(len(self._current_peaks))]
             cols = [x, y, y_fit if y_fit is not None else np.full_like(x, np.nan), residual, *self._current_peaks]
             data = np.column_stack(cols)
             np.savetxt(f"{base}_all.csv", data, delimiter=",", header=",".join(header), comments="")
 
             for i, pk in enumerate(self._current_peaks):
                 comp_data = np.column_stack([x, pk])
-                np.savetxt(f"{base}_comp{i + 1}.csv", comp_data, delimiter=",", header="x,y", comments="")
+                np.savetxt(f"{base}_{_comp_slug(i)}.csv", comp_data, delimiter=",", header="x,y", comments="")
 
             np.savetxt(f"{base}_residual.csv", np.column_stack([x, residual]), delimiter=",", header="x,residual", comments="")
             QMessageBox.information(self, "Export components", f"Exported {len(self._current_peaks)} component(s) + residual.")
@@ -746,8 +761,9 @@ class SingleFitWorkspace(QWidget):
                     shape = d.get("shape", "G")
                     eta = d.get("eta_val", "--") if shape in ("GL", "V") else "--"
                     skew = d.get("skew_val", "--") if shape == "EMG" else "--"
+                    comp_label = f"{i + 1} ({d['name']})" if d.get("name") else f"{i + 1}"
                     f.write(
-                        f"{i + 1}\t{center:.2f}{_stderr(f'f{i}')}\t{fwhm:.2f}{_stderr(f'l{i}')}\t"
+                        f"{comp_label}\t{center:.2f}{_stderr(f'f{i}')}\t{fwhm:.2f}{_stderr(f'l{i}')}\t"
                         f"{amp}{_stderr(f'a{i}')}\t{area:.2f}\t{centroid:.2f}\t{shape}\t{eta}\t{skew}\n"
                     )
                 f.write("#\n# End of report\n")

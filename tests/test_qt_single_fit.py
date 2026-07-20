@@ -136,6 +136,66 @@ def test_export_components_csv_writes_per_component_and_residual_files(qtbot, tm
     assert (tmp_path / "myfit_residual.csv").exists()
 
 
+def test_named_components_flow_into_report_csv_and_legend(qtbot, tmp_path, monkeypatch):
+    """A FAIRE item 9: a component's user-given name shows up in the fit
+    report, the per-component CSV filenames/headers, and the plot legend."""
+    library = SpectrumLibrary()
+    x = np.linspace(400, 600, 400)
+    y = rp.gaussian(x, 80.0, 505.0, 25.0)
+    source_path = tmp_path / "named.txt"
+    source_path.write_text("dummy")
+    spectrum = Spectrum(id=Spectrum.new_id(), title="named", path=str(source_path), kind="raman_xy", x=x, y=y)
+    library.add(spectrum)
+    widget = SingleFitWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([spectrum.id])
+    comp = _component(center=500.0, fwhm=30.0, amp=100.0)
+    comp["name"] = "nu1 PO4"
+    widget.fit_param_memory.set(spectrum.id, [comp])
+    widget.run_fit()
+
+    # legend carries the name
+    labels = [ln.get_label() for ln in widget.plot.figure.get_axes()[0].lines]
+    assert "nu1 PO4" in labels
+
+    # report carries the name next to the component number
+    widget.generate_report(quick=True)
+    report = next((tmp_path / "reports").glob("named_fit*.txt")).read_text()
+    assert "1 (nu1 PO4)" in report
+
+    # CSV export: named header + sanitized filename
+    out_base = tmp_path / "named.csv"
+    monkeypatch.setattr(
+        "qt_single_fit.QFileDialog.getSaveFileName", staticmethod(lambda *a, **k: (str(out_base), "")),
+    )
+    widget.export_components_csv()
+    assert (tmp_path / "named_comp1_nu1_PO4.csv").exists()
+    header = (tmp_path / "named_all.csv").read_text().splitlines()[0]
+    assert "nu1 PO4" in header
+
+
+def test_fit_param_dialog_name_column_roundtrip(qtbot):
+    """The Name column reads/writes params_struct['name']; unnamed rows
+    stay clean (no empty 'name' keys), so old saved models are untouched."""
+    from qt_fit_params import _NAME_COL, FitParamDialog
+    captured = []
+    comp = _component(center=500.0)
+    comp["name"] = "D band"
+    dlg = FitParamDialog(None, [comp, _component(center=550.0)], captured.append)
+    qtbot.addWidget(dlg)
+    assert dlg.table.item(0, _NAME_COL).text() == "D band"
+    dlg.table.item(1, _NAME_COL).setText("  G band  ")
+    dlg._on_accept_clicked()
+    assert captured[0][0]["name"] == "D band"
+    assert captured[0][1]["name"] == "G band"  # stripped
+
+    captured.clear()
+    dlg2 = FitParamDialog(None, [_component(center=500.0)], captured.append)
+    qtbot.addWidget(dlg2)
+    dlg2._on_accept_clicked()
+    assert "name" not in captured[0][0]
+
+
 def test_generate_report_quick_writes_report_next_to_source(qtbot, tmp_path):
     library = SpectrumLibrary()
     x = np.linspace(400, 600, 400)
