@@ -233,6 +233,9 @@ sample's owner/source shown in the Raman ID workspace.
 Hall-Wallace M (2003) "The American Mineralogist Crystal Structure
 Database." American Mineralogist 88, 247–250.
 
+© 2026 NOME Group, Washington State University.
+Licensed under the MIT License — see LICENSE.
+
 ### Built on
 
 numpy · scipy · pandas · matplotlib · lmfit · rampy · scikit-learn ·

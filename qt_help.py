@@ -249,6 +249,8 @@ sample's owner/source shown in the Raman ID workspace.</p>
 <p><b>AMCSD</b> (crystal structures used for XRD overlays): Downs R T,
 Hall-Wallace M (2003) "The American Mineralogist Crystal Structure
 Database." American Mineralogist 88, 247–250.</p>
+<p style='font-size:8pt; color:#888'>© 2026 NOME Group, Washington State University.
+Licensed under the MIT License — see LICENSE.</p>
 <h3>Built on</h3>
 <p>numpy · scipy · pandas · matplotlib · lmfit · rampy · scikit-learn ·
 PySide6 · xraylarch (optional, XAS)</p>

@@ -28,10 +28,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Copying no-Python database download scripts ...
+echo Copying no-Python database download scripts and LICENSE ...
 copy /y scripts\Download-RRUFF-database.bat dist\PRISM\ >nul
 copy /y scripts\Download-RRUFF-database.ps1 dist\PRISM\ >nul
 copy /y scripts\Download-AMCSD-structures.bat dist\PRISM\ >nul
+copy /y LICENSE dist\PRISM\LICENSE.txt >nul
 
 echo Zipping dist\PRISM ...
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\PRISM' -DestinationPath 'dist\PRISM-portable.zip' -Force"

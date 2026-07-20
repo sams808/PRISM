@@ -159,3 +159,11 @@ Reference databases are single files once built/registered:
 These files cannot live in this git repository: GitHub hard-rejects files
 over 100 MB (and LFS quotas don't fit multi-GB scientific databases).
 Rebuild from your own downloads instead, or copy the single files directly.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Developed in the NOME group at Washington
+State University, with support from the U.S. Department of Energy;
+federally funded software can carry government/data rights beyond the
+license text, so check with your institution's tech transfer office before
+distributing outside the group.
