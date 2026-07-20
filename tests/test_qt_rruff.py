@@ -103,6 +103,72 @@ def test_find_matches_missing_cache_updates_status(qtbot, tmp_path):
     assert "No RRUFF database found" in widget.db_status_label.text()
 
 
+def test_download_database_button_flow(qtbot, tmp_path, monkeypatch):
+    """No-Python-needed setup (user request): clicking the button disables
+    both download buttons, drains the worker's progress log into the status
+    label, and reloads the index once the (mocked) download finishes."""
+    widget = RruffMatchWorkspace(cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+
+    calls = []
+
+    def fake_download(log=None):
+        calls.append("called")
+        log("downloading excellent_oriented.zip...")
+        _write_fake_cache(tmp_path, tmp_path / "raw")  # the mock "builds" the cache
+        return 3
+
+    import rruff_science as rs
+    monkeypatch.setattr(rs, "download_and_build_rruff_cache", fake_download)
+
+    widget.download_database()  # QMessageBox.question -> Yes via conftest's autouse fixture
+
+    assert calls == ["called"]
+    assert widget.download_db_btn.isEnabled()
+    assert widget.download_db_btn.text() == "Download RRUFF database…"
+    assert widget.download_amcsd_btn.isEnabled()
+    assert "3" in widget.db_status_label.text()
+    assert widget._index is not None  # reloaded after the download
+
+
+def test_download_database_declined_does_not_download(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
+    widget = RruffMatchWorkspace(cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+
+    calls = []
+    import rruff_science as rs
+    monkeypatch.setattr(rs, "download_and_build_rruff_cache", lambda **k: calls.append(1))
+    widget.download_database()
+    assert calls == []
+
+
+def test_download_database_error_reenables_buttons(qtbot, tmp_path, monkeypatch):
+    widget = RruffMatchWorkspace(cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+
+    import rruff_science as rs
+    monkeypatch.setattr(rs, "download_and_build_rruff_cache",
+                        lambda **k: (_ for _ in ()).throw(RuntimeError("no internet")))
+    widget.download_database()  # QMessageBox.critical is neutralized by conftest too
+
+    assert widget.download_db_btn.isEnabled()
+    assert widget.download_amcsd_btn.isEnabled()
+
+
+def test_download_amcsd_button_flow(qtbot, tmp_path, monkeypatch):
+    widget = RruffMatchWorkspace(cache_dir=str(tmp_path))
+    qtbot.addWidget(widget)
+
+    import rruff_science as rs
+    monkeypatch.setattr(rs, "download_and_build_amcsd_cache", lambda **k: 7)
+    widget.download_amcsd()
+
+    assert widget.download_amcsd_btn.isEnabled()
+    assert "7" in widget.db_status_label.text()
+
+
 def test_accept_keeps_overlay_state_and_clear_resets(qtbot, tmp_path):
     """QualX-style session state (same as XRD ID): accepted phases stay
     overlaid, their peaks gray out; Clear starts over."""

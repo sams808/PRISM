@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
@@ -78,6 +79,14 @@ class RruffMatchWorkspace(QWidget):
         # phases stay overlaid across iterative searches, and the query
         # peaks they explain turn gray instead of vanishing.
         self._session: Dict[str, Dict[str, Any]] = {}
+        # Background-download progress plumbing (queue.Queue is thread-safe;
+        # the worker thread only ever puts() into it — a QTimer on the main
+        # thread drains it, so no Qt widget is ever touched off-thread).
+        import queue
+        self._dl_queue: "queue.Queue[str]" = queue.Queue()
+        self._dl_timer = QTimer(self)
+        self._dl_timer.setInterval(200)
+        self._dl_timer.timeout.connect(self._drain_download_log)
         self._build_ui()
 
     def _state(self) -> Dict[str, Any]:
@@ -167,6 +176,27 @@ class RruffMatchWorkspace(QWidget):
         self.db_status_label.setWordWrap(True)
         left_layout.addWidget(self.db_status_label)
 
+        # No Python needed: downloads + indexes the RRUFF database straight
+        # from rruff.net, from inside the app — the same thing the shipped
+        # Download-RRUFF-database.bat/.ps1 scripts do via the CLI flag, for
+        # a colleague who only has the portable exe.
+        dl_row = QHBoxLayout()
+        self.download_db_btn = QPushButton("Download RRUFF database…")
+        self.download_db_btn.setToolTip(
+            "Downloads ~400-500 MB from rruff.net and builds the local search index "
+            "— no Python needed. Takes several minutes; safe to re-run if interrupted."
+        )
+        self.download_db_btn.clicked.connect(self.download_database)
+        dl_row.addWidget(self.download_db_btn)
+        self.download_amcsd_btn = QPushButton("Download AMCSD structures…")
+        self.download_amcsd_btn.setToolTip(
+            "Downloads ~66 MB of crystal structures, needed only for "
+            "'Overlay candidate's XRD (CIF)' below."
+        )
+        self.download_amcsd_btn.clicked.connect(self.download_amcsd)
+        dl_row.addWidget(self.download_amcsd_btn)
+        left_layout.addLayout(dl_row)
+
         self.overlay_raw_check = QCheckBox("Overlay candidate's measured spectrum (not just peaks)")
         self.overlay_raw_check.setChecked(True)
         left_layout.addWidget(self.overlay_raw_check)
@@ -214,6 +244,84 @@ class RruffMatchWorkspace(QWidget):
 
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
+
+    # ------------------------------------------------------------------
+    # No-Python-needed database setup (downloads from rruff.net)
+    # ------------------------------------------------------------------
+    def download_database(self) -> None:
+        resp = QMessageBox.question(
+            self, "Download RRUFF database",
+            "This downloads roughly 400-500 MB from rruff.net and builds the local search "
+            "index — no Python needed, but it takes several minutes and needs an internet "
+            "connection. Continue?",
+        )
+        if resp != QMessageBox.Yes:
+            return
+        import rruff_science as rs
+        self._start_download(
+            self.download_db_btn, "Downloading…",
+            lambda: rs.download_and_build_rruff_cache(log=self._dl_queue.put),
+            self._on_database_downloaded,
+        )
+
+    def _on_database_downloaded(self, n_spectra: int) -> None:
+        self._index = None  # force a reload of the freshly-built index
+        self._index_load_attempted = False
+        self._ensure_index_loaded()
+        self.db_status_label.setText(f"Downloaded and indexed {n_spectra} spectra. " + self.db_status_label.text())
+
+    def download_amcsd(self) -> None:
+        resp = QMessageBox.question(
+            self, "Download AMCSD structures",
+            "This downloads roughly 66 MB from rruff.net for the 'Overlay candidate's XRD (CIF)' "
+            "button — no Python needed. Continue?",
+        )
+        if resp != QMessageBox.Yes:
+            return
+        import rruff_science as rs
+        self._start_download(
+            self.download_amcsd_btn, "Downloading…",
+            lambda: rs.download_and_build_amcsd_cache(log=self._dl_queue.put),
+            lambda n: self.db_status_label.setText(f"Downloaded and indexed {n} AMCSD structures."),
+        )
+
+    def _start_download(self, button: QPushButton, busy_text: str, work, on_done) -> None:
+        """Both download buttons disable together — the RRUFF and AMCSD
+        downloads share one progress queue/status label, so running them
+        concurrently would interleave their log lines."""
+        self.download_db_btn.setEnabled(False)
+        self.download_amcsd_btn.setEnabled(False)
+        button.setText(busy_text)
+        self.db_status_label.setText("Starting download…")
+        self._dl_timer.start()
+        from qt_worker import run_in_thread
+        run_in_thread(work, lambda result: self._on_download_done(on_done, result),
+                     self._on_download_error)
+
+    def _drain_download_log(self) -> None:
+        """Runs on the main thread every 200ms while a download is active;
+        the worker thread only ever puts() into the queue (thread-safe),
+        never touches a widget directly."""
+        last = None
+        while not self._dl_queue.empty():
+            last = self._dl_queue.get_nowait()
+        if last is not None:
+            self.db_status_label.setText(last)
+
+    def _reset_download_buttons(self) -> None:
+        self._dl_timer.stop()
+        self.download_db_btn.setEnabled(True)
+        self.download_db_btn.setText("Download RRUFF database…")
+        self.download_amcsd_btn.setEnabled(True)
+        self.download_amcsd_btn.setText("Download AMCSD structures…")
+
+    def _on_download_done(self, on_done, result) -> None:
+        self._reset_download_buttons()
+        on_done(result)
+
+    def _on_download_error(self, traceback_text: str) -> None:
+        self._reset_download_buttons()
+        QMessageBox.critical(self, "Download failed", traceback_text)
 
     # ------------------------------------------------------------------
     def set_spectra(self, spectrum_ids: List[str]) -> None:

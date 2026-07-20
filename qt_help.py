@@ -125,8 +125,10 @@ explains are removed from the query, and the table immediately shows matches
 for the REMAINING peaks (already-accepted references are excluded). Repeat
 until every peak is explained; each accept is one Ctrl+Z away. One more click
 overlays the matched mineral's predicted XRD pattern (AMCSD structure) in
-the Raman workspace. Requires the one-time local database build (see the
-README).</p>
+the Raman workspace (needs the AMCSD download below).
+<b>Download RRUFF database…</b> / <b>Download AMCSD structures…</b> fetch
+and index those databases directly from rruff.net — no Python needed, runs
+in the background, safe to re-run if interrupted.</p>
 
 <h2>HT-XRD</h2>
 <p>Import a whole folder of patterns; temperatures come from <code>.rasx</code>

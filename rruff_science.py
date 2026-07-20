@@ -42,13 +42,25 @@ import json
 import os
 import zipfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 RRUFF_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".raman_cache", "rruff")
 RRUFF_INDEX_PATH = os.path.join(RRUFF_CACHE_DIR, "index.json")
 RRUFF_RAW_DIR = os.path.join(RRUFF_CACHE_DIR, "raw")
+
+
+def _safe_print(msg: str) -> None:
+    """The default `log` callable everywhere in this module. A PyInstaller
+    --windowed build has NO console attached, so sys.stdout/stderr are None
+    and a bare print() raises AttributeError deep inside a background
+    download/ingest — this swallows that instead of crashing the whole
+    operation over a cosmetic progress line."""
+    try:
+        print(msg)
+    except Exception:
+        pass
 
 RRUFF_CITATION = (
     "Lafuente, B., Downs, R. T., Yang, H., & Stone, N. (2015). "
@@ -195,7 +207,7 @@ def parse_rruff_txt(text: str, source_filename: str = "") -> RruffSpectrum:
 
 def ingest_zip(
     zip_path: str, *, raw_dir: str = RRUFF_RAW_DIR, category: str = "",
-    max_peaks: int = 15, progress_every: int = 500,
+    max_peaks: int = 15, progress_every: int = 500, log: Callable[[str], None] = _safe_print,
 ) -> List[Dict[str, Any]]:
     """Extract every .txt in `zip_path`, parse it, pre-extract peak
     candidates (fitting_science.find_peak_candidates — the same utility
@@ -217,7 +229,7 @@ def ingest_zip(
         names = [n for n in zf.namelist() if n.lower().endswith(".txt")]
         for i, name in enumerate(names):
             if progress_every and i and i % progress_every == 0:
-                print(f"  ...{i}/{len(names)} in {os.path.basename(zip_path)}")
+                log(f"  ...{i}/{len(names)} in {os.path.basename(zip_path)}")
             try:
                 raw_bytes = zf.read(name)
                 text = raw_bytes.decode("utf-8", errors="replace")
@@ -265,7 +277,8 @@ def ingest_zip(
     return records
 
 
-def build_index(zip_paths_with_categories: List[tuple], *, cache_dir: str = RRUFF_CACHE_DIR) -> int:
+def build_index(zip_paths_with_categories: List[tuple], *, cache_dir: str = RRUFF_CACHE_DIR,
+                log: Callable[[str], None] = _safe_print) -> int:
     """Ingest a list of (zip_path, category_label) pairs and write one
     consolidated index.json under cache_dir. Returns the total record
     count. Existing raw files/index are overwritten by a full rebuild —
@@ -275,9 +288,9 @@ def build_index(zip_paths_with_categories: List[tuple], *, cache_dir: str = RRUF
     raw_dir = os.path.join(cache_dir, "raw")
     all_records: List[Dict[str, Any]] = []
     for zip_path, category in zip_paths_with_categories:
-        print(f"Ingesting {zip_path} (category={category})...")
-        records = ingest_zip(zip_path, raw_dir=raw_dir, category=category)
-        print(f"  -> {len(records)} spectra")
+        log(f"Ingesting {zip_path} (category={category})...")
+        records = ingest_zip(zip_path, raw_dir=raw_dir, category=category, log=log)
+        log(f"  -> {len(records)} spectra")
         all_records.extend(records)
 
     index_path = os.path.join(cache_dir, "index.json")
@@ -305,6 +318,108 @@ def index_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "n_minerals": len(minerals),
         "wavelengths_nm": wavelengths,
     }
+
+
+# =============================================================================
+# No-Python-needed setup: download the category ZIPs straight from rruff.net
+# and build the index in one call. This is what lets a colleague running
+# only the portable PRISM.exe (no Python install) get the Raman ID database
+# — either by clicking "Download RRUFF database..." in the workspace, or via
+# `PRISM.exe --build-rruff-cache` (what the shipped .bat/.ps1 scripts run).
+# stdlib-only (urllib) so it works from the frozen exe with no new dependency.
+# =============================================================================
+
+RRUFF_DOWNLOAD_BASE = "https://www.rruff.net/zipped_data_files/raman/"
+# The 7 non-empty quality x orientation category ZIPs (poor_oriented.zip does
+# not exist on the server — confirmed against the real site, see the module
+# docstring). "lr_broad_scan" (LR-Raman.zip, ~227MB of low-resolution survey
+# scans) is available but NOT downloaded by default — opt in explicitly, it
+# roughly doubles the download for scans that duplicate the same minerals at
+# lower resolution.
+RRUFF_CATEGORIES: Tuple[str, ...] = (
+    "excellent_oriented", "excellent_unoriented",
+    "fair_oriented", "fair_unoriented",
+    "poor_unoriented",
+    "unrated_oriented", "unrated_unoriented",
+)
+RRUFF_BROAD_SCAN_CATEGORY = "lr_broad_scan"
+
+
+def _category_url(category: str) -> str:
+    if category == RRUFF_BROAD_SCAN_CATEGORY:
+        return RRUFF_DOWNLOAD_BASE + "LR-Raman.zip"
+    return f"{RRUFF_DOWNLOAD_BASE}{category}.zip"
+
+
+def _download_file(url: str, dest: str, *, log: Callable[[str], None] = _safe_print,
+                   chunk_size: int = 1 << 20) -> None:
+    """Stream a URL to disk (urllib only — no extra dependency, and it works
+    from the frozen exe). Skips re-downloading a file that's already there
+    and non-empty, so an interrupted run can simply be re-launched; writes
+    to a .part sidecar first so a download that dies mid-stream is never
+    mistaken for a complete one on the next run."""
+    import urllib.request
+    if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+        log(f"  already downloaded: {os.path.basename(dest)}")
+        return
+    tmp = dest + ".part"
+    req = urllib.request.Request(url, headers={"User-Agent": "PRISM/1 (github.com/sams808/PRISM)"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        total = getattr(resp, "length", None) or 0
+        read = 0
+        with open(tmp, "wb") as f:
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                read += len(chunk)
+                pct = f" ({100 * read / total:.0f}%)" if total else ""
+                log(f"  {os.path.basename(dest)}: {read / 1e6:.0f} MB{pct}")
+    os.replace(tmp, dest)
+
+
+def download_rruff_zips(
+    target_dir: str, *, categories: Optional[Sequence[str]] = None,
+    log: Callable[[str], None] = _safe_print,
+) -> List[Tuple[str, str]]:
+    """Download the RRUFF category ZIPs into target_dir (kept there — a
+    re-run reuses whatever already downloaded successfully). Returns
+    [(zip_path, category), ...] for build_index(), skipping any category
+    whose download failed (logged, not raised — a flaky connection
+    shouldn't lose the categories that DID succeed)."""
+    os.makedirs(target_dir, exist_ok=True)
+    cats = list(categories) if categories else list(RRUFF_CATEGORIES)
+    out: List[Tuple[str, str]] = []
+    for cat in cats:
+        dest = os.path.join(target_dir, f"{cat}.zip" if cat != RRUFF_BROAD_SCAN_CATEGORY else "LR-Raman.zip")
+        log(f"Downloading {os.path.basename(dest)}...")
+        try:
+            _download_file(_category_url(cat), dest, log=log)
+        except Exception as exc:
+            log(f"  FAILED ({cat}): {exc}")
+            continue
+        out.append((dest, cat))
+    return out
+
+
+def download_and_build_rruff_cache(
+    *, target_dir: Optional[str] = None, cache_dir: str = RRUFF_CACHE_DIR,
+    categories: Optional[Sequence[str]] = None, log: Callable[[str], None] = _safe_print,
+) -> int:
+    """One call, no Python needed: download the RRUFF category ZIPs (kept
+    under cache_dir/downloads so a re-run doesn't re-download) and build
+    the local search index. Returns the number of spectra ingested; raises
+    if every download failed (nothing to index)."""
+    target_dir = target_dir or os.path.join(cache_dir, "downloads")
+    zips = download_rruff_zips(target_dir, categories=categories, log=log)
+    if not zips:
+        raise RuntimeError(
+            "No RRUFF category ZIP could be downloaded — check the internet "
+            "connection (or a firewall blocking rruff.net) and try again."
+        )
+    log(f"Building the search index from {len(zips)} ZIP(s)...")
+    return build_index(zips, cache_dir=cache_dir, log=log)
 
 
 # =============================================================================
@@ -404,7 +519,28 @@ def _normalize_mineral(name: str) -> str:
     return "".join(ch for ch in name.lower() if ch.isalnum())
 
 
-def ingest_amcsd_cif_zip(zip_path: str, *, cache_dir: str = AMCSD_CACHE_DIR, progress_every: int = 2000) -> int:
+AMCSD_DOWNLOAD_URL = "https://www.rruff.net/AMS/zipped_files/cif.zip"
+
+
+def download_and_build_amcsd_cache(
+    *, target_dir: Optional[str] = None, cache_dir: str = AMCSD_CACHE_DIR,
+    log: Callable[[str], None] = _safe_print,
+) -> int:
+    """The AMCSD counterpart of download_and_build_rruff_cache(): downloads
+    the ~66MB AMCSD structures ZIP (no Python needed) and ingests it, so the
+    "Overlay candidate's XRD (CIF)" button works without anyone having run a
+    Python one-liner first."""
+    target_dir = target_dir or os.path.join(cache_dir, "downloads")
+    os.makedirs(target_dir, exist_ok=True)
+    zip_path = os.path.join(target_dir, "cif.zip")
+    log("Downloading AMCSD structures (cif.zip)...")
+    _download_file(AMCSD_DOWNLOAD_URL, zip_path, log=log)
+    log("Indexing CIFs...")
+    return ingest_amcsd_cif_zip(zip_path, cache_dir=cache_dir, log=log)
+
+
+def ingest_amcsd_cif_zip(zip_path: str, *, cache_dir: str = AMCSD_CACHE_DIR, progress_every: int = 2000,
+                         log: Callable[[str], None] = _safe_print) -> int:
     """Extract every .cif from the AMCSD bulk ZIP into cache_dir/cif/ and
     build cif_index.json mapping normalized mineral name -> list of cif
     filenames. Returns the number of CIFs indexed."""
@@ -416,7 +552,7 @@ def ingest_amcsd_cif_zip(zip_path: str, *, cache_dir: str = AMCSD_CACHE_DIR, pro
         names = [n for n in zf.namelist() if n.lower().endswith(".cif")]
         for i, name in enumerate(names):
             if progress_every and i and i % progress_every == 0:
-                print(f"  ...{i}/{len(names)} CIFs")
+                log(f"  ...{i}/{len(names)} CIFs")
             base = os.path.basename(name)
             mineral = base.split("__", 1)[0]
             key = _normalize_mineral(mineral)

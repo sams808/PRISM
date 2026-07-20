@@ -307,6 +307,153 @@ def test_find_cifs_for_mineral_missing_cache_returns_empty(tmp_path):
     assert rs.find_cifs_for_mineral("quartz", cache_dir=str(tmp_path / "nope")) == []
 
 
+# --------------------------------------------------------------------------
+# No-Python-needed download (colleagues on the portable exe, no network in
+# tests: urllib.request.urlopen is monkeypatched throughout).
+# --------------------------------------------------------------------------
+
+class _FakeResponse:
+    """Enough of urllib's response object for _download_file: length,
+    chunked read(), and context-manager protocol."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+        self._pos = 0
+        self.length = len(data)
+
+    def read(self, n):
+        chunk = self._data[self._pos:self._pos + n]
+        self._pos += len(chunk)
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_safe_print_never_raises(monkeypatch):
+    """The exact PyInstaller --windowed failure mode: sys.stdout is None,
+    so a bare print() raises AttributeError deep inside a background job."""
+    monkeypatch.setattr("builtins.print", lambda *a, **k: (_ for _ in ()).throw(AttributeError("no stdout")))
+    rs._safe_print("this must not raise")  # no exception = pass
+
+
+def test_download_file_writes_and_skips_when_already_present(tmp_path, monkeypatch):
+    import urllib.request
+    calls = []
+
+    def fake_urlopen(req, timeout=60):
+        calls.append(req.full_url)
+        return _FakeResponse(b"hello world")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    dest = tmp_path / "x.zip"
+    logs = []
+    rs._download_file("http://example.test/x.zip", str(dest), log=logs.append)
+    assert dest.read_bytes() == b"hello world"
+    assert not (tmp_path / "x.zip.part").exists()  # .part renamed away on success
+    assert len(calls) == 1
+    assert any("100%" in m for m in logs)
+
+    # already downloaded -> no second network call
+    rs._download_file("http://example.test/x.zip", str(dest), log=logs.append)
+    assert len(calls) == 1
+
+
+def test_download_file_leaves_no_dest_on_failure(tmp_path, monkeypatch):
+    import urllib.request
+
+    def raising_urlopen(req, timeout=60):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", raising_urlopen)
+    dest = tmp_path / "y.zip"
+    with pytest.raises(OSError):
+        rs._download_file("http://example.test/y.zip", str(dest))
+    assert not dest.exists()  # never renamed from .part -> a retry won't think it's done
+
+
+def test_category_url_maps_broad_scan_specially():
+    assert rs._category_url("excellent_oriented") == rs.RRUFF_DOWNLOAD_BASE + "excellent_oriented.zip"
+    assert rs._category_url(rs.RRUFF_BROAD_SCAN_CATEGORY) == rs.RRUFF_DOWNLOAD_BASE + "LR-Raman.zip"
+
+
+def test_default_categories_are_the_seven_non_empty_ones():
+    assert len(rs.RRUFF_CATEGORIES) == 7
+    assert "poor_oriented" not in rs.RRUFF_CATEGORIES  # confirmed not to exist on the server
+    assert rs.RRUFF_BROAD_SCAN_CATEGORY not in rs.RRUFF_CATEGORIES  # opt-in only
+
+
+def test_download_rruff_zips_continues_past_one_failure(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_download(url, dest, log=print, **kw):
+        calls.append(url)
+        if "fair_oriented" in url:
+            raise OSError("simulated network failure")
+        with open(dest, "wb") as f:
+            f.write(b"zip-bytes")
+
+    monkeypatch.setattr(rs, "_download_file", fake_download)
+    logs = []
+    out = rs.download_rruff_zips(str(tmp_path), categories=["excellent_oriented", "fair_oriented"], log=logs.append)
+    assert [cat for _, cat in out] == ["excellent_oriented"]
+    assert any("FAILED" in m for m in logs)
+    assert len(calls) == 2  # both attempted despite the failure
+
+
+def test_download_and_build_rruff_cache_orchestrates_download_then_build(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_download_zips(target_dir, categories=None, log=print):
+        calls["target_dir"] = target_dir
+        calls["categories"] = categories
+        return [(str(tmp_path / "a.zip"), "excellent_oriented")]
+
+    def fake_build_index(zips, cache_dir=rs.RRUFF_CACHE_DIR, log=print):
+        calls["zips"] = zips
+        calls["cache_dir"] = cache_dir
+        return 123
+
+    monkeypatch.setattr(rs, "download_rruff_zips", fake_download_zips)
+    monkeypatch.setattr(rs, "build_index", fake_build_index)
+    n = rs.download_and_build_rruff_cache(cache_dir=str(tmp_path / "cache"), categories=["excellent_oriented"])
+    assert n == 123
+    assert calls["categories"] == ["excellent_oriented"]
+    assert calls["cache_dir"] == str(tmp_path / "cache")
+    assert calls["zips"] == [(str(tmp_path / "a.zip"), "excellent_oriented")]
+
+
+def test_download_and_build_rruff_cache_raises_when_every_download_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(rs, "download_rruff_zips", lambda *a, **k: [])
+    with pytest.raises(RuntimeError, match="internet connection"):
+        rs.download_and_build_rruff_cache(cache_dir=str(tmp_path))
+
+
+def test_download_and_build_amcsd_cache_orchestrates_download_then_ingest(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_download_file(url, dest, log=print):
+        calls["url"] = url
+        calls["dest"] = dest
+        with open(dest, "wb") as f:
+            f.write(b"zip-bytes")
+
+    def fake_ingest(zip_path, cache_dir=rs.AMCSD_CACHE_DIR, log=print):
+        calls["zip_path"] = zip_path
+        calls["cache_dir"] = cache_dir
+        return 456
+
+    monkeypatch.setattr(rs, "_download_file", fake_download_file)
+    monkeypatch.setattr(rs, "ingest_amcsd_cif_zip", fake_ingest)
+    n = rs.download_and_build_amcsd_cache(cache_dir=str(tmp_path / "amcsd"))
+    assert n == 456
+    assert calls["url"] == rs.AMCSD_DOWNLOAD_URL
+    assert calls["cache_dir"] == str(tmp_path / "amcsd")
+
+
 def test_ingested_amcsd_cif_feeds_bragg_generation(tmp_path):
     """End of the handoff chain: an ingested AMCSD CIF must parse through
     cif_tools and yield Bragg peaks."""

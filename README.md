@@ -85,21 +85,31 @@ never post licensed database content publicly.
 
 The Raman ID workspace needs a one-time local ingest of the RRUFF Raman
 database (https://rruff.net — please cite: Lafuente, Downs, Yang & Stone (2015),
-"The power of databases: the RRUFF project"):
+"The power of databases: the RRUFF project"). Three ways to build it —
+**no Python install is needed for any of them**:
 
-1. Download the category ZIPs from https://www.rruff.net/zipped_data_files/raman/
-2. In Python:
+1. **In the app** (simplest): open the Raman ID workspace and click
+   **Download RRUFF database…** (and, for the XRD-overlay button,
+   **Download AMCSD structures…**). Downloads run in the background and can
+   be re-run if interrupted.
+2. **Portable exe, without opening the GUI**: double-click
+   `Download-RRUFF-database.bat` (or the `.ps1`) next to `PRISM.exe` —
+   these just run `PRISM.exe --build-rruff-cache` headlessly. Progress is
+   logged to `rruff_download.log` in the same folder. `Download-AMCSD-structures.bat`
+   is the CIF-overlay counterpart.
+3. **From source**: `python qt_main.py --build-rruff-cache` (add
+   `--categories excellent_oriented fair_oriented ...` to fetch only some
+   quality tiers), or in Python directly:
    ```python
    import rruff_science as rs
-   rs.build_index([
-       ("path/to/excellent_oriented.zip", "excellent_oriented"),
-       ("path/to/excellent_unoriented.zip", "excellent_unoriented"),
-       # ... one entry per downloaded ZIP
-   ])
+   rs.download_and_build_rruff_cache()   # downloads + indexes in one call
    ```
-3. The cache lands in `~/.raman_cache/rruff/` (~1.2 GB for the full database,
-   ~28,000 spectra / ~2,500 minerals) and is loaded automatically by the
-   Raman ID workspace.
+
+Any of these lands the cache in `~/.raman_cache/rruff/` (~1.2 GB for the
+full database, ~28,000 spectra / ~2,500 minerals) and it's loaded
+automatically by the Raman ID workspace. The downloaded ZIPs are kept
+under `~/.raman_cache/rruff/downloads/` so a re-run resumes instead of
+re-downloading everything.
 
 ## Running the tests
 
