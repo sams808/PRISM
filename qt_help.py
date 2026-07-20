@@ -353,8 +353,11 @@ difference spectra, linear-combination fitting against reference standards
 (coefficients = phase fractions), PCA species count.</li>
 <li><b>Sample mass</b>: paste your oxide composition (mol% or wt%), pick
 element+edge and pellet diameter &rarr; masses for total &mu;t = 1 / 2.5 and step
-&Delta;&mu;t = 1 (Hephaestus rules of thumb). If &Delta;&mu;t = 1 needs several times the
-&mu;t = 2.5 mass, the absorber is dilute: measure in fluorescence.</li></ol>"""),
+&Delta;&mu;t = 1 (Hephaestus rules of thumb). The <b>target &mu;t</b> field is your
+own target absorption length (thickness in units of 1/&mu;) &mdash; change it from
+the 2.5 default to get the mass for whatever thickness you actually want,
+shown alongside the two fixed reference values. If &Delta;&mu;t = 1 needs several
+times the &mu;t = 2.5 mass, the absorber is dilute: measure in fluorescence.</li></ol>"""),
     "Thermal": _guide("Thermal module", """
 <p><b>DTA / Thermal</b> computes Tg three independent ways &mdash; double tangent,
 parallel tangent, |dY| max &mdash; and says whether they agree. Trust the value

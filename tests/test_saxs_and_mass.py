@@ -146,3 +146,40 @@ def test_xas_workspace_mass_tab(qtbot):
     text = widget.mass_report_text.toPlainText()
     assert "Bi L3 edge" in text
     assert "μt = 2.5" in text
+
+
+def test_sample_mass_report_default_target_matches_fixed_25_line():
+    """Defaulting target_mut leaves the existing μt=1/2.5 reference values
+    untouched — the new parameter is additive, not a behavior change."""
+    r = xas_mass.sample_mass_report("Fe2O3", "Fe", "K", pellet_diameter_mm=13.0)
+    assert r.target_mut == pytest.approx(2.5)
+    assert r.mass_target_mut_mg == pytest.approx(r.mass_mut_25_mg, rel=1e-9)
+    text = r.text("Fe", "K", 13.0)
+    assert text.count("your target") == 0  # no redundant line when target == 2.5
+
+
+def test_sample_mass_report_custom_target_absorption_length():
+    r = xas_mass.sample_mass_report("Fe2O3", "Fe", "K", pellet_diameter_mm=13.0, target_mut=1.8)
+    assert r.target_mut == pytest.approx(1.8)
+    area = np.pi * 0.65 ** 2
+    assert r.mass_target_mut_mg == pytest.approx(1.8 * area / r.mu_rho_above * 1000, rel=1e-6)
+    # a custom target between the two fixed lines sits between their masses
+    assert r.mass_mut_1_mg < r.mass_target_mut_mg < r.mass_mut_25_mg
+    text = r.text("Fe", "K", 13.0)
+    assert "μt = 1.8" in text and "your target" in text
+    assert "μt = 1.0" in text and "μt = 2.5" in text  # references still shown
+
+
+def test_sample_mass_report_rejects_nonpositive_target():
+    with pytest.raises(ValueError, match="positive"):
+        xas_mass.sample_mass_report("Fe2O3", "Fe", "K", target_mut=0.0)
+
+
+def test_xas_workspace_mass_tab_custom_target(qtbot):
+    from qt_xas import XasWorkspace
+    widget = XasWorkspace()
+    qtbot.addWidget(widget)
+    widget.mass_target_mut_edit.setText("1.5")
+    widget._compute_sample_mass()
+    text = widget.mass_report_text.toPlainText()
+    assert "μt = 1.5" in text and "your target" in text

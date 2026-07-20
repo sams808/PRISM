@@ -73,6 +73,8 @@ class MassReport:
     mass_mut_1_mg: float         # mass for total μt = 1
     mass_mut_25_mg: float        # mass for total μt = 2.5 (Hephaestus target)
     mass_step_1_mg: float        # mass for edge step Δμt = 1
+    target_mut: float            # the user's own target absorption length, in μt (t / (1/μ))
+    mass_target_mut_mg: float    # mass for that target
     unit_absorption_length_um: float | None  # 1/μ for the pure compound (needs density)
 
     def text(self, element: str, edge: str, diameter_mm: float) -> str:
@@ -83,8 +85,13 @@ class MassReport:
             f"Pellet ⌀ {diameter_mm:g} mm (A = {self.pellet_area_cm2:.3f} cm²):",
             f"  total μt = 1.0  →  {self.mass_mut_1_mg:.1f} mg",
             f"  total μt = 2.5  →  {self.mass_mut_25_mg:.1f} mg   (Hephaestus transmission target)",
-            f"  edge step Δμt = 1.0  →  {self.mass_step_1_mg:.1f} mg",
         ]
+        # Only add a separate line when the user's target differs from the
+        # two reference values already shown above — otherwise it's a
+        # redundant duplicate of a line that's already there.
+        if abs(self.target_mut - 1.0) > 1e-9 and abs(self.target_mut - 2.5) > 1e-9:
+            lines.append(f"  total μt = {self.target_mut:g}  →  {self.mass_target_mut_mg:.1f} mg   (your target)")
+        lines.append(f"  edge step Δμt = 1.0  →  {self.mass_step_1_mg:.1f} mg")
         if self.edge_step_mu_rho > 0 and self.mass_step_1_mg > self.mass_mut_25_mg * 2:
             lines.append("  ⚠ dilute sample: reaching Δμt=1 exceeds total μt≈5 — consider fluorescence mode.")
         if self.unit_absorption_length_um:
@@ -95,8 +102,16 @@ class MassReport:
 def sample_mass_report(
     composition_text: str, element: str, edge: str = "K", *,
     basis: str = "mol", pellet_diameter_mm: float = 13.0,
-    density_g_cm3: float | None = None,
+    density_g_cm3: float | None = None, target_mut: float = 2.5,
 ) -> MassReport:
+    """target_mut: the sample thickness YOU want, expressed in absorption
+    lengths (μt = t / (1/μ)) — e.g. 2.5 for Hephaestus' transmission rule
+    of thumb, lower for a thinner/more dilute sample, higher for a thicker
+    one. Defaults to 2.5, which is also shown unconditionally below as the
+    Hephaestus reference; set your own to get the mass for THAT thickness
+    instead of just the two fixed reference points."""
+    if target_mut <= 0:
+        raise ValueError("Target absorption length (μt) must be positive.")
     components = parse_components(composition_text)
     fractions = element_mass_fractions(components, basis=basis)
     if element not in fractions:
@@ -115,5 +130,6 @@ def sample_mass_report(
         absorber_fraction=fractions[element], pellet_area_cm2=float(area),
         mass_mut_1_mg=mass_mg(1.0, mu_above), mass_mut_25_mg=mass_mg(2.5, mu_above),
         mass_step_1_mg=mass_mg(1.0, step) if step > 0 else float("inf"),
+        target_mut=float(target_mut), mass_target_mut_mg=mass_mg(target_mut, mu_above),
         unit_absorption_length_um=(1e4 / (mu_above * density_g_cm3)) if density_g_cm3 else None,
     )
