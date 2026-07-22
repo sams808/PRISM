@@ -15,8 +15,8 @@ import numpy as np
 
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabWidget,
-    QVBoxLayout, QWidget,
+    QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget,
+    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from qt_models import Spectrum, SpectrumLibrary
@@ -26,10 +26,22 @@ from saxs_core.analysis import (
     fit_guinier, fit_porod_general, fit_pseudo_bragg_peak,
 )
 from saxs_core.chemistry import CapillaryConfig, SamplePhysicsConfig
+from saxs_core.composite_batch import BatchItem, batch_to_csv_rows, run_batch, write_batch_csv
+from saxs_core.composite_fit import PRESETS, CompositeModel, build_composite, build_preset
+from saxs_core.composite_staged import _build_derived, apply_hygiene, fit_staged, propose_windows
 from saxs_core.curve import Curve
 from saxs_core.loader import load_curve
 from saxs_core.reduction import CorrectionSettings, correct_sample
 from saxs_core.waxs import auto_find_peaks, fit_waxs_peaks
+
+COMPOSITE_PRESET_CHOICES = ["Auto (BIC ladder)"] + list(PRESETS.keys())
+COMPOSITE_WINDOW_KEYS = ["W_peak", "W_hiq", "W_loq"]
+
+
+def _model_for_preset_name(name: str) -> CompositeModel:
+    if name in PRESETS:
+        return build_preset(name)
+    return build_composite(name.split("+"))
 
 
 def _to_float(text: str, default: Optional[float] = None) -> Optional[float]:
@@ -169,9 +181,102 @@ class SaxsWorkspace(QWidget):
         wl.addWidget(self.waxs_report)
         self.tabs.addTab(waxs_tab, "WAXS")
 
+        self._build_composite_tab()
+
         rl.addWidget(self.tabs)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
+
+    def _build_composite_tab(self) -> None:
+        """Composite SAXS model fitting (spec-driven staged pipeline):
+        window selectors, a preset picker (auto BIC-ladder or a manual
+        composite), single-fit + batch, a component-overlay plot, and a
+        report panel. General-purpose: batch here processes whichever
+        curves the user selects, in list order — no sample-naming
+        assumptions, matching every other saxs_core module in this app."""
+        comp_tab = QWidget()
+        comp_root = QHBoxLayout(comp_tab)
+        comp_splitter = QSplitter()
+        comp_root.addWidget(comp_splitter)
+
+        comp_left = QWidget()
+        comp_left.setMaximumWidth(320)
+        cll = QVBoxLayout(comp_left)
+
+        cll.addWidget(QLabel("Curve (single fit)"))
+        self.comp_combo = QComboBox()
+        self.comp_combo.currentTextChanged.connect(self.on_comp_curve_changed)
+        cll.addWidget(self.comp_combo)
+
+        cll.addWidget(QLabel("Preset"))
+        self.comp_preset_combo = QComboBox()
+        self.comp_preset_combo.addItems(COMPOSITE_PRESET_CHOICES)
+        cll.addWidget(self.comp_preset_combo)
+
+        ms_row = QHBoxLayout()
+        ms_row.addWidget(QLabel("multistart_n"))
+        self.comp_multistart_edit = QLineEdit("8")
+        self.comp_multistart_edit.setMaximumWidth(50)
+        ms_row.addWidget(self.comp_multistart_edit)
+        ms_row.addStretch(1)
+        cll.addLayout(ms_row)
+
+        cll.addWidget(QLabel("Windows (q lo / q hi) — auto-proposed, editable"))
+        self.comp_window_edits = {}
+        for key in COMPOSITE_WINDOW_KEYS:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(key))
+            lo_edit = QLineEdit()
+            lo_edit.setMaximumWidth(70)
+            hi_edit = QLineEdit()
+            hi_edit.setMaximumWidth(70)
+            row.addWidget(lo_edit)
+            row.addWidget(hi_edit)
+            cll.addLayout(row)
+            self.comp_window_edits[key] = (lo_edit, hi_edit)
+        auto_win_btn = QPushButton("Auto-detect windows")
+        auto_win_btn.clicked.connect(self.auto_detect_comp_windows)
+        cll.addWidget(auto_win_btn)
+
+        self._comp_fit_btn = QPushButton("Fit selected curve")
+        self._comp_fit_btn.setObjectName("Primary")
+        self._comp_fit_btn.clicked.connect(self.run_composite_fit)
+        cll.addWidget(self._comp_fit_btn)
+
+        cll.addWidget(QLabel("Batch (curves selected below)"))
+        self.comp_batch_list = QListWidget()
+        self.comp_batch_list.setSelectionMode(QListWidget.ExtendedSelection)
+        cll.addWidget(self.comp_batch_list, 1)
+        self._comp_batch_btn = QPushButton("Run batch")
+        self._comp_batch_btn.clicked.connect(self.run_composite_batch)
+        cll.addWidget(self._comp_batch_btn)
+        export_btn = QPushButton("Export batch CSV…")
+        export_btn.clicked.connect(self.export_composite_batch_csv)
+        cll.addWidget(export_btn)
+
+        comp_splitter.addWidget(comp_left)
+
+        comp_right = QWidget()
+        crl = QVBoxLayout(comp_right)
+        self.comp_plot = PlotWidget(figsize=(7, 4.2))
+        crl.addWidget(self.comp_plot, 2)
+        self.comp_report = QPlainTextEdit()
+        self.comp_report.setReadOnly(True)
+        self.comp_report.setMaximumHeight(140)
+        crl.addWidget(self.comp_report)
+        crl.addWidget(QLabel("Batch results"))
+        self.comp_batch_table = QTableWidget(0, 7)
+        self.comp_batch_table.setHorizontalHeaderLabels(
+            ["sample_id", "preset_chosen", "d (Å)", "xi (Å)", "fa", "chi2red", "d_TS/d_gauss"])
+        self.comp_batch_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        crl.addWidget(self.comp_batch_table, 1)
+        comp_splitter.addWidget(comp_right)
+        comp_splitter.setStretchFactor(1, 1)
+
+        self._comp_last = None
+        self._comp_batch_result = None
+        self._comp_batch_curves = {}
+        self.tabs.addTab(comp_tab, "Composite fit")
 
     # ------------------------------------------------------------------
     def set_spectra(self, spectrum_ids: List[str]) -> None:  # nav-enter hook (self-contained workspace)
@@ -179,7 +284,8 @@ class SaxsWorkspace(QWidget):
 
     def _refresh_combos(self) -> None:
         names = [c.name for c in self.curves]
-        for combo in (self.red_sample_combo, self.red_empty_combo, self.ana_combo, self.waxs_combo):
+        for combo in (self.red_sample_combo, self.red_empty_combo, self.ana_combo, self.waxs_combo,
+                      self.comp_combo):
             current = combo.currentText()
             combo.clear()
             combo.addItems(names)
@@ -190,6 +296,14 @@ class SaxsWorkspace(QWidget):
         for c in self.curves:
             self.curve_list.addItem(c.name)
         self.curve_list.selectAll()
+        selected_batch = {i.text() for i in self.comp_batch_list.selectedItems()}
+        self.comp_batch_list.clear()
+        for c in self.curves:
+            self.comp_batch_list.addItem(c.name)
+        for i in range(self.comp_batch_list.count()):
+            item = self.comp_batch_list.item(i)
+            if item.text() in selected_batch:
+                item.setSelected(True)
 
     def add_curve(self, curve: Curve) -> None:
         self.curves.append(curve)
@@ -389,3 +503,228 @@ class SaxsWorkspace(QWidget):
         ax.grid(alpha=0.25)
         fig.tight_layout()
         self.waxs_plot.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Composite fit (staged pipeline, spec §4)
+    # ------------------------------------------------------------------
+    def _fill_window_fields(self, windows) -> None:
+        for key, (lo_edit, hi_edit) in self.comp_window_edits.items():
+            if key in windows:
+                lo, hi = windows[key]
+                lo_edit.setText(f"{lo:.5g}")
+                hi_edit.setText(f"{hi:.5g}")
+
+    def _read_window_fields(self):
+        windows = {}
+        for key, (lo_edit, hi_edit) in self.comp_window_edits.items():
+            lo = _to_float(lo_edit.text())
+            hi = _to_float(hi_edit.text())
+            if lo is not None and hi is not None and hi > lo:
+                windows[key] = (lo, hi)
+        return windows or None
+
+    def auto_detect_comp_windows(self) -> None:
+        c = self._curve_by_name(self.comp_combo.currentText())
+        if c is None:
+            QMessageBox.warning(self, "Composite fit", "Import and pick a curve first.")
+            return
+        try:
+            windows = propose_windows(np.asarray(c.q, float), np.asarray(c.intensity, float))
+        except Exception as exc:
+            QMessageBox.critical(self, "Composite fit", str(exc))
+            return
+        self._fill_window_fields(windows)
+
+    def on_comp_curve_changed(self, _text: str = "") -> None:
+        c = self._curve_by_name(self.comp_combo.currentText())
+        if c is None:
+            return
+        try:
+            windows = propose_windows(np.asarray(c.q, float), np.asarray(c.intensity, float))
+            self._fill_window_fields(windows)
+        except Exception:
+            pass
+        self._comp_last = None
+        self.comp_plot.request_redraw(lambda c=c: self._render_comp_preview(c))
+        self.comp_report.setPlainText("")
+
+    def _render_comp_preview(self, c: Curve) -> None:
+        fig = self.comp_plot.figure
+        fig.clf()
+        ax = fig.add_subplot(111)
+        ax.loglog(c.q, np.clip(c.intensity, 1e-12, None), ".", ms=2, color="black", label=c.name)
+        ax.legend(fontsize=8)
+        ax.set_xlabel("q (Å⁻¹)")
+        ax.set_ylabel("I (a.u.)")
+        ax.grid(alpha=0.25, which="both")
+        fig.tight_layout()
+        self.comp_plot.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _compute_composite_fit(curve: Curve, sample_id: str, windows, multistart_n: int, preset_name: str):
+        if preset_name == "Auto (BIC ladder)":
+            result = fit_staged(curve, sample_id=sample_id, windows=windows, multistart_n=multistart_n)
+            model = _model_for_preset_name(result.preset_chosen)
+            params = {k: v["value"] for k, v in result.params.items()}
+            return {"model": model, "params": params, "derived": result.derived, "gof": result.gof,
+                    "preset": result.preset_chosen, "flags": result.flags, "curve": curve}
+
+        hygiene = apply_hygiene(curve)
+        q = np.asarray(hygiene.curve.q, dtype=float)
+        I = np.asarray(hygiene.curve.intensity, dtype=float)
+        sigma = np.asarray(hygiene.curve.sigma, dtype=float)
+        model = _model_for_preset_name(preset_name)
+        seeds = model.seed(q, I, windows)
+        params_in = model.to_lmfit_parameters(seed_values=seeds)
+        lm_result = model.fit(q, I, sigma=sigma, params=params_in)
+        params = {k: float(v.value) for k, v in lm_result.params.items()}
+        derived = _build_derived(model, lm_result.params)
+        gof = {"chi2red": float(lm_result.redchi), "aic": float(lm_result.aic), "bic": float(lm_result.bic),
+               "n_points": int(len(q))}
+        fitted_curve = Curve(q=q, intensity=I, sigma=sigma, name=curve.name)
+        return {"model": model, "params": params, "derived": derived, "gof": gof,
+                "preset": preset_name, "flags": [], "curve": fitted_curve}
+
+    def run_composite_fit(self) -> None:
+        from qt_worker import run_in_thread
+        c = self._curve_by_name(self.comp_combo.currentText())
+        if c is None:
+            QMessageBox.warning(self, "Composite fit", "Import and pick a curve first.")
+            return
+        windows = self._read_window_fields()
+        preset_name = self.comp_preset_combo.currentText()
+        multistart_n = int(_to_float(self.comp_multistart_edit.text(), 8.0) or 8)
+        curve_copy = Curve(q=np.asarray(c.q, float), intensity=np.asarray(c.intensity, float),
+                           sigma=np.asarray(c.sigma, float) if c.sigma is not None else None, name=c.name)
+        sample_id = c.name
+
+        self._comp_fit_btn.setEnabled(False)
+        self._comp_fit_btn.setText("Fitting…")
+
+        def compute(curve_copy=curve_copy, sample_id=sample_id, windows=windows,
+                    multistart_n=multistart_n, preset_name=preset_name):
+            return self._compute_composite_fit(curve_copy, sample_id, windows, multistart_n, preset_name)
+
+        run_in_thread(compute, self._on_comp_fit_done, self._on_comp_fit_error)
+
+    def _on_comp_fit_error(self, traceback_text: str) -> None:
+        self._comp_fit_btn.setEnabled(True)
+        self._comp_fit_btn.setText("Fit selected curve")
+        QMessageBox.critical(self, "Composite fit error", traceback_text)
+
+    def _on_comp_fit_done(self, payload) -> None:
+        self._comp_fit_btn.setEnabled(True)
+        self._comp_fit_btn.setText("Fit selected curve")
+        self._comp_last = payload
+        self.comp_plot.cancel_pending()
+        self._render_comp_result()
+        self.comp_report.setPlainText(self._composite_report_text(payload))
+
+    def _render_comp_result(self) -> None:
+        payload = self._comp_last
+        if payload is None:
+            return
+        curve, model, params = payload["curve"], payload["model"], payload["params"]
+        self.comp_plot.preserve_zoom((curve.name, payload["preset"]))
+        fig = self.comp_plot.figure
+        fig.clf()
+        ax = fig.add_subplot(111)
+        q = np.asarray(curve.q, float)
+        I = np.asarray(curve.intensity, float)
+        ax.loglog(q, np.clip(I, 1e-12, None), ".", ms=2, color="black", label=curve.name)
+        total = model.eval(q, params)
+        ax.loglog(q, np.clip(total, 1e-12, None), lw=1.6, color="crimson", label=f"total ({payload['preset']})")
+        for name, comp_curve in model.eval_components(q, params).items():
+            ax.loglog(q, np.clip(comp_curve, 1e-12, None), lw=1.0, alpha=0.7, label=name)
+        ax.legend(fontsize=7)
+        ax.set_xlabel("q (Å⁻¹)")
+        ax.set_ylabel("I (a.u.)")
+        ax.grid(alpha=0.25, which="both")
+        self.comp_plot.restore_zoom(ax)
+        fig.tight_layout()
+        self.comp_plot.canvas.draw_idle()
+
+    @staticmethod
+    def _composite_report_text(payload) -> str:
+        lines = [f"Preset: {payload['preset']}"]
+        if payload["flags"]:
+            lines.append("Flags: " + "; ".join(payload["flags"]))
+        lines.append("")
+        lines.append("Derived:")
+        for k, v in payload["derived"].items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                lines.append(f"  {k} = {v:.5g}")
+        lines.append("")
+        lines.append("Goodness of fit:")
+        for k, v in payload["gof"].items():
+            lines.append(f"  {k} = {v}")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    def run_composite_batch(self) -> None:
+        from qt_worker import run_in_thread
+        rows = sorted({i.row() for i in self.comp_batch_list.selectedIndexes()})
+        if not rows:
+            QMessageBox.warning(self, "Composite batch", "Select at least one curve in the batch list.")
+            return
+        items = [BatchItem(sample_id=self.curves[r].name, curve=self.curves[r],
+                           group="default", order_hint=float(i))
+                 for i, r in enumerate(rows)]
+        curves_by_id = {it.sample_id: it.curve for it in items}
+        # Deliberately NOT reading the single-curve window fields here: those
+        # are scoped to whichever one curve is selected in the combo above,
+        # auto-proposed for that curve specifically. A batch spans curves
+        # with different peak positions in general, so each one must get its
+        # own auto-proposed windows (run_batch's own windows=None default) —
+        # blanket-applying one curve's windows across an unrelated batch is
+        # silently wrong the moment peak positions differ between samples.
+        multistart_n = int(_to_float(self.comp_multistart_edit.text(), 8.0) or 8)
+
+        self._comp_batch_btn.setEnabled(False)
+        self._comp_batch_btn.setText("Running…")
+
+        def compute(items=items, multistart_n=multistart_n):
+            return run_batch(items, windows=None, multistart_n=multistart_n)
+
+        run_in_thread(compute, lambda batch: self._on_comp_batch_done(batch, curves_by_id),
+                      self._on_comp_batch_error)
+
+    def _on_comp_batch_error(self, traceback_text: str) -> None:
+        self._comp_batch_btn.setEnabled(True)
+        self._comp_batch_btn.setText("Run batch")
+        QMessageBox.critical(self, "Composite batch error", traceback_text)
+
+    def _on_comp_batch_done(self, batch, curves_by_id) -> None:
+        self._comp_batch_btn.setEnabled(True)
+        self._comp_batch_btn.setText("Run batch")
+        self._comp_batch_result = batch
+        self._comp_batch_curves = curves_by_id
+        rows = batch_to_csv_rows(batch, curves_by_id)
+        cols = ["sample_id", "preset_chosen", "derived_d", "derived_xi", "derived_fa",
+                "gof_chi2red", "d_ts_over_d_gauss"]
+        self.comp_batch_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, key in enumerate(cols):
+                val = row.get(key, "")
+                text = "" if val is None else (f"{val:.5g}" if isinstance(val, float) else str(val))
+                self.comp_batch_table.setItem(r, c, QTableWidgetItem(text))
+        self.comp_batch_table.resizeColumnsToContents()
+        if batch.errors:
+            QMessageBox.warning(self, "Composite batch",
+                                "Some samples failed to fit:\n" +
+                                "\n".join(f"{k}: {v}" for k, v in batch.errors.items()))
+
+    def export_composite_batch_csv(self) -> None:
+        if self._comp_batch_result is None:
+            QMessageBox.information(self, "Export", "Run a batch fit first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export batch results as…", "", "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            write_batch_csv(path, self._comp_batch_result, self._comp_batch_curves)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export error", str(exc))
+            return
+        QMessageBox.information(self, "Export", f"Batch results exported to:\n{path}")

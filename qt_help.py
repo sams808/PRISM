@@ -391,7 +391,26 @@ The generalized Porod slope m reads surface character (4 = smooth interface,
 apparent correlation length from the width.</p>
 <p><b>WAXS</b>: pseudo-Voigt multi-peak fit with amorphous-hump detection &mdash;
 the crystallinity index is crystalline area / total area, comparable only
-between samples measured identically.</p>"""),
+between samples measured identically.</p>
+<p><b>Composite fit</b>: a physically-meaningful component library (flat
+background, power law, Guinier, Guinier-Porod, Beaucage unified, DAB,
+Teubner-Strey, broad peak) summed into a fittable composite &mdash; the
+general-purpose successor to the single pseudo-Bragg peak fit above, built
+for structure-factor peaks (a genuine correlation length &xi;, not just an
+apparent one) riding on top of other scattering contributions. <b>Auto (BIC
+ladder)</b> runs the full staged pipeline (hygiene &rarr; background &rarr;
++peak &rarr; +low-q component &rarr; global refit &rarr; diagnostics &rarr;
+BIC-based model selection) and reports whichever composite the data actually
+supports; a specific preset fits that exact composite directly instead.
+Windows (W_peak/W_hiq/W_loq) auto-propose from the curve's own shape and stay
+editable. <b>Batch</b> fits every curve selected in the list below
+independently &mdash; each gets its own auto-proposed windows, never one
+curve's windows blanket-applied across the batch &mdash; with a results table
+and CSV export (including the d<sub>TS</sub>/d<sub>gauss</sub> cross-check
+against the pseudo-Bragg fit). A ladder-demoted preset (e.g. a peak-free
+curve landing on plain background) is the model-selection logic correctly
+saying the data doesn't support a peak &mdash; check the Flags line before
+overriding with a forced preset.</p>"""),
     "Figures": _guide("Figures module", """
 <p>Build the figure ONCE, export at the journal exact size.
 <b>XY builder</b>: add spectra as layers; each layer has type, color,
