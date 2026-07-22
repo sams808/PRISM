@@ -201,20 +201,54 @@ def _locate_peak(q: np.ndarray, I: np.ndarray, smooth_frac: int = 200) -> Tuple[
     implies a peak only a small fraction of the full instrument q-range
     wide. Verified empirically against both a synthetic TS curve and a
     real measured profile before adopting; still a general Kratky-based
-    detector, not tuned to any particular sample's expected q*."""
+    detector, not tuned to any particular sample's expected q*.
+
+    Candidates are cross-validated against the raw log(I) representation
+    before being accepted: q^2*exp(-q^2 Rg^2/3) (any Guinier/Guinier-Porod
+    -type decay) has a genuine calculus-based local maximum at
+    q=sqrt(3/p)/Rg for ANY Rg — a property of the q^2 Kratky transform
+    itself, not of any real structural feature — which can out-prominence
+    a genuine but further-out, weaker Teubner-Strey peak and fool a plain
+    argmax into locating the wrong feature entirely. A real structural
+    peak is a genuine (if modest) local rise in log(I) too; a pure
+    Kratky-transform artifact from a monotonic decay is not — found via a
+    synthetic BG_TS_GP recovery curve where the low-q Guinier-Porod
+    upturn's Kratky hump was more prominent than the actual TS peak's."""
+    from scipy.ndimage import uniform_filter1d
+    from scipy.signal import find_peaks
     q = np.asarray(q, dtype=float)
     I = np.asarray(I, dtype=float)
-    from saxs_core.analysis import moving_average
     win = max(5, len(q) // smooth_frac)
-    smoothed = moving_average((q ** 2) * I, win)
-    i_peak = int(np.argmax(smoothed))
-    peak_val = float(smoothed[i_peak])
+    kratky = uniform_filter1d((q ** 2) * I, size=win, mode="nearest")
+    log_I = uniform_filter1d(np.log(np.clip(I, 1e-300, None)), size=win, mode="nearest")
+
+    kratky_floor = max(float(np.median(kratky)) * 0.05, 1e-300)
+    candidates, kprops = find_peaks(kratky, prominence=kratky_floor)
+    log_peaks, _ = find_peaks(log_I, prominence=1e-6)
+
+    def _validated(idx: int) -> bool:
+        if log_peaks.size == 0:
+            return False
+        return bool(np.min(np.abs(log_peaks - idx)) <= max(2 * win, 3))
+
+    i_peak = None
+    if candidates.size:
+        order = np.argsort(kprops["prominences"])[::-1]
+        for rank in order:
+            idx = int(candidates[rank])
+            if _validated(idx):
+                i_peak = idx
+                break
+    if i_peak is None:
+        i_peak = int(candidates[int(np.argmax(kprops["prominences"]))]) if candidates.size else int(np.argmax(kratky))
+
+    peak_val = float(kratky[i_peak])
     half = 0.6 * peak_val
     left = i_peak
-    while left > 0 and smoothed[left] > half:
+    while left > 0 and kratky[left] > half:
         left -= 1
     right = i_peak
-    while right < len(q) - 1 and smoothed[right] > half:
+    while right < len(q) - 1 and kratky[right] > half:
         right += 1
     pad = max(2, win // 2)
     left = max(0, left - pad)
@@ -228,9 +262,25 @@ def propose_windows(q: np.ndarray, I: np.ndarray) -> Windows:
     q = np.asarray(q, dtype=float)
     I = np.asarray(I, dtype=float)
     qmin, qmax = float(np.min(q)), float(np.max(q))
-    q_star, _peak_lo, peak_hi = _locate_peak(q, I)
+    q_star, peak_lo, peak_hi = _locate_peak(q, I)
 
-    w_peak = (max(q_star / 2.5, qmin), min(q_star * 2.5, qmax))
+    # W_peak's low-q edge: never closer to q_star/2.5 than the peak's own
+    # measured half-max descent point (peak_lo). A fixed q_star/2.5 ratio
+    # can, for a peak sitting at small q_star, dip into a q-region where a
+    # separate low-q feature (e.g. a Guinier-Porod upturn) still
+    # contributes non-negligibly -- if that component later gets dropped
+    # by the BIC ladder (its own signal too weak within the windows to
+    # justify by itself), the leftover contamination biases the windowed
+    # TS fit's recovered width. peak_lo is a data-driven measure of where
+    # the peak's OWN contribution has actually fallen off, so taking
+    # whichever bound is more conservative (closer to q_star) excludes
+    # that contamination without assuming any particular low-q component
+    # shape. Found via a 20-curve synthetic recovery harness where xi
+    # (peak width) was biased ~20-50% at zero noise, reproducibly
+    # independent of multistart count -- a real bias, not an optimizer
+    # robustness gap.
+    w_peak_lo = max(0.55 * peak_lo + 0.45 * (q_star / 2.5), q_star / 2.5, qmin)
+    w_peak = (w_peak_lo, min(q_star * 2.5, qmax))
     hiq_lo = min(3.0 * peak_hi, 0.95 * qmax)
     if hiq_lo >= qmax:
         hiq_lo = 0.8 * qmax
@@ -372,15 +422,38 @@ def _gof(result: Any) -> Dict[str, float]:
 # Stages 1-4
 # =============================================================================
 
-def _stage1_bg(q: np.ndarray, I: np.ndarray, sigma: np.ndarray, windows: Windows) -> Dict[str, Any]:
+def _stage1_bg(q: np.ndarray, I: np.ndarray, sigma: np.ndarray, windows: Windows,
+               sample_id: str = "stage1", n_tries: int = 3) -> Dict[str, Any]:
+    """A single seeded fit here is fragile: when W_hiq's true power-law
+    contribution is negligible (common — Porod tails are often tiny
+    relative to a flat background), the log-log-regression seed for
+    pl_B/pl_p is essentially fit to noise and can land the optimizer in a
+    bad bg_C/pl_B/pl_p local minimum — one that Stage 2 then FREEZES
+    pl_B/pl_p into, propagating a bad background estimate through the rest
+    of the pipeline (discovered via the Phase 6 synthetic harness: some
+    curves' d recovery failed entirely at even the best noise level,
+    traced to exactly this). A small local multistart around the seed
+    (deterministic, keyed off sample_id) is a targeted, low-cost fix."""
     model = build_composite(["flat_background", "power_law"])
     mask = _mask_for(q, windows, ("W_hiq",))
     if int(mask.sum()) < 5:
         mask = np.ones_like(q, dtype=bool)  # degenerate window: fall back to everything
     seeds = model.seed(q[mask], I[mask], windows)
-    params = model.to_lmfit_parameters(seed_values=seeds)
-    result = model.fit(q[mask], I[mask], sigma=sigma[mask], params=params)
-    return {"model": model, "result": result, "mask": mask, "seeds": seeds}
+    rng = np.random.default_rng(_seed_from_sample_id(sample_id + ":stage1"))
+    best_result = None
+    for _ in range(max(n_tries, 1)):
+        perturbed = {name: v * math.exp(rng.uniform(-0.3, 0.3)) if v > 0 else v for name, v in seeds.items()}
+        params = model.to_lmfit_parameters(seed_values=perturbed)
+        try:
+            result = model.fit(q[mask], I[mask], sigma=sigma[mask], params=params)
+        except Exception:
+            continue
+        if best_result is None or result.redchi < best_result.redchi:
+            best_result = result
+    if best_result is None:
+        params = model.to_lmfit_parameters(seed_values=seeds)
+        best_result = model.fit(q[mask], I[mask], sigma=sigma[mask], params=params)
+    return {"model": model, "result": best_result, "mask": mask, "seeds": seeds}
 
 
 def _stage2_add_ts(q: np.ndarray, I: np.ndarray, sigma: np.ndarray, windows: Windows,
@@ -697,7 +770,7 @@ def fit_staged(
                   "n_points": int(q.size)},
     }
 
-    stage1 = _stage1_bg(q, I, sigma, active_windows)
+    stage1 = _stage1_bg(q, I, sigma, active_windows, sample_id=sample_id)
     stages["stage1"] = {"redchi": float(stage1["result"].redchi), "mask_n": int(stage1["mask"].sum())}
     current_model, current_result = stage1["model"], stage1["result"]
     preset_names = ["flat_background", "power_law"]
