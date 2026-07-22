@@ -8,10 +8,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from saxs_core.composite_fit import build_preset
+from saxs_core.composite_fit import build_composite, build_preset
 from saxs_core.composite_staged import (
-    apply_hygiene, estimate_sigma_model, fit_staged, guess_class,
-    propose_windows,
+    _walk_ladder, apply_hygiene, compute_diagnostics, estimate_sigma_model,
+    fit_staged, guess_class, propose_windows, select_best_preset,
 )
 from saxs_core.curve import Curve
 
@@ -137,9 +137,11 @@ def test_fit_staged_recovers_ts_peak_on_synthetic_curve():
 def test_fit_staged_retains_every_stage():
     curve = _ts_curve(seed=4)
     result = fit_staged(curve, multistart_n=2)
-    assert set(result.stages) == {"stage0", "stage1", "stage2", "stage3", "stage4"}
+    assert set(result.stages) == {"stage0", "stage1", "stage2", "stage3", "stage4", "stage5", "stage6"}
     assert "class_guess" in result.stages["stage0"]
     assert "redchi" in result.stages["stage1"]
+    assert "gof" in result.stages["stage5"] and "flags" in result.stages["stage5"]
+    assert "BG" in result.stages["stage6"] and "BG_DAB" in result.stages["stage6"]
 
 
 def test_fit_staged_is_deterministic_given_same_sample_id():
@@ -164,6 +166,96 @@ def test_fit_staged_json_round_trip(tmp_path):
     assert loaded.gof == pytest.approx(result.gof)
     assert loaded.windows["W_peak"] == tuple(result.windows["W_peak"])
     assert loaded.to_json() == result.to_json()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: diagnostics (Stage 5) and the model-selection ladder (Stage 6)
+# ---------------------------------------------------------------------------
+
+def test_walk_ladder_prefers_lower_bic_when_it_clears_the_threshold():
+    order = ["BG", "BG_DAB", "BG_TS"]
+    bics = {"BG": 1000.0, "BG_DAB": 995.0, "BG_TS": 950.0}  # BG_TS clearly best
+    aics = {"BG": 1000.0, "BG_DAB": 995.0, "BG_TS": 950.0}
+    chosen, disagreements = _walk_ladder(order, bics, aics)
+    assert chosen == "BG_TS"
+    assert disagreements == []
+
+
+def test_walk_ladder_stays_on_simpler_model_when_improvement_is_marginal():
+    # BG_DAB vs BG: d_bic=7 (not > 10) -> stays BG; BG_TS is then compared
+    # against the still-current BG (not cumulatively against BG_DAB):
+    # d_bic=8 (not > 10) -> stays BG.
+    order = ["BG", "BG_DAB", "BG_TS"]
+    bics = {"BG": 1000.0, "BG_DAB": 993.0, "BG_TS": 992.0}
+    aics = {"BG": 1000.0, "BG_DAB": 993.0, "BG_TS": 992.0}
+    chosen, disagreements = _walk_ladder(order, bics, aics)
+    assert chosen == "BG"
+    assert disagreements == []
+
+
+def test_walk_ladder_records_disagreement_but_bic_decides():
+    """BIC says 'not worth it' (Delta=8, under the >10 bar) while AIC says
+    'worth it' (Delta=15) -- spec's own tiebreak: BIC always wins, but the
+    disagreement must be recorded for provenance."""
+    order = ["BG", "BG_TS"]
+    bics = {"BG": 1000.0, "BG_TS": 992.0}   # d_bic = 8, NOT > 10
+    aics = {"BG": 1000.0, "BG_TS": 985.0}   # d_aic = 15, IS > 10
+    chosen, disagreements = _walk_ladder(order, bics, aics)
+    assert chosen == "BG"  # BIC's verdict wins
+    assert len(disagreements) == 1
+    assert disagreements[0]["pair"] == ["BG", "BG_TS"]
+
+
+def test_select_best_preset_never_chooses_ts_on_peak_free_curves():
+    """The spec's own acceptance criterion, exercised here at reduced
+    scale (5 curves; the full 20-curve harness is Phase 6) -- a genuinely
+    featureless curve's ladder must land on BG or BG_DAB."""
+    for seed in range(5):
+        curve = _flat_curve(seed=seed + 100)
+        q, I = curve.q, curve.intensity
+        sigma = estimate_sigma_model(q, I)
+        bg_model = build_composite(["flat_background", "power_law"])
+        bg_result = bg_model.fit(q, I, sigma=sigma, params=bg_model.to_lmfit_parameters(seed_values=bg_model.seed(q, I)))
+        outcome = select_best_preset(q, I, sigma, "BG", bg_model, bg_result, f"flat_{seed}", multistart_n=2)
+        assert outcome["chosen"] in ("BG", "BG_DAB"), f"seed {seed}: chose {outcome['chosen']}"
+
+
+def test_select_best_preset_keeps_a_well_justified_ts_fit():
+    curve = _ts_curve(d=1200.0, xi=3000.0, seed=7)
+    result = fit_staged(curve, multistart_n=4)
+    # already exercises select_best_preset internally via fit_staged; the
+    # ladder must not have demoted a clearly-justified TS fit
+    assert "TS" in result.preset_chosen
+    assert not any(f.startswith("ladder_demoted") for f in result.flags)
+
+
+def test_compute_diagnostics_flags_low_durbin_watson_on_trending_residuals():
+    """A deliberately mis-seeded, barely-iterated fit leaves smoothly
+    trending (autocorrelated) residuals -- DW should come out well below 2
+    and get flagged."""
+    model = build_preset("BG")
+    q = np.linspace(0.05, 0.3, 200)
+    true = {"bg_C": 5.0, "pl_B": 0.4, "pl_p": 3.0}
+    I = model.eval(q, true)
+    sigma = np.full_like(q, 1.0)
+    params = model.to_lmfit_parameters(seed_values={"bg_C": 50.0, "pl_B": 0.01, "pl_p": 1.0})
+    result = model.fit(q, I, sigma=sigma, params=params, max_nfev=1)
+    diag = compute_diagnostics(model, result, q, {})
+    assert "gof" in diag and "chi2red" in diag["gof"]
+    assert diag["gof"]["durbin_watson"] < 1.3
+    assert any(f.startswith("low_durbin_watson") for f in diag["flags"])
+
+
+def test_compute_diagnostics_flags_ts_q_max_outside_window():
+    model = build_composite(["flat_background", "power_law", "teubner_strey"])
+    q = np.linspace(1e-3, 0.3, 900)
+    true = {"bg_C": 500.0, "pl_B": 1e-9, "pl_p": 4.0, "ts_S": 5e6, "ts_d": 1200.0, "ts_xi": 3000.0}
+    I = model.eval(q, true)
+    params = model.to_lmfit_parameters(seed_values=true)
+    result = model.fit(q, I, sigma=estimate_sigma_model(q, I), params=params)
+    # a deliberately wrong/narrow W_peak that excludes the true q_max
+    diag = compute_diagnostics(model, result, q, {"W_peak": (0.05, 0.06)})
+    assert "ts_q_max_outside_w_peak" in diag["flags"]
 
 
 def test_fit_staged_runs_on_real_physic_based_profile_when_available():

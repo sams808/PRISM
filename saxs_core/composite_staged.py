@@ -517,6 +517,147 @@ def _stage4_global(q: np.ndarray, I: np.ndarray, sigma: np.ndarray, model: Compo
 
 
 # =============================================================================
+# Stage 5 — diagnostics
+# =============================================================================
+
+def _durbin_watson(residual_normalized: np.ndarray) -> float:
+    """Durbin-Watson statistic on sigma-normalized residuals: ~2 means no
+    autocorrelation; the spec flags DW < 1.3 (residuals trending, usually
+    a sign the model shape is wrong somewhere)."""
+    r = np.asarray(residual_normalized, dtype=float)
+    if r.size < 2:
+        return float("nan")
+    denom = float(np.sum(r ** 2))
+    if denom <= 0:
+        return float("nan")
+    return float(np.sum(np.diff(r) ** 2) / denom)
+
+
+def _correlation_flags(result: Any, threshold: float = 0.95) -> List[str]:
+    """Flag any pair of varying parameters with |correlation| > threshold
+    (lmfit computes result.params[name].correl automatically once stderrs
+    are available)."""
+    flags: List[str] = []
+    seen = set()
+    for name, par in result.params.items():
+        if not par.vary or not getattr(par, "correl", None):
+            continue
+        for other, rho in par.correl.items():
+            key = tuple(sorted((name, other)))
+            if key in seen:
+                continue
+            seen.add(key)
+            if rho is not None and np.isfinite(rho) and abs(rho) > threshold:
+                flags.append(f"high_correlation:{key[0]}~{key[1]}:{rho:.3f}")
+    return flags
+
+
+def compute_diagnostics(model: CompositeModel, result: Any, q: np.ndarray, windows: Windows) -> Dict[str, Any]:
+    """Spec §4.2 Stage 5: chi2red/AIC/BIC (lmfit computes these already),
+    Durbin-Watson, parameter-correlation flags, and physicality flags
+    (q_max inside W_peak; xi vs d/2pi sanity; Rg vs 2pi/q_min warning)."""
+    dw = _durbin_watson(np.asarray(result.residual, dtype=float))
+    flags: List[str] = []
+    if np.isfinite(dw) and dw < 1.3:
+        flags.append(f"low_durbin_watson:{dw:.2f}")
+    flags.extend(_correlation_flags(result))
+
+    prefixes = {prefix.rstrip("_") or comp.name: prefix for prefix, comp in model.components}
+    if "ts" in prefixes:
+        prefix = prefixes["ts"]
+        d = result.params[prefix + "d"].value
+        xi = result.params[prefix + "xi"].value
+        k, kappa = 2 * math.pi / d, 1.0 / xi
+        disc = k ** 2 - kappa ** 2
+        q_max = math.sqrt(disc) if disc > 0 else None
+        lo, hi = windows.get("W_peak", (0.0, float("inf")))
+        if q_max is None or not (lo <= q_max <= hi):
+            flags.append("ts_q_max_outside_w_peak")
+        if not (xi > d / (2 * math.pi)):
+            flags.append("ts_xi_not_greater_than_d_over_2pi")
+    if "gp" in prefixes:
+        prefix = prefixes["gp"]
+        Rg = result.params[prefix + "Rg"].value
+        qmin = float(np.min(q)) if q.size else 1e-8
+        if Rg > 0.8 * (2 * math.pi / max(qmin, 1e-12)):
+            flags.append("gp_rg_poorly_constrained_vs_qmin")
+
+    gof = {"chi2red": float(result.redchi), "aic": float(result.aic), "bic": float(result.bic),
+          "n_points": int(result.ndata), "durbin_watson": dw}
+    return {"gof": gof, "flags": flags}
+
+
+# =============================================================================
+# Stage 6 — model-selection ladder
+# =============================================================================
+
+def _fit_full_range(component_names: List[str], q: np.ndarray, I: np.ndarray, sigma: np.ndarray,
+                    sample_id: str, multistart_n: int) -> Dict[str, Any]:
+    model = build_composite(component_names)
+    seeds = model.seed(q, I)
+    return _stage4_global(q, I, sigma, model, seeds, sample_id + ":" + "_".join(component_names), multistart_n)
+
+
+def _walk_ladder(order: List[str], bics: Dict[str, float], aics: Dict[str, float]) -> Tuple[str, List[Dict[str, Any]]]:
+    """Pure decision logic (no fitting): walk `order` left-to-right,
+    replacing the current pick whenever the next candidate clears
+    Delta-BIC > 10 (current's BIC minus candidate's BIC). Any disagreement
+    with the Delta-AIC > 10 verdict is recorded, but BIC always decides —
+    the spec's own explicit tiebreak rule."""
+    current = order[0]
+    disagreements: List[Dict[str, Any]] = []
+    for candidate in order[1:]:
+        d_bic = bics[current] - bics[candidate]
+        d_aic = aics[current] - aics[candidate]
+        prefer_bic = d_bic > 10.0
+        prefer_aic = d_aic > 10.0
+        if prefer_bic != prefer_aic:
+            disagreements.append({"pair": [current, candidate], "d_bic": d_bic, "d_aic": d_aic})
+        if prefer_bic:
+            current = candidate
+    return current, disagreements
+
+
+def select_best_preset(
+    q: np.ndarray, I: np.ndarray, sigma: np.ndarray, assembled_name: str,
+    assembled_model: CompositeModel, assembled_result: Any,
+    sample_id: str, multistart_n: int,
+) -> Dict[str, Any]:
+    """Spec §4.2 Stage 6: the ladder BG -> BG_DAB -> (whatever stages 1-4
+    assembled). Primary criterion is ΔBIC > 10 (lower BIC wins); ΔAIC is
+    cross-checked and any disagreement between the two is recorded, but
+    BIC always decides ties (spec's own explicit tiebreak). Simplification
+    (noted for the record): when the assembled composite is BG_TS_GP, this
+    compares it directly against the BG/BG_DAB baseline in one shot rather
+    than also separately re-testing BG_TS as an intermediate rung — the
+    guardrail already in stages 1-4 gates whether GP was added at all."""
+    candidates: Dict[str, Tuple[CompositeModel, Any]] = {}
+    ladder: Dict[str, Any] = {}
+
+    bg_fit = _fit_full_range(["flat_background", "power_law"], q, I, sigma, sample_id, multistart_n)
+    candidates["BG"] = (bg_fit["model"], bg_fit["result"])
+    ladder["BG"] = {"bic": float(bg_fit["result"].bic), "aic": float(bg_fit["result"].aic)}
+
+    dab_fit = _fit_full_range(["flat_background", "power_law", "dab"], q, I, sigma, sample_id, multistart_n)
+    candidates["BG_DAB"] = (dab_fit["model"], dab_fit["result"])
+    ladder["BG_DAB"] = {"bic": float(dab_fit["result"].bic), "aic": float(dab_fit["result"].aic)}
+
+    if assembled_name not in candidates:
+        candidates[assembled_name] = (assembled_model, assembled_result)
+        ladder[assembled_name] = {"bic": float(assembled_result.bic), "aic": float(assembled_result.aic)}
+
+    order = ["BG", "BG_DAB"] + ([assembled_name] if assembled_name not in ("BG", "BG_DAB") else [])
+    bics = {name: candidates[name][1].bic for name in order}
+    aics = {name: candidates[name][1].aic for name in order}
+    current_name, disagreements = _walk_ladder(order, bics, aics)
+    if disagreements:
+        ladder["disagreements"] = disagreements
+
+    final_model, final_result = candidates[current_name]
+    return {"chosen": current_name, "model": final_model, "result": final_result, "ladder": ladder}
+
+
+# =============================================================================
 # Orchestrator
 # =============================================================================
 
@@ -595,23 +736,35 @@ def fit_staged(
     best_values = {name: current_result.params[name].value for name in current_result.params}
     stage4 = _stage4_global(q, I, sigma, current_model, best_values, sample_id, multistart_n)
     stages["stage4"] = {"redchi": float(stage4["result"].redchi), "n_multistart": multistart_n}
-    final_model, final_result = stage4["model"], stage4["result"]
+    assembled_model, assembled_result = stage4["model"], stage4["result"]
 
-    no_peak = not had_ts
-    if no_peak:
-        flags.append("no_peak")
-
-    preset_chosen = {
+    assembled_name = {
         ("flat_background", "power_law"): "BG",
         ("flat_background", "power_law", "teubner_strey"): "BG_TS",
         ("flat_background", "power_law", "teubner_strey", "guinier_porod"): "BG_TS_GP",
     }.get(tuple(preset_names), "+".join(preset_names))
+
+    stage6 = select_best_preset(q, I, sigma, assembled_name, assembled_model, assembled_result,
+                                sample_id, multistart_n)
+    stages["stage6"] = stage6["ladder"]
+    preset_chosen = stage6["chosen"]
+    final_model, final_result = stage6["model"], stage6["result"]
+    if preset_chosen != assembled_name:
+        flags.append(f"ladder_demoted:{assembled_name}->{preset_chosen}")
+
+    no_peak = "teubner_strey" not in {comp.name for _, comp in final_model.components}
+    if no_peak and had_ts:
+        flags.append("no_peak")  # TS was fit through stages 1-4 but the ladder rejected it on BIC
+
+    diagnostics = compute_diagnostics(final_model, final_result, q, active_windows)
+    stages["stage5"] = diagnostics
+    flags.extend(diagnostics["flags"])
 
     return FitResult(
         sample_id=sample_id, preset_chosen=preset_chosen, residual_mode=residual_mode, loss=loss,
         windows=active_windows, sigma_model=hygiene.sigma_model,
         params=_params_to_dict(final_result.params),
         derived=_build_derived(final_model, final_result.params),
-        gof=_gof(final_result), flags=flags, seeds_used=best_values,
+        gof=diagnostics["gof"], flags=flags, seeds_used=best_values,
         multistart_n=multistart_n, no_peak=no_peak, stages=stages,
     )
