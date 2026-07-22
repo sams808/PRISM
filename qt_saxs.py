@@ -28,7 +28,7 @@ from saxs_core.analysis import (
 from saxs_core.chemistry import CapillaryConfig, SamplePhysicsConfig
 from saxs_core.composite_batch import BatchItem, batch_to_csv_rows, run_batch, write_batch_csv
 from saxs_core.composite_fit import PRESETS, CompositeModel, build_composite, build_preset
-from saxs_core.composite_staged import _build_derived, apply_hygiene, fit_staged, propose_windows
+from saxs_core.composite_staged import fit_staged, propose_windows
 from saxs_core.curve import Curve
 from saxs_core.loader import load_curve
 from saxs_core.reduction import CorrectionSettings, correct_sample
@@ -265,9 +265,10 @@ class SaxsWorkspace(QWidget):
         self.comp_report.setMaximumHeight(140)
         crl.addWidget(self.comp_report)
         crl.addWidget(QLabel("Batch results"))
-        self.comp_batch_table = QTableWidget(0, 7)
+        self.comp_batch_table = QTableWidget(0, 10)
         self.comp_batch_table.setHorizontalHeaderLabels(
-            ["sample_id", "preset_chosen", "d (Å)", "xi (Å)", "fa", "chi2red", "d_TS/d_gauss"])
+            ["sample_id", "preset_chosen", "d (Å)", "xi (Å)", "fa", "chi2red", "d_TS/d_gauss",
+             "rms_log", "at_bounds", "q_cut"])
         self.comp_batch_table.setEditTriggers(QTableWidget.NoEditTriggers)
         crl.addWidget(self.comp_batch_table, 1)
         comp_splitter.addWidget(comp_right)
@@ -563,28 +564,21 @@ class SaxsWorkspace(QWidget):
     # ------------------------------------------------------------------
     @staticmethod
     def _compute_composite_fit(curve: Curve, sample_id: str, windows, multistart_n: int, preset_name: str):
-        if preset_name == "Auto (BIC ladder)":
-            result = fit_staged(curve, sample_id=sample_id, windows=windows, multistart_n=multistart_n)
-            model = _model_for_preset_name(result.preset_chosen)
-            params = {k: v["value"] for k, v in result.params.items()}
-            return {"model": model, "params": params, "derived": result.derived, "gof": result.gof,
-                    "preset": result.preset_chosen, "flags": result.flags, "curve": curve}
-
-        hygiene = apply_hygiene(curve)
-        q = np.asarray(hygiene.curve.q, dtype=float)
-        I = np.asarray(hygiene.curve.intensity, dtype=float)
-        sigma = np.asarray(hygiene.curve.sigma, dtype=float)
-        model = _model_for_preset_name(preset_name)
-        seeds = model.seed(q, I, windows)
-        params_in = model.to_lmfit_parameters(seed_values=seeds)
-        lm_result = model.fit(q, I, sigma=sigma, params=params_in)
-        params = {k: float(v.value) for k, v in lm_result.params.items()}
-        derived = _build_derived(model, lm_result.params)
-        gof = {"chi2red": float(lm_result.redchi), "aic": float(lm_result.aic), "bic": float(lm_result.bic),
-               "n_points": int(len(q))}
-        fitted_curve = Curve(q=q, intensity=I, sigma=sigma, name=curve.name)
-        return {"model": model, "params": params, "derived": derived, "gof": gof,
-                "preset": preset_name, "flags": [], "curve": fitted_curve}
+        """Both the "Auto (BIC ladder)" and a manually-picked preset run
+        through the SAME staged pipeline (hygiene, high-q masking, window
+        proposal, seeded global multistart refinement) — v2 §4's
+        requirement that a forced preset never falls back to a one-shot
+        fit from a single generic seed. fit_staged's `force_preset` skips
+        only the ladder's OWN model-selection decision, not any of the
+        actual fitting machinery."""
+        force = None if preset_name == "Auto (BIC ladder)" else preset_name
+        result = fit_staged(curve, sample_id=sample_id, windows=windows, multistart_n=multistart_n,
+                            force_preset=force)
+        model = _model_for_preset_name(result.preset_chosen)
+        params = {k: v["value"] for k, v in result.params.items()}
+        return {"model": model, "params": params, "derived": result.derived, "gof": result.gof,
+                "preset": result.preset_chosen, "flags": result.flags, "curve": curve,
+                "windows": result.windows, "residual_mode": result.residual_mode}
 
     def run_composite_fit(self) -> None:
         from qt_worker import run_in_thread
@@ -622,6 +616,13 @@ class SaxsWorkspace(QWidget):
         self.comp_report.setPlainText(self._composite_report_text(payload))
 
     def _render_comp_result(self) -> None:
+        """Data + total + component overlay on top, log10-residual
+        (v2 §5) underneath with W_peak shaded — log10 residuals rather
+        than mode-specific ones since they're always computable regardless
+        of which residual_mode the fit actually used (the same rms_log
+        diagnostic reported in the panel below), giving one consistent
+        view instead of two differently-scaled residual plots depending
+        on preset/data type."""
         payload = self._comp_last
         if payload is None:
             return
@@ -629,7 +630,8 @@ class SaxsWorkspace(QWidget):
         self.comp_plot.preserve_zoom((curve.name, payload["preset"]))
         fig = self.comp_plot.figure
         fig.clf()
-        ax = fig.add_subplot(111)
+        ax = fig.add_subplot(211)
+        ax_res = fig.add_subplot(212, sharex=ax)
         q = np.asarray(curve.q, float)
         I = np.asarray(curve.intensity, float)
         ax.loglog(q, np.clip(I, 1e-12, None), ".", ms=2, color="black", label=curve.name)
@@ -638,9 +640,21 @@ class SaxsWorkspace(QWidget):
         for name, comp_curve in model.eval_components(q, params).items():
             ax.loglog(q, np.clip(comp_curve, 1e-12, None), lw=1.0, alpha=0.7, label=name)
         ax.legend(fontsize=7)
-        ax.set_xlabel("q (Å⁻¹)")
         ax.set_ylabel("I (a.u.)")
         ax.grid(alpha=0.25, which="both")
+        ax.tick_params(labelbottom=False)
+
+        w_peak = (payload.get("windows") or {}).get("W_peak")
+        if w_peak:
+            ax.axvspan(w_peak[0], w_peak[1], color="tab:blue", alpha=0.08)
+            ax_res.axvspan(w_peak[0], w_peak[1], color="tab:blue", alpha=0.08)
+        resid = np.log10(np.clip(total, 1e-300, None)) - np.log10(np.clip(I, 1e-300, None))
+        ax_res.semilogx(q, resid, ".", ms=2, color="steelblue")
+        ax_res.axhline(0.0, color="0.5", lw=0.8)
+        ax_res.set_xlabel("q (Å⁻¹)")
+        ax_res.set_ylabel("log10 resid.")
+        ax_res.grid(alpha=0.25, which="both")
+
         self.comp_plot.restore_zoom(ax)
         fig.tight_layout()
         self.comp_plot.canvas.draw_idle()
@@ -702,7 +716,7 @@ class SaxsWorkspace(QWidget):
         self._comp_batch_curves = curves_by_id
         rows = batch_to_csv_rows(batch, curves_by_id)
         cols = ["sample_id", "preset_chosen", "derived_d", "derived_xi", "derived_fa",
-                "gof_chi2red", "d_ts_over_d_gauss"]
+                "gof_chi2red", "d_ts_over_d_gauss", "rms_log", "at_bounds", "q_cut"]
         self.comp_batch_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, key in enumerate(cols):

@@ -127,7 +127,7 @@ def run_batch(
                                 sample_id=it.sample_id, preset_chosen=baseline.preset_chosen,
                                 residual_mode=baseline.residual_mode, loss=baseline.loss,
                                 windows=baseline.windows, sigma_model=baseline.sigma_model,
-                                params=_params_to_dict(cont_result.params),
+                                params=_params_to_dict(cont_result.params, chi2red=float(cont_result.redchi)),
                                 derived=_build_derived(model, cont_result.params),
                                 gof=diagnostics["gof"],
                                 flags=baseline.flags + ["continuation_seeded"] + diagnostics["flags"],

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 DEFAULT_PREFIXES: Dict[str, str] = {
     "flat_background": "bg_",
     "power_law": "pl_",
+    "power_law2": "pl2_",
     "guinier": "gu_",
     "guinier_porod": "gp_",
     "beaucage_unified": "bu_",
@@ -43,11 +44,15 @@ DEFAULT_PREFIXES: Dict[str, str] = {
     "broad_peak": "bp_",
 }
 
-# spec §2.2 registered composite presets
+# spec §2.2 registered composite presets (BG_TS_PL2 added in v2:
+# PRISM_fit_pipeline_upgrade_prompt.md §3 — the low-q-upturn-without-a-
+# genuine-Guinier-knee case, preferred over BG_TS_GP by the model-
+# selection ladder unless a knee is actually detected)
 PRESETS: Dict[str, List[str]] = {
     "BG": ["flat_background", "power_law"],
     "BG_DAB": ["flat_background", "power_law", "dab"],
     "BG_TS": ["flat_background", "power_law", "teubner_strey"],
+    "BG_TS_PL2": ["flat_background", "power_law", "teubner_strey", "power_law2"],
     "BG_TS_GP": ["flat_background", "power_law", "teubner_strey", "guinier_porod"],
     "BG_BP": ["flat_background", "power_law", "broad_peak"],
 }
@@ -152,11 +157,24 @@ class CompositeModel:
     def fit(
         self, q: np.ndarray, I: np.ndarray, sigma: Optional[np.ndarray] = None,
         params: Optional["lmfit.Parameters"] = None, method: str = "least_squares",
+        residual_mode: str = "weighted_linear",
         **kwargs: Any,
     ) -> "lmfit.model.ModelResult":
         """Weighted least squares by default (weights = 1/sigma when sigma
-        is given, matching the spec's default residual mode — see
-        composite_staged.py for the log-residual/soft_l1 options).
+        is given). `residual_mode="log10"` (v2: PRISM_fit_pipeline_upgrade_
+        prompt.md §1) fits log10(I_model) against log10(I_data) instead,
+        UNWEIGHTED — appropriate when sigma isn't a trustworthy Poisson-
+        consistent uncertainty (a.u.-type/rescaled intensity data, per
+        composite_staged.detect_data_type), since SAXS curves routinely
+        span many decades and a handful of high-intensity low-q points
+        would otherwise dominate a linear-weighted objective regardless of
+        how sigma is chosen. Implemented via a raw lmfit.Minimizer (not
+        Model.fit()) since fitting in log-space isn't just a weights
+        change — the RESIDUAL definition itself changes; the returned
+        MinimizerResult exposes the same .redchi/.aic/.bic/.params/
+        .residual/.ndata attributes as a Model.fit() ModelResult, so every
+        downstream caller (composite_staged.py's stage functions,
+        diagnostics) works unmodified regardless of which mode ran.
 
         method="least_squares" (scipy's trust-region-reflective algorithm,
         per spec §4.5's own "lmfit/least_squares" recommendation) rather
@@ -170,8 +188,20 @@ class CompositeModel:
         shape of problem."""
         q = np.asarray(q, dtype=float)
         I = np.asarray(I, dtype=float)
-        model = self.to_lmfit_model()
         params = params if params is not None else self.to_lmfit_parameters()
+
+        if residual_mode == "log10":
+            import lmfit
+            log_I = np.log10(np.clip(I, 1e-300, None))
+
+            def _log10_residual(p: "lmfit.Parameters") -> np.ndarray:
+                total = self.eval(q, p)
+                return np.log10(np.clip(total, 1e-300, None)) - log_I
+
+            minimizer = lmfit.Minimizer(_log10_residual, params)
+            return minimizer.minimize(method=method, **kwargs)
+
+        model = self.to_lmfit_model()
         weights = None
         if sigma is not None:
             sigma = np.asarray(sigma, dtype=float)

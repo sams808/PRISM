@@ -45,9 +45,9 @@ def test_component_params_within_declared_bounds(comp):
         assert p.min <= p.value <= p.max
 
 
-def test_registry_contains_all_eight_components():
+def test_registry_contains_all_nine_components():
     assert set(COMPONENTS) == {
-        "flat_background", "power_law", "guinier", "guinier_porod",
+        "flat_background", "power_law", "power_law2", "guinier", "guinier_porod",
         "beaucage_unified", "dab", "teubner_strey", "broad_peak",
     }
     for name, cls in COMPONENTS.items():

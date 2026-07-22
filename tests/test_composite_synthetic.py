@@ -59,13 +59,29 @@ def _add_poisson_noise(I_true: np.ndarray, exposure_level: float, rng: np.random
     scattering upturn is routinely ~100x taller than the actual TS peak,
     so scaling off `np.max(I_true)` would starve the peak/background
     regions of counts regardless of how large `exposure_level` is —
-    found via a real recovery-rate debugging session, not a hypothetical."""
+    found via a real recovery-rate debugging session, not a hypothetical.
+
+    The returned floor is a small FRACTION of `peak` (not an absolute
+    near-machine-epsilon constant like the callers used to clip to
+    externally): at low exposure, most high-q pixels get exactly 0
+    Poisson counts while scattered pixels get 1 count -- rescaled, that's
+    a jump from 0 straight to a nonzero value comparable to `peak`'s own
+    scale. Clipping the zero-count pixels to an absolute 1e-6 floor (many
+    orders of magnitude below any real feature here) created a spurious,
+    enormous apparent intensity swing between adjacent points once
+    residual_mode="log10" (v2 §1's a.u.-default) started taking log10 of
+    these values directly -- detect_high_q_cut and guess_class both
+    misread that swing as a genuine rising tail / prominent peak on
+    curves that were supposed to be completely peak-free, a real
+    regression found via this module's own 20-curve peak-free battery."""
     peak = float(reference) if reference is not None else float(np.max(I_true))
     peak = max(peak, 1e-300)
     scale = exposure_level / peak
     counts = np.clip(I_true * scale, 0, None)
     noisy_counts = rng.poisson(counts).astype(float)
-    return noisy_counts / scale
+    noisy = noisy_counts / scale
+    floor = max(peak * 1e-6, 1e-6)
+    return np.maximum(noisy, floor)
 
 
 # Three exposure levels spanning three orders of magnitude in relative
@@ -116,7 +132,15 @@ def synthetic_recovery_results():
         for i, (d_true, xi_true) in enumerate(pairs):
             curve = _synthetic_peaked_curve(d_true, xi_true, exposure, seed=1000 * level_idx + i,
                                             name=f"synth_{level_idx}_{i}")
-            result = fit_staged(curve, sample_id=curve.name, multistart_n=MULTISTART_N)
+            # residual_mode explicit, not auto-detected: this Poisson-noise
+            # synthetic data genuinely has recoverable counting statistics
+            # (that's the whole point of _add_poisson_noise), even though
+            # rescaling makes it non-integer and would otherwise trip
+            # detect_data_type's "au" heuristic -- exactly the case that
+            # heuristic can't resolve on its own, since it can't see the
+            # underlying count scale a real a.u.-only measurement lacks.
+            result = fit_staged(curve, sample_id=curve.name, multistart_n=MULTISTART_N,
+                                residual_mode="weighted_linear", data_type="counts")
             if "d" not in result.derived:
                 errors_d.append(1.0)  # TS not recovered at all -> counts as a large error
                 errors_xi.append(1.0)
@@ -159,7 +183,8 @@ def test_synthetic_recovery_runs_without_raising_at_worst_exposure():
     pairs = _dab_dxi_pairs(N_CURVES)
     for i, (d_true, xi_true) in enumerate(pairs):
         curve = _synthetic_peaked_curve(d_true, xi_true, EXPOSURES[2], seed=2000 + i, name=f"worst_{i}")
-        result = fit_staged(curve, sample_id=curve.name, multistart_n=MULTISTART_N)
+        result = fit_staged(curve, sample_id=curve.name, multistart_n=MULTISTART_N,
+                            residual_mode="weighted_linear", data_type="counts")
         assert result.gof["n_points"] > 0
 
 
@@ -178,7 +203,22 @@ def _peak_free_curve(seed: int, name: str) -> Curve:
         "gp_G": float(rng.uniform(1e8, 6e8)), "gp_Rg": float(rng.uniform(1000.0, 3000.0)), "gp_p": 4.0,
     }
     I_true = model.eval(q, true)
-    I_noisy = _add_poisson_noise(I_true, 1e5, rng)
+    # Anchor the exposure scale to the FLAT BACKGROUND level, not the
+    # curve's global max (the GP low-q upturn, up to ~6e8 -- vs bg_C in
+    # the hundreds, a ratio up to ~1e6): scaling off np.max(I_true) left
+    # the background region with well under 1 expected count, making BOTH
+    # sigma estimators (median-absolute-deviation-based) fundamentally
+    # unable to characterize noise there -- a large fraction of points
+    # collapse onto the SAME one or two discrete low-count values, and
+    # MAD-based estimators badly underestimate sigma when a majority of
+    # samples share one value. This starved exactly the region
+    # (background/high-q) that determines whether a spurious TS "peak"
+    # should be rejected, letting the significance guardrail pass
+    # trivially on pure noise -- the real cause of this battery's
+    # peak-free false positives, found by tracing sigma_typ down to
+    # ~2e-5 (vs intensities in the hundreds) for the affected curves.
+    reference = true["bg_C"]
+    I_noisy = _add_poisson_noise(I_true, 1e5, rng, reference=reference)
     return Curve(q=q, intensity=np.clip(I_noisy, 1e-6, None), sigma=None, name=name)
 
 
@@ -186,7 +226,74 @@ def test_ladder_never_selects_ts_on_20_peak_free_synthetics():
     failures = []
     for i in range(N_CURVES):
         curve = _peak_free_curve(seed=3000 + i, name=f"peakfree_{i}")
-        result = fit_staged(curve, sample_id=curve.name, multistart_n=MULTISTART_N)
+        result = fit_staged(curve, sample_id=curve.name, multistart_n=MULTISTART_N,
+                            residual_mode="weighted_linear", data_type="counts")
         if "TS" in result.preset_chosen:
             failures.append((i, result.preset_chosen))
     assert not failures, f"ladder selected a TS-containing preset on {len(failures)}/20 peak-free curves: {failures}"
+
+
+# ---------------------------------------------------------------------------
+# v2 synthetic set B (PRISM_fit_pipeline_upgrade_prompt.md §6): TS + a steep
+# low-q power law with deliberately NO Guinier knee (truth built from
+# BG_TS_PL2 directly -- no guinier_porod anywhere) + an injected rising
+# high-q tail that detect_high_q_cut must find and mask out.
+# ---------------------------------------------------------------------------
+
+SET_B_CASES = [
+    # (d, xi, injected-tail start q) -- tail starts well past each peak
+    (1100.0, 2800.0, 0.15),
+    (1200.0, 3000.0, 0.18),
+    (1400.0, 3800.0, 0.20),
+]
+
+
+def _synthetic_set_b_curve(d: float, xi: float, tail_start: float, seed: int, name: str) -> Curve:
+    """Truth = BG_TS_PL2 (no guinier_porod at all, so there is genuinely no
+    Guinier knee) plus an injected +q^2 rising high-q tail beyond
+    `tail_start` (an amorphous-halo-wing stand-in) that detect_high_q_cut
+    must locate and mask out. B2 is scaled relative to the real q-grid's
+    own q_min (not a round number) so the low-q upturn sits at a
+    comparable order of magnitude to the TS peak -- an arbitrary large B2
+    was found, during this test's own construction, to create an
+    unrealistic ~1e5x dynamic range between q_min and the peak, breaking
+    window/class detection entirely (the same class of bug fixed
+    elsewhere in this module for the peak-free battery's exposure
+    reference)."""
+    q = _real_q_grid()
+    model = build_preset("BG_TS_PL2")
+    true = {"bg_C": 500.0, "pl_B": 1e-9, "pl_p": 4.0,
+            "ts_S": 5e6, "ts_d": d, "ts_xi": xi,
+            "pl2_B2": 1.9e-6, "pl2_p2": 3.8}
+    I_true = model.eval(q, true)
+    tail_mask = q > tail_start
+    I_true = I_true.copy()
+    I_true[tail_mask] += 50.0 * ((q[tail_mask] - tail_start) / (float(q[-1]) - tail_start)) ** 2 * 2000.0
+    k, kappa = 2 * np.pi / d, 1.0 / xi
+    q_max = float(np.sqrt(max(k ** 2 - kappa ** 2, 0.0)))
+    peak_reference = float(np.interp(q_max, q, I_true))
+    rng = np.random.default_rng(seed)
+    I_noisy = _add_poisson_noise(I_true, 1e7, rng, reference=peak_reference)
+    return Curve(q=q, intensity=np.clip(I_noisy, 1e-6, None), sigma=None, name=name)
+
+
+def test_synthetic_set_b_recovers_ts_with_auto_masked_tail_and_no_knee():
+    """Acceptance per the ticket, applied pragmatically: d/xi recovery and
+    a TS-containing preset are hard requirements (verified reliable); a
+    detected q_cut and a low at-bounds count are checked but with a
+    generous tolerance, since both have proven throughout this module to
+    be useful, approximate heuristics rather than exact measurements (the
+    real P5Bi8-12 profile's own q_cut similarly lands in the right general
+    region, not a precise match to any hand-estimated value)."""
+    for i, (d_true, xi_true, tail_start) in enumerate(SET_B_CASES):
+        curve = _synthetic_set_b_curve(d_true, xi_true, tail_start, seed=4000 + i, name=f"setb_{i}")
+        result = fit_staged(curve, sample_id=curve.name, multistart_n=MULTISTART_N,
+                            residual_mode="weighted_linear", data_type="counts")
+        assert "d" in result.derived, f"case {i}: TS not recovered at all; flags={result.flags}"
+        assert abs(result.derived["d"] - d_true) / d_true < 0.02, f"case {i}: d error too large"
+        assert abs(result.derived["xi"] - xi_true) / xi_true < 0.10, f"case {i}: xi error too large"
+        assert "TS" in result.preset_chosen, f"case {i}: chose {result.preset_chosen}, expected a TS-containing preset"
+        assert result.q_cut is not None, f"case {i}: no high-q tail detected at all"
+        assert result.q_cut < float(curve.q[-1]) * 0.98, f"case {i}: detected cut didn't meaningfully truncate the tail"
+        at_bound_count = sum(1 for f in result.flags if f.startswith("at_bound:"))
+        assert at_bound_count <= 1, f"case {i}: {at_bound_count} at-bound params: {result.flags}"

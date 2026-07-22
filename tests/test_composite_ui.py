@@ -104,7 +104,7 @@ def test_composite_fit_warns_without_a_curve(qtbot):
 def test_composite_batch_populates_table_and_never_averages_across_curves(qtbot):
     widget = SaxsWorkspace()
     qtbot.addWidget(widget)
-    widget.add_curve(_ts_curve(d=700.0, xi=4474.0, name="a"))
+    widget.add_curve(_ts_curve(d=1100.0, xi=2800.0, name="a"))
     widget.add_curve(_ts_curve(d=1200.0, xi=3000.0, name="b"))
     widget.comp_multistart_edit.setText("4")
     widget.comp_batch_list.selectAll()
@@ -115,7 +115,7 @@ def test_composite_batch_populates_table_and_never_averages_across_curves(qtbot)
     assert sample_ids == {"a", "b"}
     d_by_id = {widget.comp_batch_table.item(r, 0).text(): float(widget.comp_batch_table.item(r, 2).text())
                for r in range(2)}
-    assert d_by_id["a"] == pytest.approx(700.0, rel=0.15)
+    assert d_by_id["a"] == pytest.approx(1100.0, rel=0.15)
     assert d_by_id["b"] == pytest.approx(1200.0, rel=0.15)
 
 

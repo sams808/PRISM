@@ -141,6 +141,54 @@ class PowerLaw(Component):
 
 
 # =============================================================================
+# 1.2b power_law2 — low-q upturn role (v2: PRISM_fit_pipeline_upgrade_
+# prompt.md §3). Same math as power_law; a SEPARATE component (not just
+# tighter bounds on the same one) because the BG_TS_PL2 preset uses BOTH
+# power_law (Porod/background role, high-q side) AND power_law2 (low-q
+# upturn role) simultaneously with independent parameters.
+# =============================================================================
+
+class PowerLaw2(Component):
+    """Low-q upturn as a plain power law (v2 §3) instead of an
+    unconstrained guinier_porod, for use when no genuine Guinier knee is
+    present in the data (composite_staged.detect_guinier_knee) — for
+    powdered/ground samples, the low-q upturn is routinely inter-particle
+    or grain-surface (grinding) scattering, not a real finite-size Guinier
+    feature, and fitting it with guinier_porod's Rg then goes
+    unconstrained (found on the real P5Bi8-12 fit: Rg~1000 Å with no knee
+    actually present in the data)."""
+    name = "power_law2"
+
+    def params(self) -> List[Param]:
+        return [
+            Param("B2", 1.0, 0.0, np.inf, unit="a.u.", doc="Low-q upturn prefactor."),
+            Param("p2", 3.5, 2.5, 4.3, doc=(
+                "Low-q upturn exponent — bounded to [2.5, 4.3], the "
+                "physically expected range for powder/grain-surface "
+                "scattering, distinct from power_law's own [1, 4.5] "
+                "general-purpose bounds.")),
+        ]
+
+    def eval(self, q: np.ndarray, B2: float = 1.0, p2: float = 3.5) -> np.ndarray:
+        q = np.asarray(q, dtype=float)
+        return float(B2) * np.power(np.clip(q, 1e-300, None), -float(p2))
+
+    def seed(self, q, I, windows=None) -> Dict[str, float]:
+        q = np.asarray(q, dtype=float)
+        I = np.asarray(I, dtype=float)
+        loq = _window_mask(q, windows, "W_loq")
+        mask = loq if loq is not None else (q <= float(np.max(q)) / 10.0 if q.size else np.ones_like(q, dtype=bool))
+        mask = mask & (q > 0) & (I > 0)
+        if int(np.sum(mask)) < 2:
+            mask = (q > 0) & (I > 0)
+        if int(np.sum(mask)) < 2:
+            return {"B2": float(np.max(I)) if I.size else 1.0, "p2": 3.5}
+        slope, intercept = np.polyfit(np.log(q[mask]), np.log(I[mask]), 1)
+        p2 = float(np.clip(-slope, 2.5, 4.3))
+        return {"B2": max(float(np.exp(intercept)), 0.0), "p2": p2}
+
+
+# =============================================================================
 # 1.3 guinier — I(q) = G * exp(-q^2 Rg^2 / 3)
 # =============================================================================
 
@@ -404,7 +452,7 @@ class BroadPeak(Component):
 
 COMPONENTS: Dict[str, Type[Component]] = {
     cls.name: cls for cls in (
-        FlatBackground, PowerLaw, Guinier, GuinierPorod,
+        FlatBackground, PowerLaw, PowerLaw2, Guinier, GuinierPorod,
         BeaucageUnified, Dab, TeubnerStrey, BroadPeak,
     )
 }
