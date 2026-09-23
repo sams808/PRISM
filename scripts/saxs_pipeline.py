@@ -1,12 +1,18 @@
-"""SAXS 2.0 command line: frame inventory, batch sector reduction and (from phase 5) the whole
-project pipeline driven by a JSON configuration.
+"""SAXS 2.0 command line: frame inventory, batch sector reduction and the whole project pipeline
+driven by a JSON configuration.
 
 Usage (run with the Python that has fabio / xraydb / lmfit, e.g. ``py -3.11``)::
 
+    saxs_pipeline.py init CONFIG.json [--frames-root DIR ...] [--output-dir DIR]     write a template configuration
+    saxs_pipeline.py run CONFIG.json [--steps inventory reduce describe fit robustness figures tables]
+    saxs_pipeline.py inventory --config CONFIG.json          (the inventory step alone)
+    saxs_pipeline.py reduce --config CONFIG.json             (inventory + reduce)
     saxs_pipeline.py inventory ROOT [ROOT ...] -o inventory.csv [--empty-pattern RE] [--calibrant-pattern RE]
                      [--exclude RE] [--name-from stem|comment] [--pairing same_folder|nearest_time] [--no-diagnostics]
     saxs_pipeline.py reduce ROOT [ROOT ...] -o OUTDIR [--samples-table samples.csv] [--energy-ev E]
                      [--exclude RE] [--pairing RULE] [--explicit pairs.csv] [--key-regex RE] [reduction options]
+
+Exit codes: 0 success, 1 error, 2 finished with unpaired samples.
 
 ``samples.csv`` columns: ``sample`` and either ``mu_mm`` or ``composition`` + ``density_g_cm3``
 (composition in any syntax the chemistry parser accepts, e.g. ``50.6(SiO2)13.6(B2O3)...``).
@@ -27,8 +33,33 @@ def _progress(i: int, n: int, msg: str) -> None:
     print(f"  [{i:3d}/{n:3d}] {msg}", flush=True)
 
 
+def _run_config(path: str, steps) -> int:
+    from saxs.core import pipeline as pl
+    cfg = pl.ProjectConfig.load(path)
+    manifest = pl.run(cfg, steps, progress=None, log=print)
+    inv = manifest.data.get("steps", {}).get("inventory", {}).get("notes", {})
+    print(f"manifest -> {manifest.path}")
+    return 2 if inv.get("n_unpaired") else 0
+
+
+def cmd_init(a: argparse.Namespace) -> int:
+    from saxs.core import pipeline as pl
+    if os.path.exists(a.config) and not a.force:
+        print(f"{a.config} exists (use --force to overwrite)")
+        return 1
+    cfg = pl.ProjectConfig.template(a.frames_root, a.output_dir)
+    cfg.save(a.config)
+    print(f"template configuration -> {a.config}")
+    return 0
+
+
+def cmd_run(a: argparse.Namespace) -> int:
+    return _run_config(a.config, a.steps or list(__import__("saxs.core.pipeline", fromlist=["STEPS"]).STEPS))
+
+
 def _add_scan_args(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("roots", nargs="+", help="folder(s) of raw frames (scanned recursively)")
+    ap.add_argument("roots", nargs="*", help="folder(s) of raw frames (scanned recursively); or use --config")
+    ap.add_argument("--config", default=None, help="JSON project configuration (then ROOT arguments are ignored)")
     ap.add_argument("--empty-pattern", default=r"(?i)empty")
     ap.add_argument("--calibrant-pattern", default=r"(?i)agbeh")
     ap.add_argument("--exclude", default=None, help="regex on the relative path / stem of frames to skip")
@@ -39,6 +70,11 @@ def _add_scan_args(ap: argparse.ArgumentParser) -> None:
 
 
 def cmd_inventory(a: argparse.Namespace) -> int:
+    if a.config:
+        return _run_config(a.config, ["inventory"])
+    if not a.roots:
+        print("give frame folders or --config")
+        return 1
     recs = fr.scan_frames(a.roots, a.empty_pattern, a.calibrant_pattern, a.exclude, a.name_from,
                           diagnostics=not a.no_diagnostics, progress=_progress,
                           on_error=lambda p, e: print(f"  !! {p}: {type(e).__name__}: {e}"),
@@ -54,6 +90,11 @@ def cmd_inventory(a: argparse.Namespace) -> int:
 
 
 def cmd_reduce(a: argparse.Namespace) -> int:
+    if a.config:
+        return _run_config(a.config, ["inventory", "reduce"])
+    if not a.roots or not a.output:
+        print("give frame folders and -o OUTDIR, or --config")
+        return 1
     recs = fr.scan_frames(a.roots, a.empty_pattern, a.calibrant_pattern, a.exclude, a.name_from, diagnostics=False,
                           on_error=lambda p, e: print(f"  !! {p}: {type(e).__name__}: {e}"),
                           default_wavelength_A=a.wavelength_A)
@@ -88,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     red = sub.add_parser("reduce", help="scan, pair and reduce every sample frame")
     _add_scan_args(red)
-    red.add_argument("-o", "--output", required=True, help="output folder for the .dat curves and the summary")
+    red.add_argument("-o", "--output", default=None, help="output folder for the .dat curves and the summary")
     red.add_argument("--samples-table", default=None, help="CSV with sample + mu_mm or composition + density_g_cm3")
     red.add_argument("--key-regex", default=None, help="regex (one group) mapping a frame name to its samples-table key")
     red.add_argument("--energy-ev", type=float, default=None, help="override the frame energy for mu")
@@ -98,13 +139,29 @@ def build_parser() -> argparse.ArgumentParser:
     red.add_argument("--vertical-half-deg", type=float, default=30.0)
     red.add_argument("--header-centre", action="store_true", help="keep the header beam centre (no refinement)")
     red.set_defaults(func=cmd_reduce)
+
+    ini = sub.add_parser("init", help="write a template JSON configuration")
+    ini.add_argument("config")
+    ini.add_argument("--frames-root", nargs="*", default=None)
+    ini.add_argument("--output-dir", default="prism_saxs_output")
+    ini.add_argument("--force", action="store_true")
+    ini.set_defaults(func=cmd_init)
+
+    run = sub.add_parser("run", help="run the project pipeline (all steps, or --steps)")
+    run.add_argument("config")
+    run.add_argument("--steps", nargs="*", default=None, choices=("inventory", "reduce", "describe", "fit", "robustness", "figures", "tables"))
+    run.set_defaults(func=cmd_run)
     return ap
 
 
 def main(argv=None) -> int:
     ap = build_parser()
     a = ap.parse_args(argv)
-    return int(a.func(a))
+    try:
+        return int(a.func(a))
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        print(f"error: {exc}")
+        return 1
 
 
 if __name__ == "__main__":

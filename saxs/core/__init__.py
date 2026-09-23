@@ -29,6 +29,12 @@ from saxs.core.edf_sectors import SectorReduction, reduce_arrays, reduce_frame_p
 from saxs.core.frames import FramePair, FrameRecord, PairingResult, inventory_table, pair_frames, scan_frames, write_inventory
 from saxs.core.sector_batch import (MuSource, ReducedSample, ReductionOptions, classify_loading, load_reduced_dat,
                                     load_reduced_folder, reduce_pairs, summary_table, write_reduced_dat)
+from saxs.core.descriptors import DescriptorOptions, DescriptorResult, describe_batch, describe_curve, maximum_test, rebin_log
+from saxs.core.unified_levels import (UnifiedFitResult, UnifiedOptions, batch_fit, fit_unified_levels, fit_with_robustness,
+                                      load_results_json, robustness_pass, save_results_json)
+from saxs.core.series_figures import SeriesTable, export_figure, fit_panels_figure, frame_figure, grid_figure, trends_figure
+from saxs.core.tables import fit_sheet, modelfree_sheet, robustness_sheet, write_tables
+from saxs.core.pipeline import ProjectConfig, STEPS as PIPELINE_STEPS, run as run_pipeline
 from saxs.core.loader import load_curve
 from saxs.core.reduction import CorrectionSettings, correct_sample
 from saxs.core.waxs import auto_find_peaks, fit_waxs_peaks
@@ -48,6 +54,12 @@ __all__ = [
     "FramePair", "FrameRecord", "PairingResult", "inventory_table", "pair_frames", "scan_frames", "write_inventory",
     "MuSource", "ReducedSample", "ReductionOptions", "classify_loading", "load_reduced_dat", "load_reduced_folder",
     "reduce_pairs", "summary_table", "write_reduced_dat",
+    "DescriptorOptions", "DescriptorResult", "describe_batch", "describe_curve", "maximum_test", "rebin_log",
+    "UnifiedFitResult", "UnifiedOptions", "batch_fit", "fit_unified_levels", "fit_with_robustness", "load_results_json",
+    "robustness_pass", "save_results_json",
+    "SeriesTable", "export_figure", "fit_panels_figure", "frame_figure", "grid_figure", "trends_figure",
+    "fit_sheet", "modelfree_sheet", "robustness_sheet", "write_tables",
+    "ProjectConfig", "PIPELINE_STEPS", "run_pipeline",
     "load_curve",
     "CorrectionSettings", "correct_sample",
     "auto_find_peaks", "fit_waxs_peaks",
