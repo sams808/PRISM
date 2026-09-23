@@ -278,9 +278,13 @@ def step_inventory(cfg: ProjectConfig, progress: Progress = None, log: Log = pri
     t.to_csv(pairs_csv, index=False, encoding="utf-8-sig")
     unp = os.path.join(out, "unpaired.csv")
     pd.DataFrame([{"sample": r.name, "frame": r.path} for r in pairing.unpaired], columns=["sample", "frame"]).to_csv(unp, index=False)
+    dups = pairing.duplicate_names()
+    for name, rels in dups.items():
+        log(f"  !! duplicate sample name {name!r}: {rels} (exclude one with exclude_pattern, or their outputs get a __2 suffix)")
     log(f"  {len(records)} frames, {len(pairing.pairs)} pairs, {len(pairing.unpaired)} unpaired -> {inv}")
     return {"outputs": [inv, pairs_csv, unp], "inputs": [], "notes": {"n_frames": len(records), "n_pairs": len(pairing.pairs),
-                                                                     "n_unpaired": len(pairing.unpaired), "skipped": errors}}
+                                                                     "n_unpaired": len(pairing.unpaired), "skipped": errors,
+                                                                     "duplicate_names": dups}}
 
 
 def step_reduce(cfg: ProjectConfig, progress: Progress = None, log: Log = print) -> Dict[str, object]:

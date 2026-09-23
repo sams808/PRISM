@@ -101,7 +101,7 @@ def test_modelfree_and_robustness_sheets_and_notes():
     r = mf.iloc[0]
     assert r["Sample"] == "a" and r["Low-q exponent"] == 4.73 and r["Local exponent at 0.04"] == 3.94 and r["Local exponent at 0.02"] == 4.1
     assert r["High-q plateau"] == 0.0123 and r["Sample/(T x empty) at high q"] == 12.3 and r["Porod shoulder (nm)"] is None
-    assert r["Maximum in I or I q^2"] == "no" and r["x"] == 5
+    assert r["Maximum in I"] == "no" and r["x"] == 5
     assert list(mf.columns).index("Local exponent at 0.02") < list(mf.columns).index("Local exponent at 0.04")
     relaxed = _R("a")
     rs = tb.robustness_sheet([_R("a", relaxed=relaxed), _R("b", fitted=False)])

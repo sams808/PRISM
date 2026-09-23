@@ -398,6 +398,7 @@ def reduce_pairs(pairs: Iterable[FramePair], options: Optional[ReductionOptions]
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
     n = len(pairs)
+    used: Dict[str, int] = {}
     for i, pair in enumerate(pairs):
         if progress is not None:
             progress(i, n, pair.sample.name)
@@ -408,6 +409,11 @@ def reduce_pairs(pairs: Iterable[FramePair], options: Optional[ReductionOptions]
                 raise
             on_error(pair, exc)
             continue
+        used[res.name] = used.get(res.name, 0) + 1
+        if used[res.name] > 1:                      # the same sample name twice: keep both, distinguishable
+            res.name = f"{res.name}__{used[res.name]}"
+            res.curve.name = res.name
+            res.curve.metadata["sample"] = res.name
         if out_dir:
             res.dat_path = os.path.join(out_dir, f"{res.name}{o.dat_suffix}.dat")
             write_reduced_dat(res, res.dat_path)

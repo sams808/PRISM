@@ -4,8 +4,12 @@ suite (saxs_core engine). Tabs: Curves (Xenocs-style 1D ASCII import,
 log-log view), Reduction (empty/background subtraction with manual or auto
 scaling), Analysis (Guinier / generalized Porod / pseudo-Bragg peak with
 auto region detection), WAXS (pseudo-Voigt multi-peak fit, d-spacings,
-crystallinity index). Model fitting via sasmodels stays in the pomme repo
-(optional heavy dependency); publication plotting lives in Figures.
+crystallinity index), Composite fit, and the SAXS 2.0 tabs of qt_saxs2.py
+(Frames: 2D-frame inventory, pairing and sector reduction; Unified fit:
+two-level unified fits with BIC selection and robustness; Series figures:
+publication figures and tables from a series table). Model fitting via
+sasmodels stays in the pomme repo (optional heavy dependency); publication
+plotting of arbitrary spectra lives in Figures.
 """
 from __future__ import annotations
 
@@ -33,6 +37,7 @@ from saxs.core.curve import Curve
 from saxs.core.loader import load_curve
 from saxs.core.reduction import CorrectionSettings, correct_sample
 from saxs.core.waxs import auto_find_peaks, fit_waxs_peaks
+from saxs.qt_saxs2 import Saxs2Mixin
 
 COMPOSITE_PRESET_CHOICES = ["Auto (BIC ladder)"] + list(PRESETS.keys())
 COMPOSITE_WINDOW_KEYS = ["W_peak", "W_hiq", "W_loq"]
@@ -44,7 +49,7 @@ def _model_for_preset_name(name: str) -> CompositeModel:
     return build_composite(name.split("+"))
 
 
-class SaxsWorkspace(QWidget):
+class SaxsWorkspace(Saxs2Mixin, QWidget):
     def __init__(self, parent: Optional[QWidget] = None, library: Optional[SpectrumLibrary] = None,
                  on_derived_added=None):
         super().__init__(parent)
@@ -175,6 +180,7 @@ class SaxsWorkspace(QWidget):
         self.tabs.addTab(waxs_tab, "WAXS")
 
         self._build_composite_tab()
+        self._build_saxs2_tabs()
 
         rl.addWidget(self.tabs)
         splitter.addWidget(right)
@@ -299,6 +305,7 @@ class SaxsWorkspace(QWidget):
             item = self.comp_batch_list.item(i)
             if item.text() in selected_batch:
                 item.setSelected(True)
+        self._refresh_saxs2_combos()
 
     def add_curve(self, curve: Curve) -> None:
         self.curves.append(curve)

@@ -141,6 +141,8 @@ def fit_sheet(results: Iterable[object], summary: Optional[pd.DataFrame] = None,
     levels with at-bound markers (*), dBIC, the relaxed-bounds Rg2, the resolved flag, the tail and
     the RMS; ``extra`` adds ``{column: {sample: value}}`` columns (compositions, x-values)."""
     summ = summary.set_index("sample") if (summary is not None and "sample" in summary.columns) else summary
+    if summ is not None and summ.index.duplicated().any():
+        summ = summ[~summ.index.duplicated(keep="last")]
     unit = f" ({amplitude_unit})" if amplitude_unit else ""
     rows = []
     for r in results:
@@ -195,7 +197,9 @@ def modelfree_sheet(descriptors: pd.DataFrame, extra: Optional[Dict[str, Dict[st
     if "shoulder_size_nm" in d:
         df["Porod shoulder (nm)"] = d["shoulder_size_nm"].map(lambda v: _round(v, 1))
     if "has_maximum" in d:
-        df["Maximum in I or I q^2"] = d["has_maximum"].map(lambda v: "yes" if bool(v) else "no")
+        df["Maximum in I"] = d["has_maximum"].map(lambda v: "yes" if bool(v) else "no")
+    if "has_kratky_maximum" in d:
+        df["Maximum in I q^2 (knee)"] = d["has_kratky_maximum"].map(lambda v: "yes" if bool(v) else "no")
     df = df.reset_index(drop=True)
     for col, mapping in (extra or {}).items():
         df[col] = [mapping.get(s) for s in df["Sample"]]

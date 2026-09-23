@@ -142,6 +142,21 @@ def test_summary_table_columns(reduced):
     assert sb.summary_table([]).shape[0] == 0
 
 
+def test_reduce_pairs_keeps_both_curves_of_a_duplicated_name(tmp_path):
+    root = str(tmp_path / "dup")
+    syn.make_campaign(root)
+    records = fr.scan_frames(root, diagnostics=False)
+    for r in records:
+        if r.stem == "S4":
+            r.name = "S1"
+    pairing = fr.pair_frames(records)
+    results = sb.reduce_pairs(pairing.pairs, out_dir=str(tmp_path / "out"))
+    names = [r.name for r in results]
+    assert "S1" in names and "S1__2" in names and len(set(names)) == len(names)
+    assert sorted(os.listdir(tmp_path / "out")) == ["S1__2__sectors.dat", "S1__sectors.dat", "S2__sectors.dat", "S3_0p5mm__sectors.dat"]
+    assert sb.load_reduced_dat(str(tmp_path / "out" / "S1__2__sectors.dat")).name == "S1__2"
+
+
 def test_reduce_arrays_with_options_in_memory():
     rng = np.random.default_rng(3)
     e = syn.empty_frame(noise=rng)

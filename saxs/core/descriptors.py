@@ -207,11 +207,17 @@ def maximum_test(q: np.ndarray, I: np.ndarray, sigma: Optional[np.ndarray], weig
                  qrange: Optional[Tuple[float, float]] = None) -> Dict[str, Dict[str, object]]:
     """Explicit test for a maximum in I q^w (w = 0, 2, 4). Each representation is smoothed with a
     ``smooth_pts`` moving average; a local maximum (interior, at least ``smooth_pts`` points from
-    either end) is significant when its prominence exceeds ``min_prominence_sigma`` times the
-    propagated noise of the smoothed value and ``min_relative_prominence`` of the value itself.
-    Returns ``{name: {"q_max", "prominence", "prominence_sigma", "relative_prominence", "significant"}}``
-    (the most prominent significant maximum, else the most prominent one with ``significant=False``,
-    else ``q_max=None``)."""
+    either end) is significant when its prominence exceeds ``min_prominence_sigma`` times the noise
+    of the smoothed value and ``min_relative_prominence`` of the value itself. The noise is the
+    larger of the propagated sigma and the local scatter of the data about the smoothed curve
+    (robust MAD over three windows), so an underestimated sigma (opaque loadings) cannot promote
+    noise to a maximum. Returns ``{name: {"q_max", "prominence", "prominence_sigma",
+    "relative_prominence", "significant"}}`` (the most prominent significant maximum, else the most
+    prominent one with ``significant=False``, else ``q_max=None``).
+
+    Reading: a maximum of I itself is what a characteristic spacing produces (:func:`has_maximum`);
+    a maximum of I q^2 or I q^4 without one in I is the Guinier knee of a level, not a spacing
+    (:func:`has_kratky_maximum`)."""
     from scipy.signal import find_peaks
 
     q, I = np.asarray(q, float), np.asarray(I, float)
@@ -233,6 +239,11 @@ def maximum_test(q: np.ndarray, I: np.ndarray, sigma: Optional[np.ndarray], weig
         ys = np.convolve(y, kernel, mode="valid")           # length n - k + 1, centred
         ss = np.sqrt(np.convolve((sigma * q ** w) ** 2, kernel ** 2, mode="valid"))
         qs = q[k // 2: len(q) - k // 2]
+        # data-driven noise floor: local scatter about the smoothed curve (MAD over 3 k points), per smoothed value
+        dev = np.abs(y[k // 2: len(q) - k // 2] - ys)
+        wide = 3 * k
+        scatter = np.array([1.4826 * np.median(dev[max(0, i - wide // 2): i + wide // 2 + 1]) for i in range(len(dev))]) / np.sqrt(k)
+        ss = np.maximum(ss, scatter)
         pk, pr = find_peaks(ys, prominence=0.0)
         best_sig, best_any = None, None
         for j, prom in zip(pk, pr["prominences"]):
@@ -251,8 +262,13 @@ def maximum_test(q: np.ndarray, I: np.ndarray, sigma: Optional[np.ndarray], weig
 
 
 def has_maximum(maxima: Dict[str, Dict[str, object]]) -> bool:
-    """A curve has a maximum when the test is significant in I or in I q^2."""
-    return bool(maxima.get("I", {}).get("significant") or maxima.get("Iq2", {}).get("significant"))
+    """A maximum of I itself (what a characteristic spacing produces)."""
+    return bool(maxima.get("I", {}).get("significant"))
+
+
+def has_kratky_maximum(maxima: Dict[str, Dict[str, object]]) -> bool:
+    """A maximum of I q^2: with none in I it is the Guinier knee of a level, not a spacing."""
+    return bool(maxima.get("Iq2", {}).get("significant"))
 
 
 # ------------------------------------------------------------------------------------ results
@@ -270,6 +286,7 @@ class DescriptorResult:
     values: Dict[str, float] = field(default_factory=dict)
     maxima: Dict[str, Dict[str, object]] = field(default_factory=dict)
     has_maximum: bool = False
+    has_kratky_maximum: bool = False
     shoulders: List[Tuple[float, float, float]] = field(default_factory=list)
     rebinned: Dict[str, np.ndarray] = field(default_factory=dict)      # q, I, sigma, slopes, C
     meta: Dict[str, object] = field(default_factory=dict)
@@ -282,6 +299,7 @@ class DescriptorResult:
         r["n_use"] = self.n_use
         r.update(self.values)
         r["has_maximum"] = self.has_maximum
+        r["has_kratky_maximum"] = self.has_kratky_maximum
         for name, d in self.maxima.items():
             r[f"max_q_{name}"] = d.get("q_max") if d.get("q_max") is not None else float("nan")
             r[f"max_prom_sigma_{name}"] = d.get("prominence_sigma", float("nan"))
@@ -356,6 +374,7 @@ def describe_curve(curve: Curve, options: Optional[DescriptorOptions] = None, rh
     res.maxima = maximum_test(qb, Ib, sb, o.maximum_weights, o.maximum_smooth_pts, o.maximum_min_prominence_sigma,
                               o.maximum_min_relative_prominence)
     res.has_maximum = has_maximum(res.maxima)
+    res.has_kratky_maximum = has_kratky_maximum(res.maxima)
     res.rebinned = {"q": qb, "I": Ib, "sigma": sb, "slopes": slopes, "C": C}
     return res
 

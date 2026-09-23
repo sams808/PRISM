@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 
 # Single source of the app version: shown in the window title and About,
 # and matched by the git tag at release time.
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 APP_NAME = "PRISM"
 APP_TAGLINE = "Platform for Research In Spectroscopy & Materials"
 
@@ -217,6 +217,11 @@ scaling; <b>Analysis</b> fits Guinier (Rg), generalized Porod (slope +
 background), and pseudo-Bragg peaks (d-spacing, correlation length) with
 auto region detection; <b>WAXS</b> auto-finds and fits pseudo-Voigt peaks
 (d-spacings, crystallinity index). Curves can be sent to the Library.
+SAXS 2.0 adds <b>Frames</b> (raw 2D frames: inventory, refined beam centres,
+lobe diagnostics, pairing with the session empties, sector reduction with
+loading classes), <b>Unified fit</b> (two-level unified fits with BIC
+selection and a robustness pass) and <b>Series figures</b> (publication
+figures and tables driven by a series table) &mdash; details in the module guide.
 The XAS workspace also gained a <b>Sample mass</b> tab — the Hephaestus
 calculator on oxide compositions (mol%/wt%) or formulas: masses for total
 μt = 1 / 2.5 and edge step Δμt = 1 in a pellet of chosen diameter.</p>
@@ -414,7 +419,39 @@ and CSV export (including the d<sub>TS</sub>/d<sub>gauss</sub> cross-check
 against the pseudo-Bragg fit). A ladder-demoted preset (e.g. a peak-free
 curve landing on plain background) is the model-selection logic correctly
 saying the data doesn't support a peak &mdash; check the Flags line before
-overriding with a forced preset.</p>"""),
+overriding with a forced preset.</p>
+<p><b>Frames</b> (SAXS 2.0): the campaign starts from the raw 2D frames of a
+beamstopless instrument. Scan the session folders: every frame gets a role
+(sample / empty / calibrant from regexes), its session, the beam centre
+refined from the recorded direct beam (header centres can be off by several
+pixels), and diagnostics &mdash; capillary-wall lobes on the horizontal axis
+(the two bars that average into a fake low-q peak), slit streaks, saturation.
+Samples are paired with the empty of the same folder, configuration and
+capillary. <b>Reduce all pairs</b> integrates the four diagonal wedges only,
+scales the empty by the footprint transmission (a central-disc check flags
+uneven loadings), gives every curve a loading class (measurable &mu;t &lt; 3,
+marginal 3&ndash;6, opaque &gt; 6: shapes only, unreliable) and a usable
+q-range, and normalises per mm of material when the samples table gives
+&mu; (or a composition + density). The reduced curves join the curve list.</p>
+<p><b>Unified fit</b> (SAXS 2.0): the two-level unified model &mdash; a grain
+level (Rg 25&ndash;150 nm, free Porod term), an optional nanoscale level whose
+Porod prefactor is tied to its Guinier amplitude (so a level is a population
+with a knee or it is not kept), a flat background and an optional rising
+tail. Level 2 and the tail are added only when they lower the BIC by more
+than 10; every parameter at a bound is flagged; a level with a vanishing
+amplitude is never kept. <b>Robustness check</b> refits with relaxed grain
+bounds: a level is "resolved" only if both fits keep it with Rg within
+20 %. Read Rg and d as robust, amplitudes as comparable between quantified
+loadings only, opaque loadings as shapes only. Batch, CSV/XLSX/JSON.</p>
+<p><b>Series figures</b> (SAXS 2.0): a series table you import or edit
+(sample, panel, stacking order, label, colour, marker, family, x-value,
+quantified) drives the grid of normalised shifted curves with labels at the
+curve ends, the fit-panel figures with residuals, the trends against your
+x-value (open = not quantified, faded = level not resolved) and the 2D frame
+figure; export pdf/svg/png at your dpi, and the tables as xlsx (fits,
+model-free, robustness, notes), csv (Excel-safe ASCII) and markdown. The same
+chain runs headless: <code>scripts/saxs_pipeline.py init / run</code> with a
+JSON project file regenerates a whole campaign.</p>"""),
     "Figures": _guide("Figures module", """
 <p>Build the figure ONCE, export at the journal exact size.
 <b>XY builder</b>: add spectra as layers; each layer has type, color,

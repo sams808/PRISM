@@ -112,6 +112,24 @@ def test_pair_falls_back_to_session_then_reports_unpaired(campaign):
     assert "unpaired" in res2.describe()
 
 
+def test_duplicate_sample_names_are_reported(campaign):
+    _, _, records = campaign
+    recs = [fr.FrameRecord(**{**r.__dict__}) for r in records]
+    for r in recs:
+        if r.stem == "S4":
+            r.name = "S1"                                   # the same sample measured in two sessions
+    res = fr.pair_frames(recs)
+    assert res.duplicate_names() == {"S1": ["sessionA/S1.edf", "sessionB/S4.edf"]}
+    assert "duplicate sample name 'S1'" in res.describe()
+    assert fr.pair_frames(records).duplicate_names() == {}
+
+
+def test_exclude_pattern_matches_the_full_path(campaign):
+    root, _, _ = campaign
+    recs = fr.scan_frames(root, exclude_pattern=r"sessionA[/\\]S1", diagnostics=False)
+    assert "S1" not in {r.stem for r in recs} and "S2" in {r.stem for r in recs}
+
+
 def test_pair_nearest_time_and_explicit(campaign):
     _, _, records = campaign
     res = fr.pair_frames(records, rule="nearest_time")

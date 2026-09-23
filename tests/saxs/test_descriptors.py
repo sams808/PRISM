@@ -97,12 +97,21 @@ def test_maximum_test_distinguishes_monotonic_bump_and_knee():
     # the same bump is not significant against a demanding threshold
     assert not ds.maximum_test(c2.q, c2.intensity, c2.sigma, min_prominence_sigma=1e6)["I"]["significant"]
     assert not ds.maximum_test(c2.q, c2.intensity, c2.sigma, min_relative_prominence=0.9)["I"]["significant"]
-    # a Guinier knee: no maximum of I, but a significant one of I q^2 -> has_maximum
+    # a Guinier knee: no maximum of I, but a significant one of I q^2 -> a Kratky maximum, not a spacing
     knee = 100.0 * np.exp(-(Q * 100.0) ** 2 / 3) + 1e-3
     c3 = _curve(knee, rel_sigma=0.01, seed=3)
     m3 = ds.maximum_test(c3.q, c3.intensity, c3.sigma)
-    assert not m3["I"]["significant"] and m3["Iq2"]["significant"] and ds.has_maximum(m3)
+    assert not m3["I"]["significant"] and m3["Iq2"]["significant"]
+    assert not ds.has_maximum(m3) and ds.has_kratky_maximum(m3)
     assert abs(np.log(m3["Iq2"]["q_max"] / (np.sqrt(3) / 100.0))) < 0.15
+    # an underestimated sigma cannot inflate the significance: the data-driven floor makes a curve with a
+    # claimed sigma 2000x too small behave like the same curve with its true sigma
+    rng = np.random.default_rng(9)
+    noisy = I * (1 + rng.normal(scale=0.2, size=len(Q)))
+    m6 = ds.maximum_test(Q, noisy, 1e-4 * I)
+    m7 = ds.maximum_test(Q, noisy, 0.2 * I)
+    assert m6["I"]["q_max"] == m7["I"]["q_max"] and m6["I"]["prominence_sigma"] < 15
+    assert m6["I"]["prominence_sigma"] == pytest.approx(m7["I"]["prominence_sigma"], rel=0.5)
     # too few points: an empty answer, no crash
     m5 = ds.maximum_test(Q[:10], I[:10], None)
     assert m5["I"]["q_max"] is None and not ds.has_maximum(m5)
@@ -121,8 +130,8 @@ def test_describe_curve_and_batch_rows():
     assert np.isfinite(v["I_mm_at_0.02"]) and np.isnan(v["q_shoulder"])
     assert r.rebinned["q"].size > 50 and r.meta["T_used"] == 0.2 and r.meta["t_eff_mm"] == 0.3
     row = r.row()
-    for col in ("sample", "cls", "n_use", "T_used", "n_low", "C_hi", "ratio_hi", "K4", "Q_exc", "has_maximum", "max_q_I",
-                "max_significant_Iq2", "rho_e", "K4_over_rhoe2"):
+    for col in ("sample", "cls", "n_use", "T_used", "n_low", "C_hi", "ratio_hi", "K4", "Q_exc", "has_maximum", "has_kratky_maximum",
+                "max_q_I", "max_significant_Iq2", "rho_e", "K4_over_rhoe2"):
         assert col in row, col
     # batch: a second curve with a knee and a too-short curve
     knee = 1e-9 * Q ** -4 + 50.0 * np.exp(-(Q * 100.0) ** 2 / 3) + 1e-4

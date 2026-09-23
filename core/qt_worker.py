@@ -30,39 +30,53 @@ def set_synchronous(value: bool) -> None:
 class WorkerSignals(QObject):
     finished = Signal(object)
     error = Signal(str)
+    progress = Signal(int, int, str)
 
 
 class Worker(QRunnable):
-    def __init__(self, fn: Callable, *args, **kwargs):
+    def __init__(self, fn: Callable, *args, pass_progress: bool = False, **kwargs):
         super().__init__()
         self.fn = fn
         self.args = args
         self.kwargs = kwargs
+        self.pass_progress = pass_progress
         self.signals = WorkerSignals()
 
     @Slot()
     def run(self) -> None:
         try:
-            result = self.fn(*self.args, **self.kwargs)
+            if self.pass_progress:
+                result = self.fn(*self.args, progress=self._emit_progress, **self.kwargs)
+            else:
+                result = self.fn(*self.args, **self.kwargs)
         except Exception:
             self.signals.error.emit(traceback.format_exc())
             return
         self.signals.finished.emit(result)
 
+    def _emit_progress(self, i: int, n: int, message: str = "") -> None:
+        """Callable handed to the job as ``progress`` (the (i, n, message) convention of the SAXS 2.0
+        batch functions): a queued signal, safe from the worker thread."""
+        self.signals.progress.emit(int(i), int(n), str(message))
+
 
 def run_in_thread(
     fn: Callable, on_done: Callable[[Any], None],
     on_error: Optional[Callable[[str], None]] = None,
-    *args, **kwargs,
+    *args, on_progress: Optional[Callable[[int, int, str], None]] = None, **kwargs,
 ) -> Worker:
     """Run fn(*args, **kwargs) off the UI thread; deliver its return value
     to on_done (or the formatted traceback to on_error) on the main thread.
+    With ``on_progress`` the job is called with an extra ``progress(i, n, message)``
+    keyword whose calls reach ``on_progress`` on the main thread.
     Keep a reference to the returned Worker only if you need to inspect it —
     the thread pool owns its lifetime."""
-    worker = Worker(fn, *args, **kwargs)
+    worker = Worker(fn, *args, pass_progress=on_progress is not None, **kwargs)
     worker.signals.finished.connect(on_done)
     if on_error is not None:
         worker.signals.error.connect(on_error)
+    if on_progress is not None:
+        worker.signals.progress.connect(on_progress)
     if _SYNCHRONOUS:
         worker.run()
     else:

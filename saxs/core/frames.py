@@ -113,8 +113,18 @@ class PairingResult:
     unpaired: List[FrameRecord]
     rule: str
 
+    def duplicate_names(self) -> Dict[str, List[str]]:
+        """Sample names used by more than one paired frame (the same sample measured twice): a
+        campaign must exclude one of them or rename, or their outputs would collide."""
+        seen: Dict[str, List[str]] = {}
+        for p in self.pairs:
+            seen.setdefault(p.sample.name, []).append(p.sample.rel)
+        return {k: v for k, v in seen.items() if len(v) > 1}
+
     def describe(self) -> str:
         lines = [f"{len(self.pairs)} sample(s) paired with the rule '{self.rule}'"]
+        for name, rels in self.duplicate_names().items():
+            lines.append(f"  !! duplicate sample name {name!r}: {rels}")
         for p in self.pairs:
             lines.append(f"  {p.sample.name:24s} <- {p.empty.rel}")
         if self.unpaired:
@@ -312,7 +322,8 @@ def scan_frames(roots: Union[str, Sequence[str]], empty_pattern: str = r"(?i)emp
     for path, root in files:
         rel, _ = _rel_and_session(path, root)
         stem = os.path.splitext(os.path.basename(path))[0]
-        if exclude_pattern and (re.search(exclude_pattern, rel) or re.search(exclude_pattern, stem)):
+        if exclude_pattern and (re.search(exclude_pattern, rel) or re.search(exclude_pattern, stem)
+                                or re.search(exclude_pattern, path.replace(os.sep, "/"))):
             n_total -= 1
             continue
         tick(rel)

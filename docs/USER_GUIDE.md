@@ -65,51 +65,17 @@ them when quoting true FWHM.
 ## XAS
 
 Import EasyXAFS ZIPs, CSVs, or Athena `.prj` from the workspace's own
-buttons (CSV import recognizes an already-normalized `flat`/`norm` column,
-so a previously-exported or externally-processed normalized spectrum loads
-straight in). Tabs follow the workflow: Pre-processing (smoothing, Bragg
+buttons. Tabs follow the workflow: Pre-processing (smoothing, Bragg
 angle→energy correction, click-based tie-point alignment) → μ(E) Builder
-(deglitch: noise-calibrated by default, or the older rolling z-score) →
-Normalization / EXAFS (Larch; the FT window (kmin/kmax) and autobk's own
-background-fit range (bkg kmax) are independent — leave bkg kmax blank to
-use the old shared-range behavior, or widen it past the FT window to fit
-the background spline over more data than the FT trusts, standard Athena
-convention) → Analysis (average or sum repeat scans, difference, PCA
-species count) → LCF (below) → Export (Athena formats). Importing an
-Athena `.prj` needs no Larch.
-
-### LCF
-
-Combinatorial linear-combination fitting. Select your imported samples as
-**targets** and your imported standards as **references**, set a component
-count range (e.g. 2–3) and weight bounds, optionally require specific
-references to always be included, then **Run batch LCF**: every target gets
-fit against *every combination* of references in that size range, so which
-combination actually explains each spectrum best doesn't have to be
-guessed in advance. The summary table shows each target's best combination;
-click a row to preview it — for a single fit against one fixed reference
-set (no combination search), just select exactly the references you want
-and set both component-count spinners to that same count. **Generate report
-(PDF + MD)** writes one multi-page PDF and one Markdown file for the whole
-batch — two pages per sample (the best-fit overlay with residual, then a
-stats page: best-fit weight bar chart, a rank-vs-metric plot showing how
-close the runner-up combinations came, and the full ranking table sorted by
-R², RMS, or reduced χ²).
+(with deglitching) → Normalization / EXAFS (Larch) → Analysis (average or sum
+repeat scans, difference, linear-combination fitting, PCA species count) →
+Export (Athena formats). Importing an Athena `.prj` needs no Larch.
 
 ## DTA / Thermal
 
 Pick X/Y/dY channels, compute Tg three ways (double tangent, parallel
 tangent, |dY| max) — the result panel says whether the methods agree.
 "Calculs" integrates or finds extrema over a range; Batch processes a folder.
-
-The **°C / K switch** next to the X field converts, not just relabels: the
-plotted axis, the Tg window, every baseline/point field, and any already-
-computed Tg all shift by the same 273.15 in place, so a window you set in
-°C stays the same physical window after switching to K. It's disabled
-whenever the current X column isn't a recognized temperature axis (e.g.
-Time), so switching units never silently reinterprets an unrelated axis.
-Exported CSVs (single or batch) record a `temp_unit` column so results
-stay unambiguous regardless of which unit was active when exported.
 
 ## Raman ID (RRUFF)
 
@@ -221,6 +187,11 @@ scaling; **Analysis** fits Guinier (Rg), generalized Porod (slope +
 background), and pseudo-Bragg peaks (d-spacing, correlation length) with
 auto region detection; **WAXS** auto-finds and fits pseudo-Voigt peaks
 (d-spacings, crystallinity index). Curves can be sent to the Library.
+SAXS 2.0 adds **Frames** (raw 2D frames: inventory, refined beam centres,
+lobe diagnostics, pairing with the session empties, sector reduction with
+loading classes), **Unified fit** (two-level unified fits with BIC
+selection and a robustness pass) and **Series figures** (publication
+figures and tables driven by a series table) — details in the module guide.
 The XAS workspace also gained a **Sample mass** tab — the Hephaestus
 calculator on oxide compositions (mol%/wt%) or formulas: masses for total
 μt = 1 / 2.5 and edge step Δμt = 1 in a pellet of chosen diameter.
@@ -246,7 +217,7 @@ View menu: dark mode, Python console (the live app objects are in scope).
 
 ---
 
-## PRISM 2.6.0
+## PRISM 2.7.0
 
 *Platform for Research In Spectroscopy & Materials*
 
