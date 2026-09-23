@@ -145,8 +145,9 @@ def test_refine_centres_recovers_a_shifted_beam_and_falls_back_for_a_dark_centre
     gs2, ge2, note = es.refine_centres(sample, GEOM, empty, GEOM)
     assert abs(ge2.cx - (CX - 8.0)) < 0.3 and abs(ge2.cy - CY) < 0.3
     assert abs(gs2.cx - (CX - 8.0)) < 0.3 and note == "own direct beam"
-    # opaque sample: dark centre with bright lobes -> the empty's centre is used
-    dark = 1e-5 * beam_at(CX - 8.0, 1e5) + _bars(x0=12.0, amp=3e4, half_h=10)
+    # opaque sample: dark centre with bright lobes 12 px either side of the TRUE centre -> the empty's centre is used
+    lobes = 3e4 * (((np.abs(np.abs(xx - (CX - 8.0)) - 12.0) <= 1.5) & (np.abs(yy - CY) <= 10)).astype(float))
+    dark = 1e-5 * beam_at(CX - 8.0, 1e5) + lobes
     gs3, ge3, note3 = es.refine_centres(dark, GEOM, empty, GEOM)
     assert abs(gs3.cx - ge3.cx) < 1e-9 and note3.startswith("session empty")
     # the reduction with a shifted beam recovers the transmission only when the centre is refined
