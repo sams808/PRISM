@@ -42,20 +42,21 @@ which is the physically correct place for it. This normalization fix is
 independent of the beamstopless-specific caveat below and holds across the
 whole accessible q-range.
 
-KNOWN LIMITATION, disclosed rather than papered over: the region immediately
-around the direct beam is excluded from integration here (see
-``direct_beam_mask``), not because it is a "shadowed" artifact region (there
-is no beamstop) but because repeat measurements of the same nominal empty
-capillary disagree by up to ~100x there even after correcting for sub-pixel
-beam-center registration between frames -- most plausibly some HDR/
-attenuation handling specific to this beamstopless design's high dynamic
-range capability, applied by XSACT Pro before/while writing these frames,
-that is not documented in what's available here. Rather than guess at an
-unknown vendor procedure, that region is masked out entirely; scattering
-below roughly q=0.0095 A^-1 (r<28 px at this geometry) is NOT currently
-recoverable through this module. Samples whose real structural feature (e.g.
-a Teubner-Strey correlation peak) sits below that q are not usable through
-this path without first learning XSACT Pro's own direct-beam handling.
+KNOWN LIMITATION of this module: it integrates the full azimuth and masks a
+fixed disc of 28 px around the beam (``direct_beam_mask``), so nothing below
+q ~ 0.0095 A^-1 at this geometry comes out of it. The reason the near-beam
+region looked unrecoverable was understood later (September 2026): for
+absorbing powders in capillaries the part of the beam that passes next to the
+capillary walls is refracted outward and lands as two lobes on the horizontal
+detector axis, and the slit-scattering streaks run along both axes; the
+azimuthal average of these features is a spurious low-q maximum, and the
+frame-derived transmission of a region-of-interest that contains the lobes is
+wrong. The remedy is geometric, not a vendor procedure: see
+:mod:`saxs.core.edf_sectors`, which integrates the four diagonal wedges of
+the frame, masks the lobe zone, takes the transmission from the recorded
+direct beam averaged over the beam footprint, and subtracts the empty of the
+same session. New work should use that module; this one is kept for the
+full-azimuth integration and the AgBeh geometry check.
 
 pyFAI and fabio are optional at import time (matching the sasmodels/bumps
 pattern in ``saxs_core.modelfit``) so the rest of the suite works without

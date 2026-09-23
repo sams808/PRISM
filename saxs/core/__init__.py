@@ -25,6 +25,7 @@ from saxs.core.composite_fit import PRESETS, CompositeModel, build_composite, bu
 from saxs.core.composite_models import COMPONENTS
 from saxs.core.composite_staged import FitResult, fit_staged, propose_windows
 from saxs.core.curve import Curve
+from saxs.core.edf_sectors import SectorReduction, reduce_arrays, reduce_frame_pair
 from saxs.core.loader import load_curve
 from saxs.core.reduction import CorrectionSettings, correct_sample
 from saxs.core.waxs import auto_find_peaks, fit_waxs_peaks
@@ -40,6 +41,7 @@ __all__ = [
     "COMPONENTS",
     "FitResult", "fit_staged", "propose_windows",
     "Curve",
+    "SectorReduction", "reduce_arrays", "reduce_frame_pair",
     "load_curve",
     "CorrectionSettings", "correct_sample",
     "auto_find_peaks", "fit_waxs_peaks",
