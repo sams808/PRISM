@@ -51,12 +51,18 @@ class FrameGeometry:
     exposure_s: float
 
     @classmethod
-    def from_header(cls, h: Dict[str, str]) -> "FrameGeometry":
+    def from_header(cls, h: Dict[str, str], default_wavelength_A: Optional[float] = None) -> "FrameGeometry":
+        """``default_wavelength_A`` is used when the header carries no WaveLength (virtual-detector
+        exports); without it such a header raises."""
         wl = h.get("WaveLength", h.get("Wavelength"))
         if wl is None:
-            raise ValueError("EDF header has no WaveLength/Wavelength")
+            if default_wavelength_A is None:
+                raise ValueError("EDF header has no WaveLength/Wavelength")
+            wavelength_A = float(default_wavelength_A)
+        else:
+            wavelength_A = float(wl) * 1e10
         return cls(cx=float(h["Center_1"]), cy=float(h["Center_2"]), dist_m=float(h["SampleDistance"]),
-                   pixel_m=float(h.get("PSize_1", 7.5e-5)), wavelength_A=float(wl) * 1e10,
+                   pixel_m=float(h.get("PSize_1", 7.5e-5)), wavelength_A=wavelength_A,
                    exposure_s=float(h["ExposureTime"]))
 
     def q_of_radius(self, r_px: np.ndarray) -> np.ndarray:
@@ -70,13 +76,13 @@ class FrameGeometry:
         return np.cos(tth) ** 3 * (1 + np.cos(tth) ** 2) / 2
 
 
-def read_frame(path: str) -> Tuple[np.ndarray, Dict[str, str], FrameGeometry]:
+def read_frame(path: str, default_wavelength_A: Optional[float] = None) -> Tuple[np.ndarray, Dict[str, str], FrameGeometry]:
     """Read an EDF frame with fabio -> (float64 array, header, geometry)."""
     if not HAVE_FABIO:
         raise ImportError("fabio is required to read EDF frames")
     im = fabio.open(str(path))
     h = dict(im.header)
-    return im.data.astype(np.float64), h, FrameGeometry.from_header(h)
+    return im.data.astype(np.float64), h, FrameGeometry.from_header(h, default_wavelength_A)
 
 
 def beam_centroid(data: np.ndarray, seed_cx: float, seed_cy: float, r_px: float = 25.0, pct: float = 99.0) -> Optional[Tuple[float, float]]:
@@ -221,6 +227,91 @@ def disc_counts(data: np.ndarray, geom: FrameGeometry, r_px: float, valid: np.nd
     return s / geom.exposure_s, float(np.sqrt(ff * max(s, 0.0))) / geom.exposure_s
 
 
+# ------------------------------------------------------------------------------------- anisotropy
+@dataclass
+class SectorAnisotropy:
+    """Raw (not geometry-corrected) ring means in counts/s/pixel along the horizontal axis, the
+    vertical axis, the diagonals and the full azimuth, plus the lobe and streak diagnostics used by
+    the frame inventory. ``lobe_q`` is the q of a local maximum of the horizontal profile that the
+    vertical profile does not show (the capillary-wall lobes), None when there is none."""
+    r_px: np.ndarray
+    q: np.ndarray
+    horizontal: np.ndarray
+    vertical: np.ndarray
+    diagonal: np.ndarray
+    full: np.ndarray
+    lobe_q: Optional[float]
+    lobe_prominence: float
+    lobe_ratio: float           # horizontal / vertical in the band around lobe_q (or the default band)
+    max_q_horizontal: Optional[float]
+    max_q_vertical: Optional[float]
+    max_q_full: Optional[float]
+    streak_h: float             # horizontal / diagonal level in the streak band (1 = no streak)
+    streak_v: float
+
+
+def _local_max_q(prof: np.ndarray, q: np.ndarray, q_window: Tuple[float, float], prominence: float) -> Tuple[Optional[float], float]:
+    from scipy.signal import find_peaks
+
+    sel = (q >= q_window[0]) & (q <= q_window[1]) & np.isfinite(prof) & (prof > 0)
+    if sel.sum() < 5:
+        return None, 0.0
+    lp = np.log10(prof[sel])
+    pk, pr = find_peaks(lp, prominence=prominence)
+    if not len(pk):
+        return None, 0.0
+    b = int(np.argmax(pr["prominences"]))
+    return float(q[sel][pk[b]]), float(pr["prominences"][b])
+
+
+def sector_anisotropy(data: np.ndarray, geom: FrameGeometry, valid: Optional[np.ndarray] = None,
+                      half_deg: float = 25.0, rmax_px: int = 220, q_window: Tuple[float, float] = (2e-3, 1.5e-2),
+                      prominence: float = 0.05, streak_band_px: Tuple[int, int] = (30, 60),
+                      default_band_q: float = 6.5e-3, lobe_min_ratio: float = 2.0) -> SectorAnisotropy:
+    """Horizontal / vertical / diagonal / full radial profiles about ``geom``'s centre and the lobe
+    test: a maximum of the horizontal profile inside ``q_window`` (prominence in log10 units) where the
+    horizontal level exceeds the vertical one by more than ``lobe_min_ratio`` (an isotropic ring gives
+    the same maximum in both). Streak levels compare each axis with the diagonals in ``streak_band_px``."""
+    if valid is None:
+        valid = valid_pixel_mask(data)
+    r, phi, _, _ = pixel_maps(data.shape, geom.cx, geom.cy)
+    ri = np.round(r).astype(int)
+    base = valid & (r < rmax_px)
+    d_h = np.abs(((phi - 0.0) + 90) % 180 - 90)
+    masks = {"full": base, "horizontal": base & (d_h <= half_deg), "vertical": base & (np.abs(phi - 90.0) <= half_deg),
+             "diagonal": base & (np.abs(d_h - 45.0) <= half_deg)}
+    prof: Dict[str, np.ndarray] = {}
+    for key, m in masks.items():
+        n = np.bincount(ri[m], minlength=rmax_px + 1)
+        s = np.bincount(ri[m], weights=data[m], minlength=rmax_px + 1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            prof[key] = np.where(n > 0, s / np.maximum(n, 1), np.nan) / geom.exposure_s
+    rr = np.arange(rmax_px + 1)
+    q = geom.q_of_radius(rr)
+    qh, ph = _local_max_q(prof["horizontal"], q, q_window, prominence)
+    qv, pv = _local_max_q(prof["vertical"], q, q_window, prominence)
+    qa, _ = _local_max_q(prof["full"], q, q_window, prominence)
+    def hv_ratio(q0: float) -> float:
+        band = (q >= 0.8 * q0) & (q <= 1.2 * q0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            hm, vm = np.nanmean(prof["horizontal"][band]), np.nanmean(prof["vertical"][band])
+        return float(hm / vm) if vm > 0 else float("nan")
+
+    lobe_q = None
+    if qh is not None and hv_ratio(qh) > lobe_min_ratio:
+        lobe_q = qh
+    q0 = lobe_q if lobe_q is not None else (qa if qa is not None else default_band_q)
+    lobe_ratio = hv_ratio(q0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        b0, b1 = streak_band_px
+        dg = np.nanmedian(prof["diagonal"][b0:b1])
+        streak_h = float(np.nanmedian(prof["horizontal"][b0:b1]) / dg) if dg > 0 else float("nan")
+        streak_v = float(np.nanmedian(prof["vertical"][b0:b1]) / dg) if dg > 0 else float("nan")
+    return SectorAnisotropy(r_px=rr, q=q, horizontal=prof["horizontal"], vertical=prof["vertical"], diagonal=prof["diagonal"],
+                            full=prof["full"], lobe_q=lobe_q, lobe_prominence=ph, lobe_ratio=lobe_ratio,
+                            max_q_horizontal=qh, max_q_vertical=qv, max_q_full=qa, streak_h=streak_h, streak_v=streak_v)
+
+
 # ----------------------------------------------------------------------------------- transmission
 @dataclass
 class Transmission:
@@ -320,16 +411,20 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
                   bar_rect_px: Tuple[float, float] = (40.0, 14.0), rmax_px: int = 650,
                   footprint_r_px: float = 16.0, vertical_half_deg: float = 30.0,
                   name: str = "sample", sample_path: str = "", empty_path: str = "",
-                  refine_centre: bool = True) -> SectorReduction:
+                  refine_centre: bool = True, max_shift_px: float = 4.0, bright_fraction: float = 0.01,
+                  min_ratio: float = 1.25, min_ratio_footprint: float = 5.0, r_footprint_px: float = 30.0,
+                  nsigma: float = 3.0, min_run: int = 8) -> SectorReduction:
     """Sector-integrated, transmission-scaled empty subtraction of two frames already in memory.
     With ``refine_centre`` (default) the beam centres come from the recorded direct beam
     (:func:`refine_centres`); the header centres are kept in the metadata."""
     cx_h, cy_h = gs.cx, gs.cy
+    ge_cx_h, ge_cy_h = ge.cx, ge.cy
     centre_note = "header"
     if refine_centre:
-        gs, ge, centre_note = refine_centres(sample, gs, empty, ge)
-    valid_s = valid_pixel_mask(sample) & ~hot_pixel_mask(sample)
-    valid_e = valid_pixel_mask(empty) & ~hot_pixel_mask(empty)
+        gs, ge, centre_note = refine_centres(sample, gs, empty, ge, max_shift_px=max_shift_px, bright_fraction=bright_fraction)
+    hot_s, hot_e = hot_pixel_mask(sample), hot_pixel_mask(empty)
+    valid_s = valid_pixel_mask(sample) & ~hot_s
+    valid_e = valid_pixel_mask(empty) & ~hot_e
     ff_s, ff_e = flatfield_factor(sample), flatfield_factor(empty)
     ms = diagonal_sector_mask(sample.shape, gs.cx, gs.cy, axis_exclusion_deg, bar_rect_px, rmax_px, valid_s)
     me = diagonal_sector_mask(empty.shape, ge.cx, ge.cy, axis_exclusion_deg, bar_rect_px, rmax_px, valid_e)
@@ -341,7 +436,8 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
         I = ps.intensity / T - pe.intensity
         sig = np.sqrt((ps.sigma / T) ** 2 + pe.sigma ** 2 + ((ps.intensity / T) * (tr.dT / T)) ** 2)
         ratio = ps.intensity / (T * pe.intensity)
-    flag, i0, i1 = usable_range(ratio, I, sig, ps.r_px)
+    flag, i0, i1 = usable_range(ratio, I, sig, ps.r_px, min_ratio=min_ratio, min_ratio_footprint=min_ratio_footprint,
+                                r_footprint_px=r_footprint_px, nsigma=nsigma, min_run=min_run)
     t_eff = (-np.log(T) / mu_mm) if (mu_mm and mu_mm > 0 and 0 < T < 1) else None
     keep = (ps.npix > 0) & (pe.npix > 0) & np.isfinite(I)
     keep[0] = False
@@ -350,7 +446,9 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
         sample_exposure_s=gs.exposure_s, empty_exposure_s=ge.exposure_s, distance_m=gs.dist_m,
         wavelength_A=gs.wavelength_A, centre_px=(round(gs.cx, 2), round(gs.cy, 2)), centre_source=centre_note,
         centre_header_px=(cx_h, cy_h), centre_offset_from_header_px=(round(gs.cx - cx_h, 1), round(gs.cy - cy_h, 1)),
-        empty_centre_px=(round(ge.cx, 2), round(ge.cy, 2)), pixel_m=gs.pixel_m,
+        empty_centre_px=(round(ge.cx, 2), round(ge.cy, 2)),
+        empty_centre_offset_from_header_px=(round(ge.cx - ge_cx_h, 1), round(ge.cy - ge_cy_h, 1)), pixel_m=gs.pixel_m,
+        n_hot_sample=int(hot_s.sum()), n_hot_empty=int(hot_e.sum()),
         sector=f"diagonal wedges, > {axis_exclusion_deg} deg from both axes, bar zone |dx|<={bar_rect_px[0]} |dy|<={bar_rect_px[1]} px excluded",
         transmission_T=T, transmission_dT=tr.dT, transmission_T_disc4=tr.T_disc4, transmission_T_disc8=tr.T_disc8,
         heterogeneity_T4_over_T=tr.heterogeneity, flatfield_factor_sample=ff_s, flatfield_factor_empty=ff_e,
@@ -360,7 +458,7 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
         _sample_cps_px=ps.intensity[keep], _empty_cps_px=pe.intensity[keep], _ratio=ratio[keep], _n_pix=ps.npix[keep], _usable=flag[keep])
     curve = Curve(q=ps.q[keep], intensity=I[keep], sigma=sig[keep], name=name, path=sample_path, transmission=T,
                   file_role="corrected", metadata=md)
-    curve.record("edf_sectors", transmission=T, sector=md["sector"], hot_pixels_sample=int(hot_pixel_mask(sample).sum()))
+    curve.record("edf_sectors", transmission=T, sector=md["sector"], hot_pixels_sample=int(hot_s.sum()))
     u = flag[keep]
     if u.any():
         cu = Curve(q=ps.q[keep][u], intensity=I[keep][u], sigma=sig[keep][u], name=name + " (usable)", path=sample_path,
@@ -370,7 +468,10 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
     return SectorReduction(curve=curve, curve_usable=cu, transmission=tr, sample_profile=ps, empty_profile=pe,
                            ratio=ratio, usable=flag, q_min_use=md["q_min_use"], q_max_use=md["q_max_use"], t_eff_mm=t_eff,
                            settings=dict(axis_exclusion_deg=axis_exclusion_deg, bar_rect_px=bar_rect_px, rmax_px=rmax_px,
-                                         footprint_r_px=footprint_r_px, vertical_half_deg=vertical_half_deg))
+                                         footprint_r_px=footprint_r_px, vertical_half_deg=vertical_half_deg,
+                                         refine_centre=refine_centre, max_shift_px=max_shift_px, bright_fraction=bright_fraction,
+                                         min_ratio=min_ratio, min_ratio_footprint=min_ratio_footprint,
+                                         r_footprint_px=r_footprint_px, nsigma=nsigma, min_run=min_run))
 
 
 def reduce_frame_pair(sample_path: str, empty_path: str, mu_mm: Optional[float] = None, **kw) -> SectorReduction:

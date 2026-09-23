@@ -113,8 +113,8 @@ def choose_q_i_err_columns(header_tokens: List[str], ncols: int) -> Tuple[int, i
 
     names = [normalize_colname(x) for x in header_tokens]
     q_candidates = ["q", "q_a^1", "q_a^-1", "q_inv_a", "q_a_1", "q_a__1", "2theta", "two_theta", "tth"]
-    i_priority = ["corrected", "iq", "i_q", "intensity", "sample_aligned", "sample", "counts"]
-    err_priority = ["sigma_corrected", "error", "sigma", "err", "uncertainty", "di", "dy"]
+    i_priority = ["corrected", "i_corr", "iq", "i_q", "intensity", "sample_aligned", "sample", "counts"]
+    err_priority = ["sigma_corrected", "sigma_i", "error", "sigma", "err", "uncertainty", "di", "dy"]
 
     q_idx = 0
     for cand in q_candidates:
