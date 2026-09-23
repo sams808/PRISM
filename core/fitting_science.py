@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+from core.np_compat import trapezoid
 import lmfit
 import rampy as rp
 
@@ -258,10 +260,10 @@ def peak_centroid(x: np.ndarray, y_component: np.ndarray) -> float:
     per-shape special-casing."""
     x = np.asarray(x, dtype=float)
     y_component = np.asarray(y_component, dtype=float)
-    denom = np.trapz(y_component, x)
+    denom = trapezoid(y_component, x)
     if abs(denom) < 1e-30:
         return float("nan")
-    return float(np.trapz(x * y_component, x) / denom)
+    return float(trapezoid(x * y_component, x) / denom)
 
 
 def find_peak_candidates(

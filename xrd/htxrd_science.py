@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from core.np_compat import trapezoid
+
 import core.io_universal as io_universal
 
 
@@ -345,7 +347,7 @@ def track_peak(
             center = float(params["f0"].value)
             fwhm = float(params["l0"].value)
             amplitude = float(params["a0"].value)
-            area = float(np.trapz(fr.peaks[0], x_fit))
+            area = float(trapezoid(fr.peaks[0], x_fit))
 
             # ---- post-fit significance: a "fit" of noise is an absence
             if noise > 0 and (amplitude - floor) < absence_sigma * noise:

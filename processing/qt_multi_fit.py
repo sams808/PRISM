@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from core.np_compat import trapezoid
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
@@ -255,7 +257,7 @@ class MultiFitWorkspace(QWidget):
             mask = (x >= xmin) & (x <= xmax)
             x, y = x[mask], y[mask]
         if self.norm_check.isChecked() and len(x) and len(y):
-            area = float(np.trapz(y, x))
+            area = float(trapezoid(y, x))
             if abs(area) > 1e-10:
                 y = y / area * 100.0
         return x, y
@@ -351,7 +353,7 @@ class MultiFitWorkspace(QWidget):
                 rows.append((res.spectrum_title, "ERROR", res.error, "", "", "", "", "", ""))
                 continue
             for i, d in enumerate(res.params_struct):
-                area = float(np.trapz(res.peaks[i], res.x)) if i < len(res.peaks) else float("nan")
+                area = float(trapezoid(res.peaks[i], res.x)) if i < len(res.peaks) else float("nan")
                 centroid = peak_centroid(res.x, res.peaks[i]) if i < len(res.peaks) else float("nan")
                 comp_label = f"{i + 1} ({d['name']})" if d.get("name") else str(i + 1)
                 rows.append((
@@ -421,7 +423,7 @@ class MultiFitWorkspace(QWidget):
                         writer.writerow([res.spectrum_title, "", "", "", "", "", "", "", "", "", "", res.error])
                         continue
                     for i, d in enumerate(res.params_struct):
-                        area = float(np.trapz(res.peaks[i], res.x)) if i < len(res.peaks) else float("nan")
+                        area = float(trapezoid(res.peaks[i], res.x)) if i < len(res.peaks) else float("nan")
                         centroid = peak_centroid(res.x, res.peaks[i]) if i < len(res.peaks) else float("nan")
                         eta = d.get("eta_val", "") if d.get("shape", "G") == "GL" else ""
                         writer.writerow([

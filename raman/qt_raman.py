@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from core.np_compat import trapezoid
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout,
@@ -417,7 +419,7 @@ class RamanWorkspace(QWidget):
                 if norm_xmax is not None:
                     mask &= x <= norm_xmax
                 if mask.sum() > 1:
-                    area = np.trapz(y[mask], x[mask])
+                    area = trapezoid(y[mask], x[mask])
                     if abs(area) > 1e-12:
                         y = y / area * 100
             y = self._apply_smoothing(y)

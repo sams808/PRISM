@@ -42,6 +42,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 
 import numpy as np
+
+_trapezoid = getattr(np, "trapezoid", None) or getattr(np, "trapz")   # numpy 1.x / 2.x
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
@@ -1493,7 +1495,7 @@ class TgGuiApp:
             w = (x >= xmin) & (x <= xmax)
             if w.sum() < 2:
                 raise ValueError("Range too small for integration.")
-            area = float(np.trapz(y[w], x[w]))
+            area = float(_trapezoid(y[w], x[w]))
             self.calc_result_var.set(f"Integrate ({y_col}) from {xmin:.4g} to {xmax:.4g} = {area:.6g}")
 
             # highlight on graph

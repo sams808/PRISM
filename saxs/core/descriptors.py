@@ -16,6 +16,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
+
+from core.np_compat import trapezoid
 import pandas as pd
 
 from .curve import Curve
@@ -153,7 +155,7 @@ def invariant(q: np.ndarray, I: np.ndarray, qrange: Optional[Tuple[float, float]
         m &= (q >= qrange[0]) & (q <= qrange[1])
     if m.sum() < min_points:
         return float("nan")
-    return float(np.trapezoid(np.maximum(I[m] - C, 0) * q[m] ** 2, q[m]))
+    return float(trapezoid(np.maximum(I[m] - C, 0) * q[m] ** 2, q[m]))
 
 
 def excess_over_grain(q: np.ndarray, I: np.ndarray, K4: float, C: float, qmax: float, min_points: int = 8) -> Tuple[float, float, float]:
@@ -165,7 +167,7 @@ def excess_over_grain(q: np.ndarray, I: np.ndarray, K4: float, C: float, qmax: f
         return float("nan"), float("nan"), float("nan")
     base = K4 * q ** -4 + C
     E = I - base
-    return (float(np.trapezoid(np.maximum(E[m], 0) * q[m] ** 2, q[m])), float(np.trapezoid(E[m] * q[m] ** 2, q[m])),
+    return (float(trapezoid(np.maximum(E[m], 0) * q[m] ** 2, q[m])), float(trapezoid(E[m] * q[m] ** 2, q[m])),
             float(np.nanmax(E[m] / base[m])))
 
 

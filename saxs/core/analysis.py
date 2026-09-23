@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+from core.np_compat import trapezoid
 from scipy.optimize import curve_fit
 from scipy.special import erf
 
@@ -378,7 +380,7 @@ def fit_porod_advanced(q: np.ndarray, I: np.ndarray, qmin: float, qmax: float) -
 def compute_partial_porod_invariant(q: np.ndarray, I: np.ndarray, qmin: float, qmax: float) -> Tuple[float, float, float]:
     qf, If, _ = slice_region(q, I, qmin, qmax)
     integrand = qf ** 2 * If
-    Qp = float(np.trapz(integrand, qf))
+    Qp = float(trapezoid(integrand, qf))
     return float(qf[0]), float(qf[-1]), Qp
 
 
@@ -437,7 +439,7 @@ def fit_pseudo_bragg_peak(q: np.ndarray, I: np.ndarray, qmin: float, qmax: float
     xi_app = 2.0 * math.pi / fwhm if fwhm > 0 else float("nan")
     baseline_at_q0 = float(baseline_line(np.array([q0]))[0])
     rel_height = amp / baseline_at_q0 if baseline_at_q0 > 0 else float("nan")
-    window_area = float(np.trapz(If, qf))
+    window_area = float(trapezoid(If, qf))
     area_fraction = area / window_area if window_area > 0 else float("nan")
     return PeakResult(
         qmin=float(qf[0]),

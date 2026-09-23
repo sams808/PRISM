@@ -123,7 +123,7 @@ TEMPLATE_COMMENT = [
     "quantified, note_symbol, group, extra_panels, fit_order).",
     "reduction / descriptors / fit: option overrides (see ReductionOptions, DescriptorOptions, UnifiedOptions).",
     "figures.fit_panels: entries with 'samples' (a list) or 'group' ('*' = every group of the series table); '{group}' in names and titles.",
-    "tables.extra_columns: {'column title': 'series:<column>' or 'samples:<column>'}.",
+    "tables.extra_columns: {'column title': 'series:<column>[:<decimals>]' or 'samples:<column>[:<decimals>]'}.",
 ]
 
 
@@ -475,13 +475,25 @@ def step_figures(cfg: ProjectConfig, progress: Progress = None, log: Log = print
 
 
 def _extra_columns(cfg: ProjectConfig, table, samples_df: Optional[pd.DataFrame]) -> Dict[str, Dict[str, object]]:
+    """``{"column title": "series:<column>[:<decimals>]" | "samples:<column>[:<decimals>]"}``."""
     out: Dict[str, Dict[str, object]] = {}
     for title, source in (cfg.tables or {}).get("extra_columns", {}).items():
-        kind, _, col = str(source).partition(":")
+        parts = str(source).split(":")
+        kind, col = parts[0], parts[1] if len(parts) > 1 else ""
+        nd = int(parts[2]) if len(parts) > 2 and parts[2].strip() else None
+
+        def fmt(v):
+            if nd is None or v is None:
+                return v
+            try:
+                return round(float(v), nd) if np.isfinite(float(v)) else v
+            except (TypeError, ValueError):
+                return v
+
         if kind == "series" and col in table.df.columns:
-            out[title] = {s: table.get(s, col) for s in table.samples}
+            out[title] = {s: fmt(table.get(s, col)) for s in table.samples}
         elif kind == "samples" and samples_df is not None and col in samples_df.columns:
-            out[title] = {str(s): v for s, v in zip(samples_df["sample"], samples_df[col])}
+            out[title] = {str(s): fmt(v) for s, v in zip(samples_df["sample"], samples_df[col])}
     return out
 
 

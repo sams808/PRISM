@@ -23,6 +23,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from core.np_compat import trapezoid
+
 from core.spectrum_math import _common_grid, _on_grid
 
 
@@ -120,7 +122,7 @@ def transform(x: np.ndarray, y: np.ndarray, op: str, *, factor: float = 1.0,
         m = float(np.nanmax(np.abs(y)))
         return x, y / m if m > 0 else y
     if op == "normalize_area":
-        a = float(np.trapz(y, x))
+        a = float(trapezoid(y, x))
         return x, y / a * 100.0 if abs(a) > eps else y
     if op == "normalize_minmax":
         lo, hi = float(np.nanmin(y)), float(np.nanmax(y))
@@ -240,8 +242,8 @@ def statistics_report(x: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         "n_points": len(x), "x_min": float(x[0]), "x_max": float(x[-1]),
         "y_min": float(np.min(y)), "y_max": float(np.max(y)),
         "y_mean": float(np.mean(y)), "y_std": float(np.std(y)),
-        "area": float(np.trapz(y, x)),
-        "centroid_x": float(np.trapz(x * y, x) / np.trapz(y, x)) if abs(np.trapz(y, x)) > 1e-30 else float("nan"),
+        "area": float(trapezoid(y, x)),
+        "centroid_x": float(trapezoid(x * y, x) / trapezoid(y, x)) if abs(trapezoid(y, x)) > 1e-30 else float("nan"),
         "apex_x": float(x[apex]), "apex_y": float(y[apex]),
     }
 

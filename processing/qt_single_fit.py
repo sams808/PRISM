@@ -38,6 +38,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from core.np_compat import trapezoid
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QFileDialog, QHBoxLayout, QLabel,
@@ -306,7 +308,7 @@ class SingleFitWorkspace(QWidget):
             x, y = x[mask], y[mask]
 
         if self.norm_check.isChecked() and len(x) and len(y):
-            area = float(np.trapz(y, x))
+            area = float(trapezoid(y, x))
             if abs(area) > 1e-10:
                 y = y / area * 100.0
         return x, y
@@ -720,7 +722,7 @@ class SingleFitWorkspace(QWidget):
 
         chi2 = compute_chi2(y, y_fit, build_lmfit_parameters(params_struct))
         r2 = compute_r_squared(y, y_fit)
-        areas = [float(np.trapz(pk, x)) for pk in peaks]
+        areas = [float(trapezoid(pk, x)) for pk in peaks]
         centroids = [peak_centroid(x, pk) for pk in peaks]
 
         def _stderr(pname: str) -> str:

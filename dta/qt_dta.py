@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+from core.np_compat import trapezoid
 import pandas as pd
 
 from PySide6.QtCore import Qt
@@ -941,7 +943,7 @@ class DtaWorkspace(QWidget):
             w = (x >= xmin) & (x <= xmax)
             if w.sum() < 2:
                 raise ValueError("Range too small for integration.")
-            area = float(np.trapz(y[w], x[w]))
+            area = float(trapezoid(y[w], x[w]))
             self.calc_result_label.setText(f"Integrate ({y_col}) from {xmin:.4g} to {xmax:.4g} = {area:.6g}")
             ax = self._calc_axis()
             self.plot.ax.axvspan(xmin, xmax, alpha=0.08)

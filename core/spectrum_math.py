@@ -13,6 +13,8 @@ from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
+from core.np_compat import trapezoid
+
 
 def _common_grid(spectra_xy: Sequence[Tuple[np.ndarray, np.ndarray]], n_points: Optional[int] = None) -> np.ndarray:
     lo = max(float(np.nanmin(x)) for x, _ in spectra_xy)
@@ -33,7 +35,7 @@ def _on_grid(x: np.ndarray, y: np.ndarray, grid: np.ndarray) -> np.ndarray:
 
 
 def _area_normalize(grid: np.ndarray, y: np.ndarray) -> np.ndarray:
-    area = np.trapz(y, grid)
+    area = trapezoid(y, grid)
     if abs(area) < 1e-30:
         return y
     return y / area * 100.0

@@ -5,6 +5,8 @@ copies that used to live inline in main.py's SingleFitWindow.
 from __future__ import annotations
 
 import numpy as np
+
+from core.np_compat import trapezoid
 import pytest
 import rampy as rp
 
@@ -268,8 +270,8 @@ def test_emg_peak_positive_skew_tails_right_negative_tails_left():
     assert np.nanmax(right) == pytest.approx(100.0, rel=1e-6)
     # Asymmetry: mass above vs below the mode
     mode_r = x[int(np.nanargmax(right))]
-    mass_hi = np.trapz(right[x > mode_r], x[x > mode_r])
-    mass_lo = np.trapz(right[x < mode_r], x[x < mode_r])
+    mass_hi = trapezoid(right[x > mode_r], x[x > mode_r])
+    mass_lo = trapezoid(right[x < mode_r], x[x < mode_r])
     assert mass_hi > 1.5 * mass_lo
     # Mirror symmetry between +skew and -skew
     assert np.allclose(right, left[::-1], atol=1e-6)

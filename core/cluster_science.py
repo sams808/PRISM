@@ -18,6 +18,8 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
+from core.np_compat import trapezoid
+
 
 def build_feature_matrix(
     spectra_xy: Sequence[Tuple[np.ndarray, np.ndarray]],
@@ -54,7 +56,7 @@ def build_feature_matrix(
         order = np.argsort(x[m], kind="mergesort")
         yi = np.interp(grid, x[m][order], y[m][order])
         if normalize == "area":
-            area = np.trapz(yi, grid)
+            area = trapezoid(yi, grid)
             if abs(area) > 1e-30:
                 yi = yi / area
         elif normalize == "max":
