@@ -43,6 +43,8 @@ DEFAULT_PREFIXES: Dict[str, str] = {
     "lorentz_oz": "oz_",
     "teubner_strey": "ts_",
     "broad_peak": "bp_",
+    "beaucage_tied": "bt_",
+    "rising_tail": "rt_",
 }
 
 # spec §2.2 registered composite presets (BG_TS_PL2 added in v2:
@@ -63,6 +65,12 @@ PRESETS: Dict[str, List[str]] = {
     "BG_TS_GP": ["flat_background", "power_law", "teubner_strey", "guinier_porod"],
     "BG_TS_BC": ["flat_background", "power_law", "teubner_strey", "beaucage_unified"],
     "BG_BP": ["flat_background", "power_law", "broad_peak"],
+    # two-level unified family (Tomita et al. 2024 Eq. 10; saxs.core.unified_levels is the
+    # dedicated engine with BIC forward selection; here the same components as a manual preset)
+    "L1": ["flat_background", "beaucage_unified"],
+    "L1_T": ["flat_background", "rising_tail", "beaucage_unified"],
+    "L1_L2": ["flat_background", "beaucage_unified", "beaucage_tied"],
+    "L1_L2_T": ["flat_background", "rising_tail", "beaucage_unified", "beaucage_tied"],
 }
 
 

@@ -303,9 +303,13 @@ class BeaucageUnified(Component):
     def eval(self, q: np.ndarray, G: float = 1.0, Rg: float = 100.0,
              B: float = 1.0, p: float = 4.0) -> np.ndarray:
         q = np.asarray(q, dtype=float)
-        guinier_term = float(G) * np.exp(-(q ** 2) * (float(Rg) ** 2) / 3.0)
-        erf_term = np.clip(erf(q * float(Rg) / math.sqrt(6.0)), 1e-15, None)
-        porod_term = float(B) * np.power(erf_term, 3.0 * float(p)) / np.power(np.clip(q, 1e-300, None), float(p))
+        # Written exactly as G exp(-q^2 Rg^2 / 3) + B erf(q Rg / sqrt 6)^(3p) q^-p, operation by operation:
+        # the two-level unified engine relies on bit-identical values (a last-ulp change alters a
+        # least-squares trajectory near a saddle). q <= 0 is guarded without touching q > 0.
+        Rg, p = float(Rg), float(p)
+        q_safe = np.where(q > 0, q, 1e-300)
+        guinier_term = float(G) * np.exp(-q ** 2 * Rg ** 2 / 3)
+        porod_term = float(B) * erf(q_safe * Rg / np.sqrt(6)) ** (3 * p) * q_safe ** (-p)
         return guinier_term + porod_term
 
     def seed(self, q, I, windows=None) -> Dict[str, float]:
@@ -504,9 +508,88 @@ class BroadPeak(Component):
         }
 
 
+# =============================================================================
+# 1.9 beaucage_tied — a Beaucage level whose Porod prefactor is TIED to its
+# Guinier amplitude by the Beaucage (1996) polydispersity relation times a
+# factor pf (0.16 = monodisperse spheres, 1 = broad distribution). Such a
+# level is a population with a Guinier knee or it is nothing: it cannot
+# degenerate into a free power law (the anti-overfitting device of the
+# two-level unified fit, saxs.core.unified_levels).
+# =============================================================================
+
+def beaucage_polydisperse_prefactor(G: float, Rg: float, d: float) -> float:
+    """Beaucage (1996) prefactor B of the power-law term of a polydisperse level:
+    B = G d / Rg^d (6 d^2 / ((2 + d)(2 + 2 d)))^(d/2) Gamma(d/2)."""
+    from scipy.special import gamma as Gamma
+
+    G, Rg, d = float(G), max(float(Rg), 1e-12), float(d)
+    return G * d / Rg ** d * (6 * d ** 2 / ((2 + d) * (2 + 2 * d))) ** (d / 2) * Gamma(d / 2)
+
+
+class BeaucageTied(Component):
+    """One unified level with B = pf x B_poly(G, Rg, d) (Beaucage 1995 form, 1996 prefactor)."""
+    name = "beaucage_tied"
+
+    def params(self) -> List[Param]:
+        return [
+            Param("G", 1.0, 0.0, np.inf, doc="Guinier prefactor."),
+            Param("Rg", 100.0, 10.0, 5000.0, unit="Å", doc="Radius of gyration."),
+            Param("d", 3.5, 1.0, 4.5, doc="Power-law exponent of the level."),
+            Param("pf", 0.5, 0.1, 1.5, doc=(
+                "Polydispersity factor on the Beaucage (1996) prefactor: 0.16 for "
+                "monodisperse spheres, 1 for a broad size distribution.")),
+        ]
+
+    def eval(self, q: np.ndarray, G: float = 1.0, Rg: float = 100.0, d: float = 3.5, pf: float = 0.5) -> np.ndarray:
+        B = float(pf) * beaucage_polydisperse_prefactor(G, Rg, d)
+        return BeaucageUnified().eval(q, G=G, Rg=Rg, B=B, p=d)
+
+    def derived(self, G: float = 1.0, Rg: float = 100.0, d: float = 3.5, pf: float = 0.5, **_) -> Dict[str, float]:
+        return {"B": float(pf) * beaucage_polydisperse_prefactor(G, Rg, d),
+                "D_eq": 2.0 * float(Rg) * math.sqrt(5.0 / 3.0)}
+
+    def seed(self, q, I, windows=None) -> Dict[str, float]:
+        base = Guinier().seed(q, I, windows)
+        return {"G": base["G"], "Rg": base["Rg"], "d": 3.5, "pf": 0.5}
+
+
+# =============================================================================
+# 1.10 rising_tail — T q^m, the rising flank of the amorphous halo on the
+# high-q side of a SAXS window (m fixed at 2 by default; vary it explicitly
+# if the data demand it).
+# =============================================================================
+
+class RisingTail(Component):
+    name = "rising_tail"
+
+    def params(self) -> List[Param]:
+        return [
+            Param("T", 0.0, 0.0, np.inf, doc="Amplitude of the rising tail T q^m."),
+            Param("m", 2.0, 0.5, 4.0, vary=False, doc="Exponent of the rising tail (fixed at 2 by default)."),
+        ]
+
+    def eval(self, q: np.ndarray, T: float = 0.0, m: float = 2.0) -> np.ndarray:
+        q = np.asarray(q, dtype=float)
+        if float(m) == 2.0:
+            return float(T) * q ** 2                 # exact square, as the reference script
+        return float(T) * np.power(np.clip(q, 0.0, None), float(m))
+
+    def seed(self, q, I, windows=None) -> Dict[str, float]:
+        q = np.asarray(q, dtype=float)
+        I = np.asarray(I, dtype=float)
+        mask = (q > 0) & (I > 0)
+        if int(np.sum(mask)) < 3:
+            return {"T": 0.0, "m": 2.0}
+        qmax = float(np.max(q[mask]))
+        hi = mask & (q >= qmax / 1.5)
+        level = float(np.median(I[hi])) if np.any(hi) else float(I[mask][-1])
+        return {"T": 0.3 * level / qmax ** 2, "m": 2.0}
+
+
 COMPONENTS: Dict[str, Type[Component]] = {
     cls.name: cls for cls in (
         FlatBackground, PowerLaw, PowerLaw2, Guinier, GuinierPorod,
         BeaucageUnified, Dab, LorentzOZ, TeubnerStrey, BroadPeak,
+        BeaucageTied, RisingTail,
     )
 }

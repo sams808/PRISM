@@ -14,14 +14,14 @@ import numpy as np
 import pytest
 
 from saxs.core.composite_models import (
-    COMPONENTS, BeaucageUnified, BroadPeak, Dab, FlatBackground, Guinier,
-    GuinierPorod, PowerLaw, TeubnerStrey, ts_classic_from_physical,
-    ts_physical_from_classic,
+    COMPONENTS, BeaucageTied, BeaucageUnified, BroadPeak, Dab, FlatBackground, Guinier,
+    GuinierPorod, PowerLaw, RisingTail, TeubnerStrey, beaucage_polydisperse_prefactor,
+    ts_classic_from_physical, ts_physical_from_classic,
 )
 
 ALL_COMPONENTS = [
     FlatBackground(), PowerLaw(), Guinier(), GuinierPorod(),
-    BeaucageUnified(), Dab(), TeubnerStrey(), BroadPeak(),
+    BeaucageUnified(), Dab(), TeubnerStrey(), BroadPeak(), BeaucageTied(), RisingTail(),
 ]
 
 
@@ -45,10 +45,11 @@ def test_component_params_within_declared_bounds(comp):
         assert p.min <= p.value <= p.max
 
 
-def test_registry_contains_all_ten_components():
+def test_registry_contains_all_twelve_components():
     assert set(COMPONENTS) == {
         "flat_background", "power_law", "power_law2", "guinier", "guinier_porod",
         "beaucage_unified", "dab", "lorentz_oz", "teubner_strey", "broad_peak",
+        "beaucage_tied", "rising_tail",
     }
     for name, cls in COMPONENTS.items():
         assert cls().name == name
@@ -248,3 +249,44 @@ def test_seed_respects_windows_argument():
     for comp in ALL_COMPONENTS:
         seeded = comp.seed(q, I, windows=windows)
         assert set(seeded) == {p.name for p in comp.params()}
+
+
+
+# ---------------------------------------------------------------------------
+# SAXS 2.0 shared components: the tied Beaucage level and the rising tail
+# ---------------------------------------------------------------------------
+
+def test_beaucage_tied_is_beaucage_unified_with_the_1996_prefactor():
+    q = np.geomspace(1e-3, 0.3, 300)
+    G, Rg, d, pf = 20.0, 100.0, 3.5, 0.5
+    B = pf * beaucage_polydisperse_prefactor(G, Rg, d)
+    tied = BeaucageTied().eval(q, G=G, Rg=Rg, d=d, pf=pf)
+    free = BeaucageUnified().eval(q, G=G, Rg=Rg, B=B, p=d)
+    np.testing.assert_allclose(tied, free, rtol=1e-12)
+    # the 1996 relation for d = 4 spheres: B = G 4 / Rg^4 (96/60)^2 Gamma(2)
+    assert beaucage_polydisperse_prefactor(1.0, 10.0, 4.0) == pytest.approx(4.0 / 1e4 * (96.0 / 60.0) ** 2, rel=1e-12)
+    der = BeaucageTied().derived(G=G, Rg=Rg, d=d, pf=pf)
+    assert der["B"] == pytest.approx(B, rel=1e-12) and der["D_eq"] == pytest.approx(2 * Rg * math.sqrt(5 / 3), rel=1e-12)
+    pf_param = next(p for p in BeaucageTied().params() if p.name == "pf")
+    assert (pf_param.min, pf_param.max) == (0.1, 1.5)
+
+
+def test_rising_tail_is_t_q_m_with_m_fixed_by_default():
+    q = np.geomspace(1e-3, 0.3, 50)
+    np.testing.assert_allclose(RisingTail().eval(q, T=3.0, m=2.0), 3.0 * q ** 2, rtol=1e-14)
+    np.testing.assert_allclose(RisingTail().eval(q, T=3.0, m=1.5), 3.0 * q ** 1.5, rtol=1e-14)
+    m_param = next(p for p in RisingTail().params() if p.name == "m")
+    assert m_param.vary is False and m_param.value == 2.0
+    seed = RisingTail().seed(q, 1e-3 + 2.0 * q ** 2)
+    assert seed["m"] == 2.0 and seed["T"] > 0
+
+
+def test_two_level_presets_build_with_expected_prefixes():
+    from saxs.core.composite_fit import PRESETS, build_preset
+    assert PRESETS["L1_L2_T"] == ["flat_background", "rising_tail", "beaucage_unified", "beaucage_tied"]
+    model = build_preset("L1_L2_T")
+    assert [p for p, _ in model.components] == ["bg_", "rt_", "bu_", "bt_"]
+    params = model.to_lmfit_parameters()
+    assert params["rt_m"].vary is False
+    q = np.geomspace(4e-3, 0.2, 100)
+    assert np.all(np.isfinite(model.eval(q, params)))
