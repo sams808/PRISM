@@ -79,6 +79,43 @@ def read_frame(path: str) -> Tuple[np.ndarray, Dict[str, str], FrameGeometry]:
     return im.data.astype(np.float64), h, FrameGeometry.from_header(h)
 
 
+def beam_centroid(data: np.ndarray, seed_cx: float, seed_cy: float, r_px: float = 25.0, pct: float = 99.0) -> Optional[Tuple[float, float]]:
+    """Intensity-weighted centroid of the brightest pixels (top ``100 - pct`` %) within ``r_px`` of a
+    seed: the recorded direct beam. Returns None when there is nothing bright there. Header beam
+    centres can be off by several pixels from one session to the next; on a beamstopless
+    instrument the frame itself carries the true centre."""
+    yy, xx = np.indices(data.shape)
+    rr = np.hypot(xx - seed_cx, yy - seed_cy)
+    m = (rr < r_px) & (data > 0)
+    if m.sum() < 20:
+        return None
+    thr = np.percentile(data[m], pct)
+    m &= data >= thr
+    return float((data[m] * xx[m]).sum() / data[m].sum()), float((data[m] * yy[m]).sum() / data[m].sum())
+
+
+def refine_centres(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: FrameGeometry,
+                   max_shift_px: float = 4.0, bright_fraction: float = 0.01) -> Tuple[FrameGeometry, FrameGeometry, str]:
+    """Replace the header centres by the direct-beam centroids: the empty's own; the sample's own when
+    its central disc holds more than ``bright_fraction`` of the empty's and lies within ``max_shift_px``
+    of the empty's centre, otherwise the empty's centre (dark centre = opaque loading). Returns the two
+    geometries and a description of the sample choice."""
+    from dataclasses import replace
+
+    ce = beam_centroid(empty, ge.cx, ge.cy)
+    if ce is None:
+        return gs, ge, "header (no direct beam found in the empty)"
+    ge2 = replace(ge, cx=ce[0], cy=ce[1])
+    yy, xx = np.indices(sample.shape)
+    disc = np.hypot(xx - ce[0], yy - ce[1]) < 5.0
+    s_level = float(np.mean(sample[disc & (sample >= 0)])) / gs.exposure_s
+    e_level = float(np.mean(empty[disc & (empty >= 0)])) / ge.exposure_s
+    cs = beam_centroid(sample, ce[0], ce[1])
+    if cs is not None and e_level > 0 and s_level > bright_fraction * e_level and np.hypot(cs[0] - ce[0], cs[1] - ce[1]) < max_shift_px:
+        return replace(gs, cx=cs[0], cy=cs[1]), ge2, "own direct beam"
+    return replace(gs, cx=ce[0], cy=ce[1]), ge2, "session empty (centre too dark)"
+
+
 def pixel_maps(shape: Tuple[int, int], cx: float, cy: float):
     """(r, phi180, dx, dy): radius in px, azimuth folded to [0, 180) deg (0 = +x axis), offsets."""
     yy, xx = np.indices(shape)
@@ -282,8 +319,15 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
                   mu_mm: Optional[float] = None, axis_exclusion_deg: float = 20.0,
                   bar_rect_px: Tuple[float, float] = (40.0, 14.0), rmax_px: int = 650,
                   footprint_r_px: float = 16.0, vertical_half_deg: float = 30.0,
-                  name: str = "sample", sample_path: str = "", empty_path: str = "") -> SectorReduction:
-    """Sector-integrated, transmission-scaled empty subtraction of two frames already in memory."""
+                  name: str = "sample", sample_path: str = "", empty_path: str = "",
+                  refine_centre: bool = True) -> SectorReduction:
+    """Sector-integrated, transmission-scaled empty subtraction of two frames already in memory.
+    With ``refine_centre`` (default) the beam centres come from the recorded direct beam
+    (:func:`refine_centres`); the header centres are kept in the metadata."""
+    cx_h, cy_h = gs.cx, gs.cy
+    centre_note = "header"
+    if refine_centre:
+        gs, ge, centre_note = refine_centres(sample, gs, empty, ge)
     valid_s = valid_pixel_mask(sample) & ~hot_pixel_mask(sample)
     valid_e = valid_pixel_mask(empty) & ~hot_pixel_mask(empty)
     ff_s, ff_e = flatfield_factor(sample), flatfield_factor(empty)
@@ -304,7 +348,9 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
     md: Dict[str, object] = dict(
         reduction="edf_sectors.reduce_arrays", sample_frame=sample_path, empty_frame=empty_path,
         sample_exposure_s=gs.exposure_s, empty_exposure_s=ge.exposure_s, distance_m=gs.dist_m,
-        wavelength_A=gs.wavelength_A, centre_px=(gs.cx, gs.cy), pixel_m=gs.pixel_m,
+        wavelength_A=gs.wavelength_A, centre_px=(round(gs.cx, 2), round(gs.cy, 2)), centre_source=centre_note,
+        centre_header_px=(cx_h, cy_h), centre_offset_from_header_px=(round(gs.cx - cx_h, 1), round(gs.cy - cy_h, 1)),
+        empty_centre_px=(round(ge.cx, 2), round(ge.cy, 2)), pixel_m=gs.pixel_m,
         sector=f"diagonal wedges, > {axis_exclusion_deg} deg from both axes, bar zone |dx|<={bar_rect_px[0]} |dy|<={bar_rect_px[1]} px excluded",
         transmission_T=T, transmission_dT=tr.dT, transmission_T_disc4=tr.T_disc4, transmission_T_disc8=tr.T_disc8,
         heterogeneity_T4_over_T=tr.heterogeneity, flatfield_factor_sample=ff_s, flatfield_factor_empty=ff_e,

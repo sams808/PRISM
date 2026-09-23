@@ -135,6 +135,27 @@ def test_reduce_arrays_subtracts_scaled_empty_and_flags_ring_usable():
     assert len(red.curve_usable.q) > 0
 
 
+def test_refine_centres_recovers_a_shifted_beam_and_falls_back_for_a_dark_centre():
+    # beam actually 8 px to the left of the header centre, in both frames
+    yy, xx = np.indices(SHAPE)
+    def beam_at(cx, peak):
+        return peak * np.exp(-((xx - cx) ** 2 + (yy - CY) ** 2) / (2 * 5.0 ** 2)) + 2.0
+    empty = beam_at(CX - 8.0, 1e5)
+    sample = 0.1 * beam_at(CX - 8.0, 1e5)
+    gs2, ge2, note = es.refine_centres(sample, GEOM, empty, GEOM)
+    assert abs(ge2.cx - (CX - 8.0)) < 0.3 and abs(ge2.cy - CY) < 0.3
+    assert abs(gs2.cx - (CX - 8.0)) < 0.3 and note == "own direct beam"
+    # opaque sample: dark centre with bright lobes -> the empty's centre is used
+    dark = 1e-5 * beam_at(CX - 8.0, 1e5) + _bars(x0=12.0, amp=3e4, half_h=10)
+    gs3, ge3, note3 = es.refine_centres(dark, GEOM, empty, GEOM)
+    assert abs(gs3.cx - ge3.cx) < 1e-9 and note3.startswith("session empty")
+    # the reduction with a shifted beam recovers the transmission only when the centre is refined
+    red = es.reduce_arrays(sample, GEOM, empty, GEOM, refine_centre=True)
+    assert abs(red.transmission.T / 0.1 - 1) < 0.02
+    assert red.curve.metadata["centre_source"] == "own direct beam"
+    assert abs(red.curve.metadata["centre_offset_from_header_px"][0] + 8.0) < 0.5
+
+
 def test_write_dat_round_trips_through_the_loader(tmp_path):
     empty = _beam(peak=2e5) + 3.0
     sample = 0.3 * empty + _ring(r0=70.0, amp=300.0)
