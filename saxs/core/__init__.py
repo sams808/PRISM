@@ -27,8 +27,8 @@ from saxs.core.composite_staged import FitResult, fit_staged, propose_windows
 from saxs.core.curve import Curve
 from saxs.core.edf_sectors import SectorReduction, reduce_arrays, reduce_frame_pair, sector_anisotropy
 from saxs.core.frames import FramePair, FrameRecord, PairingResult, inventory_table, pair_frames, scan_frames, write_inventory
-from saxs.core.sector_batch import (MuSource, ReducedSample, ReductionOptions, classify_loading, load_reduced_dat,
-                                    load_reduced_folder, reduce_pairs, summary_table, write_reduced_dat)
+from saxs.core.sector_batch import (MuSource, ReducedSample, ReductionOptions, classify_loading, export_sasview, load_reduced_dat,
+                                    load_reduced_folder, reduce_pairs, summary_table, write_reduced_dat, write_sasview_dat)
 from saxs.core.descriptors import DescriptorOptions, DescriptorResult, describe_batch, describe_curve, maximum_test, rebin_log
 from saxs.core.unified_levels import (UnifiedFitResult, UnifiedOptions, batch_fit, fit_unified_levels, fit_with_robustness,
                                       load_results_json, robustness_pass, save_results_json)
@@ -52,8 +52,8 @@ __all__ = [
     "Curve",
     "SectorReduction", "reduce_arrays", "reduce_frame_pair", "sector_anisotropy",
     "FramePair", "FrameRecord", "PairingResult", "inventory_table", "pair_frames", "scan_frames", "write_inventory",
-    "MuSource", "ReducedSample", "ReductionOptions", "classify_loading", "load_reduced_dat", "load_reduced_folder",
-    "reduce_pairs", "summary_table", "write_reduced_dat",
+    "MuSource", "ReducedSample", "ReductionOptions", "classify_loading", "export_sasview", "load_reduced_dat", "load_reduced_folder",
+    "reduce_pairs", "summary_table", "write_reduced_dat", "write_sasview_dat",
     "DescriptorOptions", "DescriptorResult", "describe_batch", "describe_curve", "maximum_test", "rebin_log",
     "UnifiedFitResult", "UnifiedOptions", "batch_fit", "fit_unified_levels", "fit_with_robustness", "load_results_json",
     "robustness_pass", "save_results_json",

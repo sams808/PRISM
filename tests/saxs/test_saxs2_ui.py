@@ -74,7 +74,12 @@ def test_frames_tab_scans_pairs_reduces_and_exports(qtbot, campaign, tmp_path):
     assert widget.fr_results_table.rowCount() == 4
     classes = {widget.fr_results_table.item(r, 0).text(): widget.fr_results_table.item(r, 6).text() for r in range(4)}
     assert classes["S2"] == "opaque" and classes["S1"] == "measurable"
-    assert sorted(os.listdir(out)) == ["S1__sectors.dat", "S2__sectors.dat", "S3_0p5mm__sectors.dat", "S4__sectors.dat"]
+    assert sorted(os.listdir(out)) == ["S1__sectors.dat", "S2__sectors.dat", "S3_0p5mm__sectors.dat", "S4__sectors.dat", "sasview"]
+    assert sorted(os.listdir(os.path.join(out, "sasview"))) == ["S1__sasview.dat", "S2__sasview.dat", "S3_0p5mm__sasview.dat", "S4__sasview.dat"]
+    sv_dir = str(tmp_path / "sv_export")
+    with patch("saxs.qt_saxs2.QFileDialog.getExistingDirectory", return_value=sv_dir):
+        widget.fr_export_sasview()
+    assert len(os.listdir(sv_dir)) == 4 and "SasView-ready" in widget.fr_status.text()
     names = [c.name for c in widget.curves]
     assert names == ["S1", "S2", "S3_0p5mm", "S4"]
     assert widget.curves[0].metadata["per_mm"] is True and widget.uf_combo.count() == 4

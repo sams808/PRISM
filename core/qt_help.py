@@ -432,7 +432,12 @@ scales the empty by the footprint transmission (a central-disc check flags
 uneven loadings), gives every curve a loading class (measurable &mu;t &lt; 3,
 marginal 3&ndash;6, opaque &gt; 6: shapes only, unreliable) and a usable
 q-range, and normalises per mm of material when the samples table gives
-&mu; (or a composition + density). The reduced curves join the curve list.</p>
+&mu; (or a composition + density). The reduced curves join the curve list.
+The provenance <code>.dat</code> (ten columns) is for PRISM; <b>Export for
+SasView&hellip;</b> (also written as <code>sasview\</code> next to the output
+folder) gives three-column Q / I / dI files on the usable range that SasView
+and other fit engines open &mdash; the scale is per mm of material, not
+absolute, so leave the scale factor free.</p>
 <p><b>Unified fit</b> (SAXS 2.0): the two-level unified model &mdash; a grain
 level (Rg 25&ndash;150 nm, free Porod term), an optional nanoscale level whose
 Porod prefactor is tied to its Guinier amplitude (so a level is a population

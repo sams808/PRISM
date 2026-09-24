@@ -157,6 +157,91 @@ def test_reduce_pairs_keeps_both_curves_of_a_duplicated_name(tmp_path):
     assert sb.load_reduced_dat(str(tmp_path / "out" / "S1__2__sectors.dat")).name == "S1__2"
 
 
+def _read_numeric_rows(path):
+    rows, comments, other = [], 0, []
+    for ln in open(path, encoding="utf-8"):
+        t = ln.strip()
+        if not t:
+            continue
+        if t.startswith("#"):
+            comments += 1
+            continue
+        try:
+            rows.append([float(x) for x in t.split()])
+        except ValueError:
+            other.append(t)
+    return rows, comments, other
+
+
+def test_sasview_export_is_three_numeric_columns_on_the_usable_range(reduced, tmp_path):
+    _, _, res = reduced
+    r = res["S1"]
+    path = sb.write_sasview_dat(r, str(tmp_path / "sv" / "S1__sasview.dat"))
+    rows, comments, other = _read_numeric_rows(path)
+    assert comments >= 10 and other == [], "only # comment lines besides the data (SasView resets on any other text)"
+    assert all(len(row) == 3 for row in rows) and len(rows) == r.n_use >= 5
+    u = r.usable_curve()
+    arr = np.asarray(rows)
+    assert np.allclose(arr[:, 0], u.q) and np.allclose(arr[:, 1], u.intensity, rtol=1e-9) and np.allclose(arr[:, 2], u.sigma, rtol=1e-9)
+    assert np.all(arr[:, 0] > 0) and np.all(np.isfinite(arr))
+    text = open(path, encoding="utf-8").read()
+    assert "per mm" in text and "# sample: S1" in text and "\t" not in text
+    # PRISM's own loader reads it back with sigma
+    from saxs.core.loader import load_curve
+    c = load_curve(path)
+    assert c.npts == len(rows) and np.allclose(c.sigma, arr[:, 2])
+    # without mu the export falls back to I_corr and says so; all rings on request
+    p4 = sb.write_sasview_dat(res["S4"], str(tmp_path / "S4.dat"), usable_only=False)
+    rows4, _, _ = _read_numeric_rows(p4)
+    assert len(rows4) == res["S4"].curve.npts and "empty-transmission units" in open(p4, encoding="utf-8").read()
+    paths = sb.export_sasview(res.values(), str(tmp_path / "all"))
+    assert sorted(os.path.basename(p_) for p_ in paths) == ["S1__sasview.dat", "S2__sasview.dat", "S3_0p5mm__sasview.dat", "S4__sasview.dat"]
+    # reduce_pairs writes them alongside when asked
+    root = str(tmp_path / "again")
+    syn.make_campaign(root)
+    pairing = fr.pair_frames(fr.scan_frames(root, diagnostics=False))
+    sb.reduce_pairs(pairing.pairs, out_dir=str(tmp_path / "again_out"), sasview_dir=str(tmp_path / "again_sv"))
+    assert len(os.listdir(tmp_path / "again_sv")) == 4
+    # the provenance folder loader ignores SasView copies placed next to the reduced files
+    for p_ in paths:
+        os.replace(p_, os.path.join(os.path.dirname(res["S1"].dat_path), os.path.basename(p_)))
+    assert {x.name for x in sb.load_reduced_folder(os.path.dirname(res["S1"].dat_path), exclude_pattern=sb.SASVIEW_SUFFIX)} == set(res)
+
+
+SASVIEW_EXE = os.environ.get("PRISM_SASVIEW_EXE", r"C:\SasView-6.1.2\sasview.exe")
+
+
+@pytest.mark.skipif(not os.path.exists(SASVIEW_EXE), reason="SasView not installed (set PRISM_SASVIEW_EXE)")
+def test_sasview_itself_loads_the_export_and_rejects_the_provenance_layout(reduced, tmp_path):
+    """Drives the installed SasView's own loader (sasdata) through its command-line Python."""
+    import json
+    import subprocess
+    _, _, res = reduced
+    sv = sb.write_sasview_dat(res["S1"], str(tmp_path / "S1__sasview.dat"))
+    script = tmp_path / "probe.py"
+    script.write_text(
+        "import json, sys, traceback\n"
+        "from sasdata.dataloader.loader import Loader\n"
+        "out = {}\n"
+        "for f in sys.argv[1:]:\n"
+        "    try:\n"
+        "        d = Loader().load(f)[0]\n"
+        "        out[f] = dict(n=int(len(d.x)), x0=float(d.x[0]), y0=float(d.y[0]), dy0=(None if d.dy is None else float(d.dy[0])),\n"
+        "                      dx_max=(None if d.dx is None else float(max(abs(v) for v in d.dx))), xunit=str(d.x_unit), yunit=str(d.y_unit))\n"
+        "    except Exception as exc:\n"
+        "        out[f] = dict(error=type(exc).__name__ + ': ' + str(exc)[:120])\n"
+        f"json.dump(out, open(r'{tmp_path / 'probe.json'}', 'w'))\n", encoding="utf-8")
+    subprocess.run([SASVIEW_EXE, str(script), sv, res["S1"].dat_path], capture_output=True, timeout=300)
+    got = json.load(open(tmp_path / "probe.json", encoding="utf-8"))
+    good = got[sv]
+    assert "error" not in good, good
+    u = res["S1"].usable_curve()
+    assert good["n"] == u.npts and good["x0"] == pytest.approx(u.q[0], rel=1e-9) and good["y0"] == pytest.approx(u.intensity[0], rel=1e-9)
+    assert good["dy0"] == pytest.approx(u.sigma[0], rel=1e-9) and good["xunit"] == "A^{-1}"
+    assert good["dx_max"] in (None, 0.0)                      # no q resolution column (sasdata keeps a zero dq array)
+    assert "error" in got[res["S1"].dat_path]            # the ten-column provenance file is not for SasView
+
+
 def test_reduce_arrays_with_options_in_memory():
     rng = np.random.default_rng(3)
     e = syn.empty_frame(noise=rng)

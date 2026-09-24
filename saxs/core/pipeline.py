@@ -13,6 +13,7 @@ Layout of the output folder::
 
     inventory.csv, pairs.csv, unpaired.csv          (inventory)
     curves/<sample><suffix>.dat, reduction_summary.csv   (reduce)
+    curves_sasview/<sample>__sasview.dat            (reduce: three-column files for SasView / external fit engines)
     descriptors.csv                                 (describe)
     fits.json, fits.csv                             (fit; robustness updates them and adds fits_relaxed.csv)
     figures/<name>.pdf|svg|png                      (figures)
@@ -294,8 +295,9 @@ def step_reduce(cfg: ProjectConfig, progress: Progress = None, log: Log = print)
     opts = ReductionOptions.from_dict(cfg.reduction)
     mu = _mu_source(cfg)
     errors = []
+    sasview_dir = os.path.join(cfg.out, "curves_sasview")
     results = reduce_pairs(pairs, opts, mu, out_dir=_curves_dir(cfg), progress=progress,
-                           on_error=lambda p, e: errors.append(f"{p.sample.name}: {type(e).__name__}: {e}"))
+                           on_error=lambda p, e: errors.append(f"{p.sample.name}: {type(e).__name__}: {e}"), sasview_dir=sasview_dir)
     for e in errors:
         log(f"  failed: {e}")
     summary = os.path.join(cfg.out, "reduction_summary.csv")
@@ -303,7 +305,10 @@ def step_reduce(cfg: ProjectConfig, progress: Progress = None, log: Log = print)
     for r in results:
         log(f"  {r.name:20s} T={r.transmission.T:.3g} mu t={r.mu_t:.2f} {r.loading_class:10s} usable [{r.q_min_use}, {r.q_max_use}] centre: {r.centre_source}")
     inputs = [os.path.join(cfg.out, "pairs.csv")] + ([cfg.resolve(cfg.samples_table)] if cfg.samples_table else [])
-    return {"outputs": [r.dat_path for r in results] + [summary], "inputs": inputs, "options": opts.to_dict(),
+    from .sector_batch import SASVIEW_SUFFIX
+    sasview_files = [os.path.join(sasview_dir, f"{r.name}{SASVIEW_SUFFIX}.dat") for r in results]
+    log(f"  {len(sasview_files)} SasView-ready three-column curve(s) -> {sasview_dir}")
+    return {"outputs": [r.dat_path for r in results] + sasview_files + [summary], "inputs": inputs, "options": opts.to_dict(),
             "notes": {"n_curves": len(results), "failed": errors, "classes": {c: int(sum(r.loading_class == c for r in results))
                                                                                 for c in ("measurable", "marginal", "opaque", "unreliable")}}}
 

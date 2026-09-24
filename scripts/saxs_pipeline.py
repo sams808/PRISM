@@ -11,6 +11,8 @@ Usage (run with the Python that has fabio / xraydb / lmfit, e.g. ``py -3.11``)::
                      [--exclude RE] [--name-from stem|comment] [--pairing same_folder|nearest_time] [--no-diagnostics]
     saxs_pipeline.py reduce ROOT [ROOT ...] -o OUTDIR [--samples-table samples.csv] [--energy-ev E]
                      [--exclude RE] [--pairing RULE] [--explicit pairs.csv] [--key-regex RE] [reduction options]
+    saxs_pipeline.py sasview CURVES_DIR [-o OUTDIR] [--all-rings] [--i-corr]   three-column SasView files from reduced .dat curves
+                     (the pipeline's reduce step writes curves_sasview/ by itself)
 
 Exit codes: 0 success, 1 error, 2 finished with unpaired samples.
 
@@ -105,7 +107,8 @@ def cmd_reduce(a: argparse.Namespace) -> int:
                                footprint_r_px=a.footprint_r_px, vertical_half_deg=a.vertical_half_deg,
                                refine_centre=not a.header_centre)
     results = sb.reduce_pairs(pairing.pairs, opts, mu, out_dir=a.output, progress=_progress,
-                              on_error=lambda p, e: print(f"  !! {p.sample.name}: {type(e).__name__}: {e}"))
+                              on_error=lambda p, e: print(f"  !! {p.sample.name}: {type(e).__name__}: {e}"),
+                              sasview_dir=os.path.join(a.output, "sasview"))
     df = sb.summary_table(results)
     summary = os.path.join(a.output, "reduction_summary.csv")
     df.to_csv(summary, index=False)
@@ -113,7 +116,20 @@ def cmd_reduce(a: argparse.Namespace) -> int:
         print(f"  {r.name:20s} T={r.transmission.T:.3g} (T4/T={r.heterogeneity:.2f}) mu t={r.mu_t:.2f} "
               f"t_eff={r.t_eff_mm if r.t_eff_mm is None else round(r.t_eff_mm, 3)} mm  {r.loading_class:10s} "
               f"usable q=[{r.q_min_use}, {r.q_max_use}] n={r.n_use}  centre: {r.centre_source}")
-    print(f"{len(results)} curve(s) -> {a.output}; summary -> {summary}")
+    print(f"{len(results)} curve(s) -> {a.output}; summary -> {summary}; SasView-ready copies -> {os.path.join(a.output, 'sasview')}")
+    return 0
+
+
+def cmd_sasview(a: argparse.Namespace) -> int:
+    results = sb.load_reduced_folder(a.curves_dir, pattern=r".*\.dat$", exclude_pattern=sb.SASVIEW_SUFFIX)
+    if not results:
+        print(f"no reduced curve in {a.curves_dir}")
+        return 1
+    out = a.output or os.path.join(os.path.dirname(os.path.abspath(a.curves_dir.rstrip("/\\"))), "curves_sasview")
+    paths = sb.export_sasview(results, out, per_mm=not a.i_corr, usable_only=not a.all_rings)
+    for p_ in paths:
+        print(f"  {p_}")
+    print(f"{len(paths)} SasView-ready file(s) -> {out}")
     return 0
 
 
@@ -139,6 +155,13 @@ def build_parser() -> argparse.ArgumentParser:
     red.add_argument("--vertical-half-deg", type=float, default=30.0)
     red.add_argument("--header-centre", action="store_true", help="keep the header beam centre (no refinement)")
     red.set_defaults(func=cmd_reduce)
+
+    sv = sub.add_parser("sasview", help="three-column SasView files from a folder of reduced .dat curves")
+    sv.add_argument("curves_dir")
+    sv.add_argument("-o", "--output", default=None, help="output folder (default: curves_sasview next to the curves folder)")
+    sv.add_argument("--all-rings", action="store_true", help="write every ring, not only the usable range")
+    sv.add_argument("--i-corr", action="store_true", help="write I_corr (counts/s/pixel) instead of the per-mm intensity")
+    sv.set_defaults(func=cmd_sasview)
 
     ini = sub.add_parser("init", help="write a template JSON configuration")
     ini.add_argument("config")

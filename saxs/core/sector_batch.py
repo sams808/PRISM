@@ -34,6 +34,7 @@ CLASSES = ("measurable", "marginal", "opaque", "unreliable")
 DAT_COLUMNS = ["q_A^-1", "I_corr", "sigma_I", "I_per_mm", "sigma_per_mm", "sample_cps_px", "empty_cps_px",
                "ratio_S_over_TE", "n_pix_sample", "usable"]
 CODE_VERSION = "PRISM saxs.core.sector_batch v1 (sector-aware, beam centre refined from the direct beam)"
+SASVIEW_SUFFIX = "__sasview"
 
 
 # ------------------------------------------------------------------------------------ options
@@ -389,8 +390,10 @@ def reduce_pair_records(pair: FramePair, options: Optional[ReductionOptions] = N
 
 def reduce_pairs(pairs: Iterable[FramePair], options: Optional[ReductionOptions] = None, mu_source: Optional[MuSource] = None,
                  out_dir: Optional[str] = None, progress: Progress = None,
-                 on_error: Optional[Callable[[FramePair, Exception], None]] = None) -> List[ReducedSample]:
-    """Reduce every pair; with ``out_dir`` each result is written as ``<name><dat_suffix>.dat``."""
+                 on_error: Optional[Callable[[FramePair, Exception], None]] = None,
+                 sasview_dir: Optional[str] = None) -> List[ReducedSample]:
+    """Reduce every pair; with ``out_dir`` each result is written as ``<name><dat_suffix>.dat`` (the
+    full provenance layout) and with ``sasview_dir`` also as a SasView-ready three-column file."""
     o = options or ReductionOptions()
     pairs = list(pairs)
     cache: Dict[str, tuple] = {}
@@ -417,6 +420,8 @@ def reduce_pairs(pairs: Iterable[FramePair], options: Optional[ReductionOptions]
         if out_dir:
             res.dat_path = os.path.join(out_dir, f"{res.name}{o.dat_suffix}.dat")
             write_reduced_dat(res, res.dat_path)
+        if sasview_dir:
+            write_sasview_dat(res, os.path.join(sasview_dir, f"{res.name}{SASVIEW_SUFFIX}.dat"))
         results.append(res)
     if progress is not None:
         progress(n, n, "done")
@@ -446,6 +451,58 @@ def write_reduced_dat(result: ReducedSample, path: str) -> None:
                      f"{cols['empty_cps_px'][i]:.6e}\t{cols['ratio'][i]:.5e}\t{int(cols['n_pix'][i])}\t{int(cols['usable'][i])}")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
+
+
+def write_sasview_dat(result: ReducedSample, path: str, per_mm: bool = True, usable_only: bool = True, sep: str = " ") -> str:
+    """A file SasView's ASCII reader (sasdata) opens as a 1D data set: three numeric columns Q (1/A),
+    I, dI separated by ``sep``, comment lines starting with ``#`` before the data, no column-name
+    line after them, no dQ column (a pinhole instrument: SasView would read a 4th column as the q
+    resolution), at least five rows. SasView rejects the ten-column provenance layout of
+    :func:`write_reduced_dat` as "2D ASCII data", so this is the file to give an external fit engine.
+    The intensity is per mm of material when the reduction knows mu (``per_mm``), else I_corr; with
+    ``usable_only`` only the usable range is written (the input of PRISM's own fits)."""
+    src = result.curve_per_mm() if per_mm else None
+    units = "counts/s/pixel per mm of material (I_corr / t_eff)"
+    if src is None:
+        src = result.curve
+        units = "counts/s/pixel, empty-transmission units: (S/t_s - T E/t_e)/T"
+    q = np.asarray(src.q, float)
+    I = np.asarray(src.intensity, float)
+    sig = np.asarray(src.sigma, float) if src.sigma is not None else np.full(len(q), np.nan)
+    keep = np.isfinite(q) & np.isfinite(I) & (q > 0)
+    cols = result.columns
+    if usable_only and "usable" in cols and len(cols["usable"]) == len(q):
+        keep &= cols["usable"].astype(bool)
+    has_sigma = bool(np.isfinite(sig[keep]).all()) and keep.any()
+    tr = result.transmission
+    lines = ["# PRISM SAXS 2.0 sector reduction: SasView-ready 1D export (columns Q, I, dI; no dQ column)",
+             f"# sample: {result.name}", f"# intensity: {units}",
+             "# scale: not absolute (SasView labels I as 1/cm by default; treat the scale factor as free)",
+             f"# range: {'usable range only' if usable_only else 'all rings'}",
+             f"# points: {int(keep.sum())}", f"# transmission_T: {tr.T:.6g}", f"# heterogeneity_T4_over_T: {tr.heterogeneity:.3g}",
+             f"# class_mu_t: {result.loading_class}", f"# mu_mm: {result.mu_mm}", f"# t_eff_mm: {result.t_eff_mm}",
+             f"# q_min_use: {result.q_min_use}", f"# q_max_use: {result.q_max_use}",
+             f"# sample_frame: {result.sample_path}", f"# empty_frame: {result.empty_path}",
+             f"# centre_source: {result.centre_source}", f"# full provenance: {os.path.basename(result.dat_path) if result.dat_path else 'see the reduction .dat'}",
+             "# Q (1/A)" + sep + "I" + sep + "dI" if has_sigma else "# Q (1/A)" + sep + "I"]
+    for i in np.flatnonzero(keep):
+        row = f"{q[i]:.10e}{sep}{I[i]:.10e}"
+        if has_sigma:
+            row += f"{sep}{sig[i]:.10e}"
+        lines.append(row)
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return path
+
+
+def export_sasview(results: Iterable[ReducedSample], folder: str, per_mm: bool = True, usable_only: bool = True,
+                   suffix: str = SASVIEW_SUFFIX) -> List[str]:
+    """One SasView-ready file per reduced sample in ``folder`` (``<name><suffix>.dat``)."""
+    os.makedirs(folder, exist_ok=True)
+    return [write_sasview_dat(r, os.path.join(folder, f"{r.name}{suffix}.dat"), per_mm, usable_only) for r in results]
 
 
 def read_dat_header(path: str) -> Dict[str, str]:

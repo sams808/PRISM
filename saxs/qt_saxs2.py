@@ -203,6 +203,11 @@ class Saxs2Mixin:
         self.fr_export_btn = QPushButton("Export summary CSV…")
         self.fr_export_btn.clicked.connect(self.fr_export_summary)
         g2.addWidget(self.fr_export_btn, 5, 0, 1, 3)
+        self.fr_sasview_btn = QPushButton("Export for SasView…")
+        self.fr_sasview_btn.setToolTip("Three-column Q / I / dI files (usable range, per mm when mu is known) that SasView "
+                                       "and other fit engines open; the output folder above also gets a sasview\\ copy.")
+        self.fr_sasview_btn.clicked.connect(self.fr_export_sasview)
+        g2.addWidget(self.fr_sasview_btn, 6, 0, 1, 3)
         ll.addWidget(box2)
         self.fr_progress = QProgressBar()
         self.fr_progress.setRange(0, 100)
@@ -526,9 +531,12 @@ class Saxs2Mixin:
         self.fr_reduce_btn.setEnabled(False)
         self.fr_progress.setValue(0)
 
+        sasview_dir = os.path.join(out_dir, "sasview") if out_dir else None
+
         def job(progress):
             errors = []
-            res = sb.reduce_pairs(pairs, opts, mu, out_dir=out_dir, progress=progress, on_error=lambda p, e: errors.append(f"{p.sample.name}: {e}"))
+            res = sb.reduce_pairs(pairs, opts, mu, out_dir=out_dir, progress=progress, on_error=lambda p, e: errors.append(f"{p.sample.name}: {e}"),
+                                  sasview_dir=sasview_dir)
             return res, errors
 
         run_in_thread(job, self._fr_on_reduced, self._fr_on_error, on_progress=lambda i, n, m: self._set_progress(self.fr_progress, i, n, m, self.fr_status))
@@ -559,6 +567,18 @@ class Saxs2Mixin:
         self.fr_progress.setValue(100)
         if errors:
             QMessageBox.warning(self, "Frames", "\n".join(errors))
+
+    def fr_export_sasview(self) -> None:
+        from saxs.core import sector_batch as sb
+
+        if not self._fr_results:
+            QMessageBox.information(self, "Frames", "Reduce pairs first.")
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Folder for the SasView-ready curves", "")
+        if not folder:
+            return
+        paths = sb.export_sasview(self._fr_results, folder)
+        self.fr_status.setText(f"{len(paths)} SasView-ready curve(s) (Q, I, dI; usable range) -> {folder}")
 
     def fr_export_summary(self) -> None:
         from saxs.core import sector_batch as sb

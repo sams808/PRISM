@@ -79,6 +79,7 @@ def test_every_step_writes_its_outputs(project):
     assert pd.read_csv(os.path.join(out, "unpaired.csv")).shape[0] == 0
     curves = sorted(os.listdir(os.path.join(out, "curves")))
     assert curves == ["S1__sectors.dat", "S2__sectors.dat", "S3_0p5mm__sectors.dat", "S4__sectors.dat"]
+    assert sorted(os.listdir(os.path.join(out, "curves_sasview"))) == ["S1__sasview.dat", "S2__sasview.dat", "S3_0p5mm__sasview.dat", "S4__sasview.dat"]
     summ = pd.read_csv(os.path.join(out, "reduction_summary.csv")).set_index("sample")
     assert summ.loc["S2", "class_mu_t"] == "opaque" and summ.loc["S4", "mu_mm"] > 0        # S4's mu from its composition
     desc = pd.read_csv(os.path.join(out, "descriptors.csv"))
@@ -146,6 +147,9 @@ def test_cli_init_and_run(tmp_path, capsys):
     path = _project(root)
     assert cli.main(["run", path, "--steps", "inventory", "reduce"]) == 0
     assert os.path.exists(os.path.join(root, "out", "reduction_summary.csv"))
+    assert cli.main(["sasview", os.path.join(root, "out", "curves"), "-o", os.path.join(root, "sv")]) == 0
+    assert len(os.listdir(os.path.join(root, "sv"))) == 4
+    assert cli.main(["sasview", os.path.join(root, "nowhere")]) == 1
     assert cli.main(["inventory", "--config", path]) == 0
     assert cli.main(["run", str(tmp_path / "missing.json")]) == 1
     out = capsys.readouterr().out
