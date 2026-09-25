@@ -190,6 +190,22 @@ def porod_shoulders(q: np.ndarray, I: np.ndarray, C: float, qrange: Tuple[float,
     return sorted(out, key=lambda t: -t[1])
 
 
+def moving_average(y: np.ndarray, pts: int) -> np.ndarray:
+    """``pts``-point moving average that keeps its normalisation at the ends: each output point is
+    the mean of the samples that actually fall in the window. ``np.convolve(..., "same")`` divides
+    by the full window everywhere, which drags the first and last points towards zero and fakes a
+    rise at the start of a steeply decaying curve."""
+    y = np.asarray(y, float)
+    k = max(int(pts) | 1, 1)
+    if k <= 1 or len(y) < 3:
+        return y.copy()
+    k = min(k, len(y) if len(y) % 2 else len(y) - 1)
+    kernel = np.ones(k)
+    num = np.convolve(y, kernel, mode="same")
+    den = np.convolve(np.ones_like(y), kernel, mode="same")
+    return num / den
+
+
 def interior_peaks(q: np.ndarray, y: np.ndarray, qrange: Tuple[float, float], edge_pts: int = 3,
                    smooth_pts: int = 3) -> List[Tuple[float, float, int]]:
     """Local maxima of ``y`` inside ``qrange``, most prominent first: ``[(q, prominence, index)]``.
@@ -201,9 +217,7 @@ def interior_peaks(q: np.ndarray, y: np.ndarray, qrange: Tuple[float, float], ed
     from scipy.signal import find_peaks
 
     q, y = np.asarray(q, float), np.asarray(y, float)
-    k = max(int(smooth_pts) | 1, 1)
-    if k > 1 and len(y) >= 3 * k:
-        y = np.convolve(y, np.ones(k) / k, mode="same")
+    y = moving_average(y, smooth_pts)
     finite = np.isfinite(y)
     if finite.sum() < 3:
         return []
@@ -278,6 +292,43 @@ A power law, a flat background and a rising tail can only make d log I / d log q
             e = float(np.sqrt(np.nansum([err[i] ** 2, err[j] ** 2]))) if np.isfinite(err[i]) or np.isfinite(err[j]) else float("nan")
             out.update(recovery=rec, recovery_err=e, q_knee=float(q_k), q_steep=float(q[j]),
                        knee_prominence=float(prom), n_knee=float(n[i]), n_steep=float(n[j]))
+    return out
+
+
+def largest_rise(q: np.ndarray, I: np.ndarray, background: Union[float, np.ndarray], q_limit: float,
+                 bg_max: float = 0.25, smooth_pts: int = 3) -> Dict[str, float]:
+    """Largest cumulative UPWARD excursion of the background-subtracted intensity, in log10 units.
+
+    A sum of positive Beaucage levels over a flat background is monotone decreasing: the scattered
+    intensity of a disordered material cannot grow with q below the amorphous halo. A rise therefore
+    means the reduction failed there - a parasitic capillary lobe, or an empty subtraction amplified
+    by a transmission of 1e-5 - and no size may be read from that curve, however large the feature.
+
+    Measured from the first point (an artefact usually sits at the low-q edge, which is exactly where
+    an interior-peak test cannot see it) up to ``q_limit`` or to the point where the background
+    reaches ``bg_max`` of the intensity, whichever comes first. Returns ``{"rise", "q_start",
+    "q_end", "n_points"}``; ``rise`` is 0 for a monotone curve."""
+    q, I = np.asarray(q, float), np.asarray(I, float)
+    exc = I - np.asarray(background, float)
+    bg = np.asarray(background, float) * np.ones_like(q)
+    ok = np.isfinite(exc) & (exc > 0) & (q <= q_limit) & (bg <= bg_max * np.maximum(I, 1e-300))
+    out = {"rise": 0.0, "q_start": float("nan"), "q_end": float("nan"), "n_points": int(ok.sum())}
+    if ok.sum() < 4:
+        return out
+    y = moving_average(np.log10(exc[ok]), smooth_pts)
+    qq = q[ok]
+    run = 0.0
+    start = 0
+    for i in range(1, len(y)):
+        step = y[i] - y[i - 1]
+        if step > 0:
+            if run == 0.0:
+                start = i - 1
+            run += step
+            if run > out["rise"]:
+                out.update(rise=float(run), q_start=float(qq[start]), q_end=float(qq[i]))
+        else:
+            run = 0.0
     return out
 
 

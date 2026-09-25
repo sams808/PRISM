@@ -43,7 +43,17 @@ def _raw_root(summary: pd.DataFrame) -> str:
     abs_path = _norm(meta["sample_frame"])
     rel = _norm(row["sample_frame"])
     assert abs_path.endswith(rel), (abs_path, rel)
-    return abs_path[: -len(rel)].rstrip("/")
+    root = abs_path[: -len(rel)].rstrip("/")
+    if os.path.exists(os.path.join(root, rel)):
+        return root
+    # the session folders may since have been moved one level down (an archive subfolder, say);
+    # look for them rather than fail with an empty reduction that would read as a science failure
+    if os.path.isdir(root):
+        for sub in sorted(os.listdir(root)):
+            cand = os.path.join(root, sub)
+            if os.path.isdir(cand) and os.path.exists(os.path.join(cand, rel)):
+                return _norm(cand)
+    pytest.skip(f"the reference frames are no longer under {root!r} ({rel}); set PRISM_SAXS_RAW_DIR")
 
 
 @pytest.fixture(scope="module")
@@ -372,9 +382,10 @@ def ul_name(l2, tail):
 # ------------------------------------------------------------------------------------ the visibility gate
 @pytest.fixture(scope="module")
 def gated(reference, reduced):
-    """The same curves fitted WITH the level-2 visibility gate (the production setting)."""
-    curves = [r.usable_curve() for r in reduced.values()]
-    return _fit_all(curves, require_bump=True)
+    """The same 39 curves as ``fitted``, but WITH the level-2 visibility gate (the production
+    setting), so the two can be compared sample by sample."""
+    names = [n for n in reference["fits"].index if n in reduced]
+    return _fit_all([reduced[n].usable_curve() for n in names], require_bump=True)
 
 
 PARENTS = ("P0Bi0", "P1Bi0", "P2Bi0", "P5Bi0", "P8Bi0")
@@ -425,3 +436,49 @@ def test_every_gated_level_sits_above_two_mol_percent_bismuth(gated):
     common = [n for n, r in results.items() if r.fitted and n in bi.index]
     rho = spearmanr([bi[n] for n in common], [results[n].bump.recovery for n in common]).statistic
     assert rho > 0.3, f"the visibility of a level should rank with the bismuth content, got {rho:.2f}"
+
+def test_the_gate_decision_does_not_depend_on_the_rebinning_density(reduced):
+    """The one failure mode a visibility criterion can hide: a verdict that follows the analysis
+    grid rather than the data. Every curve that carries a level at the production 40 points per
+    decade must still show a visible bump at 20 and at 60."""
+    from saxs.core import unified_levels as ul
+
+    curves = {r.name: r.usable_curve() for r in reduced.values()}
+    eligible = {}
+    for per_decade in (20, 60):
+        o = ul.UnifiedOptions(per_decade=per_decade)
+        ok = set()
+        for name, c in curves.items():
+            q, I, sig, reason = ul.prepare_curve(c, o)
+            if reason is not None:
+                continue
+            fits = {t: ul.fit_candidate(q, I, sig, False, t, o) for t in (False, True)}
+            fits = {t: r for t, r in fits.items() if r is not None}
+            if not fits:
+                continue
+            tail = min(fits, key=lambda t: fits[t].bic)
+            if ul.bump_evidence(q, I, ul._values(fits[tail].params), tail, o).present:
+                ok.add(name)
+        eligible[per_decade] = ok
+    for name in GATED_IN:
+        assert name in eligible[20], f"{name} is not eligible at 20 points/decade"
+        assert name in eligible[60], f"{name} is not eligible at 60 points/decade"
+    # and no parent becomes eligible at any grid
+    for per_decade, ok in eligible.items():
+        assert not (set(PARENTS) & ok), (per_decade, sorted(set(PARENTS) & ok))
+
+
+def test_the_thin_test_loading_shows_the_same_level(reduced):
+    """A loading outside the project's own selection, and the only bismuth-rich one thin enough to
+    be quantitative (0.5 mm capillary, transmission 0.48 against 1e-3 to 1e-6 for its 1 mm
+    siblings): the gate keeps a level there too, at a radius squarely on the trend the six retained
+    ones trace. Nothing in the criterion knows that, so it is a real corroboration."""
+    from saxs.core import unified_levels as ul
+
+    name = "P5Bi8-12_0p5mm"
+    if name not in reduced:
+        pytest.skip(f"{name} is not in the reference reduction")
+    r = ul.fit_with_robustness(reduced[name].usable_curve())
+    assert r.fitted and r.bump.present and r.l2, r.bump.category
+    assert r.params["Rg2"].value / 10 == pytest.approx(14.4, abs=1.5)
+    assert r.resolved is True

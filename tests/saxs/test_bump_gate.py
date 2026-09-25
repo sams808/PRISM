@@ -114,7 +114,38 @@ def test_a_maximum_of_the_intensity_is_not_a_guinier_knee():
     ev = evidence(curve(0.0, extra=peaked))
     assert not ev.present and not ev.shoulder_ok
     assert ev.q_maximum == pytest.approx(0.012, rel=0.4)
+    assert ev.category == "maximum in I", "a maximum also rises; the more specific reason must win"
     assert "maximum" in ev.reason
+
+
+def test_a_curve_whose_intensity_rises_is_refused_however_big_its_feature():
+    """A sum of positive Beaucage levels over a flat background decreases with q. A rise means the
+    reduction failed there (a parasitic capillary lobe, an empty subtraction amplified by a
+    transmission of 1e-5), and no size may be read from that curve however large its feature. The
+    artefact usually sits at the low-q EDGE, where an interior-peak test cannot see it, so this one
+    is measured from the first point."""
+    v = dict(GRAIN, **LEVEL, logG2=np.log10(50.0))
+    I = ul.model(v, Q, True, True)
+    # a parasitic lobe just above the first point: the curve rises over three or four points and
+    # falls again, so it never makes an interior MAXIMUM the shoulder test could catch
+    lifted = I * (1.0 + 1.2 * np.exp(-((np.log10(Q) - np.log10(Q[0] * 1.25)) ** 2) / 0.0008))
+    ev = evidence(curve(0.0, extra=lifted))
+    assert not ev.present and not ev.monotone_ok, ev.category
+    assert ev.rise > 0.10 and ev.rise_q[0] == pytest.approx(Q[0], rel=0.3)
+    assert ev.category == "intensity rises" and "reduction failed" in ev.reason
+    # the same curve without the lobe keeps its level
+    assert evidence(curve(50.0)).present
+
+
+def test_the_moving_average_keeps_its_normalisation_at_the_ends():
+    """np.convolve(..., 'same') divides by the full window everywhere, which drags the first and
+    last points down and fakes a rise at the start of a steeply decaying curve - the exact failure
+    the monotonicity test would otherwise report on every profile."""
+    y = np.array([10.0, 9.0, 8.0, 7.0, 6.0, 5.0])
+    np.testing.assert_allclose(ds.moving_average(y, 3), [9.5, 9.0, 8.0, 7.0, 6.0, 5.5])
+    q = np.geomspace(5e-3, 0.1, 60)
+    assert ds.largest_rise(q, q ** -4.0, 0.0, 0.1)["rise"] == 0.0
+    assert ds.largest_rise(q, q ** -4.0 + 1e3, 1e3, 0.1)["rise"] == 0.0
 
 
 def test_the_gate_vetoes_level_two_whatever_the_information_criterion_says():

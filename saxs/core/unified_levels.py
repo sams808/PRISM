@@ -82,6 +82,9 @@ class UnifiedOptions:
     #                                         and required only when set above 0 (it saturates for a strong level)
     bump_min_shape: float = 0.0             # log10, prominence of the Kratky / Porod knee signature: reported,
     #                                         and required only when set above 0 (it is noise-sensitive)
+    bump_max_rise: float = 0.10             # log10, the upward excursion of I - background allowed before the
+    #                                         reduction is judged to have failed on that curve
+    bump_bg_max: float = 0.25               # the rise is measured only where the background is below this of I
     bump_window_factor: float = 2.0         # residual-hump window = [1 / (f Rg2_max), f / Rg2_min]
     bump_steep_factor: float = 3.0          # the steepening is looked for up to f / Rg2_min
     bump_slope_window_dec: float = 0.30     # decades of the sliding regression that gives the local slope
@@ -153,11 +156,14 @@ class BumpEvidence:
     n_steep: float = float("nan")
     q_maximum: float = float("nan")
     maximum_sigma: float = float("nan")
+    rise: float = 0.0
+    rise_q: Tuple[float, float] = (float("nan"), float("nan"))
     window: Tuple[float, float] = (float("nan"), float("nan"))
     amplitude_ok: bool = False
     significance_ok: bool = False
     recovery_ok: bool = False
     shoulder_ok: bool = True
+    monotone_ok: bool = True
     shape_ok: bool = False
 
     @property
@@ -166,7 +172,9 @@ class BumpEvidence:
         if self.present:
             return "visible bump"
         if not self.shoulder_ok:
-            return "maximum in I"
+            return "maximum in I"          # a maximum implies a rise: the more specific label wins
+        if not self.monotone_ok:
+            return "intensity rises"
         if not self.recovery_ok:
             return "no knee"
         if not self.significance_ok:
@@ -219,7 +227,14 @@ def bump_evidence(q: np.ndarray, I: np.ndarray, base_values: Dict[str, float], b
     2. **significance** - that recovery must exceed ``bump_min_sigma`` times its own standard error,
        propagated from the scatter of the points about the two local regressions, so that noise on a
        poor profile cannot pass.
-    3. **shoulder, not a peak** - I itself must have no significant maximum inside the window
+    3. **monotone** - the background-subtracted intensity must not RISE by more than
+       ``bump_max_rise`` anywhere below :meth:`UnifiedOptions.steep_limit`
+       (:func:`~saxs.core.descriptors.largest_rise`). A sum of positive Beaucage levels over a flat
+       background decreases with q; a rise means the reduction failed there - a parasitic capillary
+       lobe, or an empty subtraction amplified by a transmission of 1e-5 - and no size may be read
+       from that curve, however large its feature. This is measured from the first point, because an
+       artefact usually sits at the low-q edge, exactly where an interior-peak test cannot see it.
+    4. **shoulder, not a peak** - I itself must have no significant maximum inside the window
        (:func:`~saxs.core.descriptors.maximum_test`). A Guinier knee is a flattening; a maximum of
        the intensity is an interference peak or a reduction artefact, and this model describes
        neither, so its parameters would be meaningless.
@@ -238,7 +253,7 @@ def bump_evidence(q: np.ndarray, I: np.ndarray, base_values: Dict[str, float], b
     ``base_values`` are the fitted values of the L1-only candidate and ``base_tail`` says whether it
     carried the rising tail; the background it implies is what is subtracted for the Kratky/Porod
     signature."""
-    from .descriptors import interior_peaks, knee_signature, maximum_test, slope_recovery
+    from .descriptors import interior_peaks, knee_signature, largest_rise, maximum_test, slope_recovery
 
     o = options or UnifiedOptions()
     q, I = np.asarray(q, float), np.asarray(I, float)
@@ -265,6 +280,9 @@ def bump_evidence(q: np.ndarray, I: np.ndarray, base_values: Dict[str, float], b
     ev.recovery_err = rec["recovery_err"]
     ev.recovery_sigma = (ev.recovery / ev.recovery_err) if (ev.recovery_err and np.isfinite(ev.recovery_err) and ev.recovery_err > 0) else float("inf")
     ev.n_knee, ev.n_steep = rec["n_knee"], rec["n_steep"]
+    up = largest_rise(q, I, comp["background"], o.steep_limit(), bg_max=o.bump_bg_max, smooth_pts=k)
+    ev.rise, ev.rise_q = up["rise"], (up["q_start"], up["q_end"])
+    ev.monotone_ok = ev.rise <= o.bump_max_rise
     mx = maximum_test(q, I, None, weights=("I",), smooth_pts=max(k, 5),
                       min_prominence_sigma=o.bump_min_sigma, qrange=(lo, hi))["I"]
     ev.q_maximum = float(mx["q_max"]) if mx["q_max"] is not None else float("nan")
@@ -274,12 +292,17 @@ def bump_evidence(q: np.ndarray, I: np.ndarray, base_values: Dict[str, float], b
     ev.significance_ok = bool(ev.recovery_sigma >= o.bump_min_sigma)   # NaN fails, inf (a perfect local fit) passes
     ev.recovery_ok = ev.recovery >= o.bump_min_recovery
     ev.shape_ok = max(ev.kratky_prominence, ev.porod_prominence) >= o.bump_min_shape
-    ev.present = bool(ev.amplitude_ok and ev.significance_ok and ev.recovery_ok and ev.shoulder_ok and ev.shape_ok)
+    ev.present = bool(ev.amplitude_ok and ev.significance_ok and ev.recovery_ok and ev.shoulder_ok
+                      and ev.monotone_ok and ev.shape_ok)
     if ev.present:
         ev.reason = ""
     elif not ev.shoulder_ok:
         ev.reason = (f"I itself has a maximum at q = {ev.q_maximum:.4g} ({ev.maximum_sigma:.1f} sigma): "
                      f"a Guinier knee is a shoulder, never a maximum, so this curve is outside the model")
+    elif not ev.monotone_ok:
+        ev.reason = (f"the intensity rises by {ev.rise:.3f} dex between q = {ev.rise_q[0]:.4g} and "
+                     f"{ev.rise_q[1]:.4g} (max {o.bump_max_rise:g}): no sum of levels can rise, so the "
+                     f"reduction failed there and no size can be read from this curve")
     elif not ev.recovery_ok:
         ev.reason = (f"the log-log slope does not steepen again after a knee "
                      f"(recovery {ev.recovery:.2f}, needs {o.bump_min_recovery:g})")
@@ -521,6 +544,7 @@ class UnifiedFitResult:
         if bump:
             bump = dict(bump)
             bump["window"] = tuple(bump.get("window", (float("nan"), float("nan"))))
+            bump["rise_q"] = tuple(bump.get("rise_q", (float("nan"), float("nan"))))
             out.bump = BumpEvidence(**bump)
         out.relaxed = cls.from_json(relaxed) if relaxed else None
         return out
@@ -651,7 +675,7 @@ TABLE_COLUMNS = ["sample", "cls", "fitted", "skip_reason", "n_pts", "q_min", "n_
                  "logB1", "Rg1_at_bound", "d1_at_bound", "Rg2_A", "Rg2_err", "d2", "d2_err", "logG2", "logpf2", "logB2",
                  "Rg2_at_bound", "d2_at_bound", "pf2_at_bound", "D2_eq_nm", "covariance_ok", "at_bounds",
                  "bump_present", "bump_q", "bump_prominence", "bump_sigma", "bump_recovery", "bump_recovery_sigma", "bump_q_knee",
-                 "bump_Rg_knee_A", "bump_q_maximum", "bump_kratky_prom", "bump_porod_prom", "l2_gated",
+                 "bump_Rg_knee_A", "bump_q_maximum", "bump_rise", "bump_kratky_prom", "bump_porod_prom", "l2_gated",
                  "bump_reason", "relaxed_l2",
                  "relaxed_Rg2_A", "relaxed_d1", "relaxed_Rg1_A", "relaxed_rms_log", "resolved", "warnings"]
 
@@ -679,7 +703,7 @@ def result_row(res: UnifiedFitResult) -> Dict[str, object]:
            "covariance_ok": res.covariance_ok, "at_bounds": ";".join(res.at_bound_names()),
            "bump_present": res.bump.present, "bump_q": res.bump.q, "bump_prominence": res.bump.prominence,
            "bump_sigma": res.bump.sigma, "bump_recovery": res.bump.recovery, "bump_recovery_sigma": res.bump.recovery_sigma, "bump_q_knee": res.bump.q_knee,
-           "bump_q_maximum": res.bump.q_maximum,
+           "bump_q_maximum": res.bump.q_maximum, "bump_rise": res.bump.rise,
            "bump_Rg_knee_A": res.bump.Rg_from_knee_A, "bump_kratky_prom": res.bump.kratky_prominence,
            "bump_porod_prom": res.bump.porod_prominence, "l2_gated": res.l2_gated, "bump_reason": res.bump.reason,
            "relaxed_l2": (res.relaxed.l2 if res.relaxed is not None else None),
