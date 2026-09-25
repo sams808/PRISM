@@ -190,7 +190,10 @@ auto region detection; **WAXS** auto-finds and fits pseudo-Voigt peaks
 SAXS 2.0 adds **Frames** (raw 2D frames: inventory, refined beam centres,
 lobe diagnostics, pairing with the session empties, sector reduction with
 loading classes), **Unified fit** (two-level unified fits with BIC
-selection and a robustness pass) and **Series figures** (publication
+selection, a robustness pass, and a visibility gate that offers the second
+level to the selection only where the curve itself shows a Guinier knee: the
+local log-log slope must flatten and steepen again, which a power law with a
+background can never do) and **Series figures** (publication
 figures and tables driven by a series table) — details in the module guide.
 The XAS workspace also gained a **Sample mass** tab — the Hephaestus
 calculator on oxide compositions (mol%/wt%) or formulas: masses for total

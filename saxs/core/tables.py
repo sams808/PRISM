@@ -166,6 +166,9 @@ def fit_sheet(results: Iterable[object], summary: Optional[pd.DataFrame] = None,
                     "d2": f"{d['d2']:.2f}{star('d2')}" if r.l2 else None,
                     f"G2{unit}": _sig(d.get("G2"), 3) if r.l2 else None,
                     "pf2": f"{d['pf2']:.2f}{star('logpf2')}" if r.l2 else None,
+                    "Knee recovery": _round(getattr(getattr(r, "bump", None), "recovery", float("nan")), 2),
+                    "Level 2": ("kept" if r.l2 else (getattr(getattr(r, "bump", None), "category", "no visible bump")
+                                                     if getattr(r, "l2_gated", False) else "not preferred (BIC)")),
                     "dBIC (level 2)": _round(r.dBIC_L2, 0) if _sig(r.dBIC_L2) is not None else None,
                     "Rg2, relaxed bounds (nm)": (_round(r.relaxed.params["Rg2"].value / 10, 1)
                                                  if (r.relaxed is not None and r.relaxed.fitted and r.relaxed.l2) else None),
@@ -235,7 +238,13 @@ def default_notes(fit_options: Optional[Dict[str, object]] = None) -> List[str]:
         f"{o.get('per_decade', 40)} points per decade, log10 I weighted by the propagated sigma with a {100 * float(o.get('sigma_floor', 0.03)):.0f} % floor.",
         f"Level 1: Rg1 {rg1[0] / 10:.0f}-{rg1[1] / 10:.0f} nm, d1 {d1[0]}-{d1[1]}, G1 and B1 free. Level 2: Rg2 {rg2[0] / 10:.0f}-{rg2[1] / 10:.0f} nm, "
         f"d2 {d2[0]}-{d2[1]}, B2 tied to G2 by the Beaucage (1996) relation times pf2 in {10 ** pf[0]:.1f}-{10 ** pf[1]:.1f}.",
-        f"Level 2 and the rising tail (T q^{o.get('tail_exponent', 2.0):g}) are kept only when they lower the BIC by more than {o.get('dbic_min', 10.0):g} (column dBIC).",
+        f"Level 2 and the rising tail (T q^{o.get('tail_exponent', 2.0):g}) are kept only when they lower the BIC by more than {o.get('dbic_min', 10.0):g} (column dBIC),",
+        f"and level 2 is eligible at all only where a level is VISIBLE in the curve itself: the local log-log slope must shallow at a "
+        f"Guinier knee inside {1 / rg2[1]:.4g}-{1 / rg2[0]:.4g} 1/A and steepen again by at least {o.get('bump_min_recovery', 0.3):g} "
+        f"(column 'Knee recovery'), by at least {o.get('bump_min_sigma', 3.0):g} of its own standard error, and the intensity itself must "
+        f"have no maximum there. A grain power law with a background can only make the slope rise with q, so it cannot pass; an "
+        f"information criterion alone would buy a level on the cleanest curves, where a few-percent mismatch of the grain level is "
+        f"highly significant but invisible. Column 'Level 2': kept / no visible bump / not preferred (BIC).",
         f"'Level 2 resolved' = level kept by both bound sets (d1 <= {d1[1]}, Rg1 <= {rg1[1] / 10:.0f} nm; d1 <= {o.get('relaxed_d1_max', 5.0)}, "
         f"Rg1 <= {float(o.get('relaxed_rg1_max', 3000.0)) / 10:.0f} nm) with Rg2 agreeing within {100 * float(o.get('robust_tol', 0.2)):.0f} %.",
         "D_eq = 2 Rg2 sqrt(5/3), diameter of the equivalent sphere. A star (*) marks a parameter at a bound.",

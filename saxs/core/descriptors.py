@@ -190,6 +190,125 @@ def porod_shoulders(q: np.ndarray, I: np.ndarray, C: float, qrange: Tuple[float,
     return sorted(out, key=lambda t: -t[1])
 
 
+def interior_peaks(q: np.ndarray, y: np.ndarray, qrange: Tuple[float, float], edge_pts: int = 3,
+                   smooth_pts: int = 3) -> List[Tuple[float, float, int]]:
+    """Local maxima of ``y`` inside ``qrange``, most prominent first: ``[(q, prominence, index)]``.
+
+    "Interior" means at least ``edge_pts`` points from either end of the array: a monotone rise or
+    fall that only turns over at the edge of the measured range is not a peak of the data, it is the
+    edge. ``y`` is smoothed with a ``smooth_pts`` moving average first (the smoothing is applied to
+    the whole array so the window is not truncated inside ``qrange``)."""
+    from scipy.signal import find_peaks
+
+    q, y = np.asarray(q, float), np.asarray(y, float)
+    k = max(int(smooth_pts) | 1, 1)
+    if k > 1 and len(y) >= 3 * k:
+        y = np.convolve(y, np.ones(k) / k, mode="same")
+    finite = np.isfinite(y)
+    if finite.sum() < 3:
+        return []
+    ys = np.where(finite, y, np.nanmin(y[finite]) - 1.0)
+    pk, pr = find_peaks(ys, prominence=0.0)
+    edge = max(int(edge_pts), 1)
+    out = [(float(q[i]), float(p), int(i)) for i, p in zip(pk, pr["prominences"])
+           if edge <= i < len(y) - edge and qrange[0] <= q[i] <= qrange[1] and finite[i]]
+    return sorted(out, key=lambda t: -t[1])
+
+
+def local_slopes_err(q: np.ndarray, I: np.ndarray, window_dec: float = 0.15) -> np.ndarray:
+    """Standard error of :func:`local_slopes`, from the scatter of the points about each local
+    regression: s / (sqrt(N) sd(log q)). NaN wherever the slope itself is NaN."""
+    q, I = np.asarray(q, float), np.asarray(I, float)
+    lq, lI = np.log10(q), np.log10(np.maximum(I, 1e-300))
+    e = np.full(len(q), np.nan)
+    for i in range(len(q)):
+        m = np.abs(lq - lq[i]) <= window_dec / 2
+        if m.sum() >= 4 and np.all(I[m] > 0):
+            x, y = lq[m], lI[m]
+            a, b = np.polyfit(x, y, 1)
+            resid = y - (a * x + b)
+            sxx = np.sum((x - x.mean()) ** 2)
+            if sxx > 0:
+                e[i] = float(np.sqrt(np.sum(resid ** 2) / max(len(x) - 2, 1) / sxx))
+    return e
+
+
+def slope_recovery(q: np.ndarray, I: np.ndarray, knee_range: Tuple[float, float], q_limit: float,
+                   window_dec: float = 0.30, edge_pts: int = 2) -> Dict[str, float]:
+    """Does the local log-log slope shallow and then STEEPEN again? The model-free fingerprint of a
+    population of finite size, and the one thing a background cannot imitate.
+
+A power law, a flat background and a rising tail can only make d log I / d log q *rise* with q
+    (towards 0 and beyond): their sum is monotone in slope, whatever their exponents and amplitudes.
+    A population of radius of gyration R_g does the opposite around its own Guinier knee: it
+    flattens the slope at q ~ 1/R_g and steepens it again to its Porod exponent just above, so the
+    slope has a local maximum followed by a decrease. The recovery is the size of that decrease, in
+    slope units; for a level that dominates locally it approaches the level's own exponent (2 to
+    4.5), and it is 0 within the noise when there is no level.
+
+    Every level has such a transition, the coarse one included, so what makes this specific is
+    *where* the knee is looked for: only inside ``knee_range``, and only at maxima that are interior
+    to the measured range. A grain level of tens of nanometres has its knee one or two decades below
+    that window, and inside the window it contributes a monotone Porod decay.
+
+    ``knee_range`` is where a level of the allowed radii has its knee (typically
+    ``[1/Rg_max, 1/Rg_min]``) and ``q_limit`` how far above it the steepening is looked for (the
+    level's Porod region, typically ``3/Rg_min``). Candidate knees are INTERIOR local maxima of the
+    slope, at least ``edge_pts`` points from either end: this is what keeps the grain level's own
+    Guinier transition at the low-q edge of the measured range from counting as a knee.
+
+    Returns ``{"recovery", "recovery_err", "q_knee", "q_steep", "knee_prominence", "n_knee",
+    "n_steep"}``; the recovery is 0 and the q NaN when the slope has no interior maximum in the
+    window. ``recovery_err`` combines the standard errors of the two slopes in quadrature."""
+    q, I = np.asarray(q, float), np.asarray(I, float)
+    out = {"recovery": 0.0, "recovery_err": float("nan"), "q_knee": float("nan"), "q_steep": float("nan"),
+           "knee_prominence": 0.0, "n_knee": float("nan"), "n_steep": float("nan")}
+    n = local_slopes(q, I, window_dec)
+    if not np.isfinite(n).any():
+        return out
+    err = local_slopes_err(q, I, window_dec)
+    guarded = np.where(np.isfinite(n), n, -np.inf)
+    for q_k, prom, i in interior_peaks(q, guarded, knee_range, edge_pts=edge_pts, smooth_pts=1):
+        after = np.where((np.arange(len(q)) > i) & (q <= q_limit) & np.isfinite(n))[0]
+        if not len(after):
+            continue
+        j = int(after[int(np.nanargmin(n[after]))])
+        rec = float(n[i] - n[j])
+        if rec > out["recovery"]:
+            e = float(np.sqrt(np.nansum([err[i] ** 2, err[j] ** 2]))) if np.isfinite(err[i]) or np.isfinite(err[j]) else float("nan")
+            out.update(recovery=rec, recovery_err=e, q_knee=float(q_k), q_steep=float(q[j]),
+                       knee_prominence=float(prom), n_knee=float(n[i]), n_steep=float(n[j]))
+    return out
+
+
+def knee_signature(q: np.ndarray, I: np.ndarray, background: Union[float, np.ndarray], qrange: Tuple[float, float],
+                   edge_pts: int = 3, smooth_pts: int = 3) -> Dict[str, float]:
+    """Guinier-knee signature of a population of finite size in the background-subtracted curve.
+
+    A population of radius of gyration R_g turns the profile over at q ~ 1/R_g: below the knee the
+    intensity is flat (Guinier), above it decays as a power law. In the Kratky representation
+    (I - background) q^2 that turn-over IS a local maximum, and in the Porod representation
+    (I - background) q^4 it is a shoulder. Either is the model-free fingerprint of a level, and
+    neither can be produced by a power law of any exponent, which is what distinguishes a real
+    population from a fit absorbing a slight mismatch of another term.
+
+    Returns the most prominent interior maximum (log10 units) of each representation inside
+    ``qrange`` (``kratky_q``, ``kratky_prominence``, ``porod_q``, ``porod_prominence``); the
+    prominence is 0 and the q NaN when there is none."""
+    q, I = np.asarray(q, float), np.asarray(I, float)
+    exc = I - np.asarray(background, float)
+    ok = np.isfinite(exc) & (exc > 0)
+    out = {"kratky_q": float("nan"), "kratky_prominence": 0.0, "porod_q": float("nan"), "porod_prominence": 0.0}
+    if ok.sum() < 2 * max(int(edge_pts), 1) + 3:
+        return out
+    for key, w in (("kratky", 2), ("porod", 4)):
+        y = np.where(ok, np.log10(np.maximum(exc, 1e-300) * q ** w), np.nan)
+        pk = interior_peaks(q, y, qrange, edge_pts=edge_pts, smooth_pts=smooth_pts)
+        if pk:
+            out[f"{key}_q"], out[f"{key}_prominence"] = pk[0][0], pk[0][1]
+    return out
+
+
 def kratky_maximum(q: np.ndarray, I: np.ndarray, C: float, qrange: Tuple[float, float], prominence: float = 0.05,
                    min_points: int = 8) -> float:
     """q of the most prominent local maximum of (I - C) q^2 (log10) inside ``qrange``, NaN when none."""

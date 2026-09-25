@@ -108,4 +108,5 @@ def test_modelfree_and_robustness_sheets_and_notes():
     assert len(rs) == 1 and rs.iloc[0]["Relaxed model"] == "L1_L2_T" and rs.iloc[0]["Level 2 resolved"] == "yes"
     notes = tb.default_notes({"q_max": 0.2, "dbic_min": 10.0, "relaxed_d1_max": 5.0, "relaxed_rg1_max": 3000.0, "robust_tol": 0.2})
     assert any("BIC by more than 10" in n for n in notes) and any("Rg1 <= 300 nm" in n for n in notes)
-    assert len(tb.default_notes()) == 6
+    assert any("Knee recovery" in n and "no maximum" in n for n in notes), "the visibility gate must be stated in the notes"
+    assert len(tb.default_notes()) == 7

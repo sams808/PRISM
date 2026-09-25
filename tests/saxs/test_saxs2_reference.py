@@ -3,7 +3,8 @@
 Skipped unless two environment variables point at the reference material:
 
 * ``PRISM_SAXS_REFERENCE_DIR``: the folder holding ``phase1_summary.csv``, ``phase2_modelfree.csv``,
-  ``phase3e_beaucage.csv`` and ``phase3e_beaucage_wide.csv``;
+  ``phase3e_beaucage.csv`` and ``phase3e_beaucage_wide.csv`` (which predate the level-2
+  visibility gate, so the fit comparisons run with ``require_bump=False``);
 * ``PRISM_SAXS_REDUCED_V2_DIR``: the folder of the reference reduced curves ``<sample>__v2.dat``.
 
 The raw frames are located from the ``sample_frame`` headers of the reduced curves (override with
@@ -249,9 +250,12 @@ def test_descriptors_from_the_reference_text_curves_are_exact(reference):
 
 
 # ------------------------------------------------------------------------------------ phase 3
-def _fit_all(curves):
+def _fit_all(curves, require_bump=False):
+    """The reference CSVs predate the level-2 visibility gate (2026-09-24), so the comparisons
+    against them run with ``require_bump=False``; the gate itself is checked separately below and
+    in tests/saxs/test_bump_gate.py."""
     from saxs.core import unified_levels as ul
-    results, df = ul.batch_fit(curves, ul.UnifiedOptions(), robustness=True)
+    results, df = ul.batch_fit(curves, ul.UnifiedOptions(require_bump=require_bump), robustness=True)
     return {r.sample: r for r in results}, df.set_index("sample")
 
 
@@ -364,3 +368,60 @@ def test_fits_reproduce_the_reference_model_choices_and_levels(reference, fitted
 def ul_name(l2, tail):
     from saxs.core.unified_levels import candidate_name
     return candidate_name(l2, tail)
+
+# ------------------------------------------------------------------------------------ the visibility gate
+@pytest.fixture(scope="module")
+def gated(reference, reduced):
+    """The same curves fitted WITH the level-2 visibility gate (the production setting)."""
+    curves = [r.usable_curve() for r in reduced.values()]
+    return _fit_all(curves, require_bump=True)
+
+
+PARENTS = ("P0Bi0", "P1Bi0", "P2Bi0", "P5Bi0", "P8Bi0")
+GATED_IN = ("P8Bi2-12", "P5Bi2-12", "P5Bi5-12", "P8Bi5-12", "P0Bi8-12", "P8Bi8-12")
+
+
+def test_the_gate_removes_every_level_from_the_bismuth_free_parents(reference, gated):
+    """The failure the gate exists for: an information criterion alone puts a 10-11 nm 'level' in
+    four of the five bismuth-free parents, on the cleanest curves of the set."""
+    results, _ = gated
+    ref = reference["fits"]
+    had = [p for p in PARENTS if bool(ref.loc[p, "l2"])]
+    assert len(had) >= 4, f"the reference is expected to carry the artefact in most parents: {had}"
+    for p in PARENTS:
+        r = results[p]
+        assert r.fitted and not r.l2, f"{p} must have no level: {r.name}"
+        assert r.l2_gated and not r.bump.present
+        assert r.bump.recovery < 0.3, (p, r.bump.recovery)
+
+
+def test_the_gate_keeps_the_levels_the_data_show_and_does_not_move_them(reference, gated, fitted):
+    """The gate is a veto: what it keeps is bit-for-bit what the ungated fit found."""
+    results, _ = gated
+    free, _ = fitted
+    kept = sorted(n for n, r in results.items() if r.l2)
+    assert kept == sorted(GATED_IN), kept
+    for n in kept:
+        assert results[n].params["Rg2"].value == pytest.approx(free[n].params["Rg2"].value, rel=1e-9), n
+        assert results[n].rms_log == pytest.approx(free[n].rms_log, rel=1e-9), n
+        assert results[n].resolved is True, f"{n} should be resolved"
+
+
+def test_every_gated_level_sits_above_two_mol_percent_bismuth(gated):
+    """Composition is never an input to the gate; that the outcome orders by it is the whole check.
+    The gate sees only (q, I, sigma), yet no level survives below 2 mol% Bi2O3 and the recovery it
+    measures ranks with the bismuth content."""
+    path = os.path.join(REF_DIR, "pbi_samples_table.csv")
+    if not os.path.exists(path):
+        pytest.skip("pbi_samples_table.csv is not in the reference folder")
+    bi = pd.read_csv(path).set_index("sample")["Bi2O3_mol"]
+    results, _ = gated
+    kept = [n for n, r in results.items() if r.l2 and n in bi.index]
+    assert kept, "no level survived the gate"
+    assert min(bi[n] for n in kept) >= 2.0, {n: round(bi[n], 2) for n in kept}
+    below = [n for n, r in results.items() if r.fitted and n in bi.index and bi[n] < 2.0]
+    assert not any(results[n].l2 for n in below), [n for n in below if results[n].l2]
+    from scipy.stats import spearmanr
+    common = [n for n, r in results.items() if r.fitted and n in bi.index]
+    rho = spearmanr([bi[n] for n in common], [results[n].bump.recovery for n in common]).statistic
+    assert rho > 0.3, f"the visibility of a level should rank with the bismuth content, got {rho:.2f}"

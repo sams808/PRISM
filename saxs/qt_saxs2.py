@@ -743,7 +743,14 @@ class Saxs2Mixin:
         if r.l2:
             lines.append(f"Level 2: Rg {d['Rg2_nm']:.1f} nm (D_eq {d['D2_eq_nm']:.1f} nm), d {d['d2']:.2f}, G {d['G2']:.3g}, pf {d['pf2']:.2f}")
         lines.append(f"Background C {d['C']:.3g}" + (f", tail T {d['T']:.3g} q^{r.options.get('tail_exponent', 2.0):g}" if r.tail else ""))
-        lines.append("Candidates: " + "; ".join(f"{k} BIC {v['bic']:.1f}" for k, v in r.candidates.items()))
+        b = getattr(r, "bump", None)
+        if b is not None:
+            lines.append("Visible bump: yes" if b.present else ("Level 2 not eligible: " + b.reason))
+            lines.append(f"  slope recovery {b.recovery:.2f} +- {b.recovery_err:.2f} ({b.recovery_sigma:.1f} sigma) after a knee at "
+                         f"q = {b.q_knee:.4g} 1/A (R_g ~ {b.Rg_from_knee_A / 10:.1f} nm); residual hump {b.prominence:.3f} dex; "
+                         f"Kratky {b.kratky_prominence:.3f}, Porod {b.porod_prominence:.3f} dex")
+        lines.append("Candidates: " + "; ".join(
+            f"{k} BIC {v['bic']:.1f}" + (" [gated]" if v.get("gated") else "") for k, v in r.candidates.items()))
         if r.relaxed is not None:
             rl = r.relaxed
             lines.append(f"Relaxed bounds: {rl.name}, RMS {rl.rms_log:.4f}" + (f", Rg2 {rl.derived['Rg2_nm']:.1f} nm" if rl.l2 else "")

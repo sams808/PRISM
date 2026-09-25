@@ -74,6 +74,19 @@ class UnifiedOptions:
     relaxed_rg1_max: float = 3000.0
     robust_tol: float = 0.20
     use_usable: bool = True
+    # -- visibility gate on level 2 (see bump_evidence) --------------------------------
+    require_bump: bool = True
+    bump_min_recovery: float = 0.30         # slope units: the steepening that must follow the knee (the discriminator)
+    bump_min_sigma: float = 3.0             # and the recovery must exceed this many of its own standard errors
+    bump_min_prominence: float = 0.0        # log10 I, height of the residual hump over the L1-only fit: reported,
+    #                                         and required only when set above 0 (it saturates for a strong level)
+    bump_min_shape: float = 0.0             # log10, prominence of the Kratky / Porod knee signature: reported,
+    #                                         and required only when set above 0 (it is noise-sensitive)
+    bump_window_factor: float = 2.0         # residual-hump window = [1 / (f Rg2_max), f / Rg2_min]
+    bump_steep_factor: float = 3.0          # the steepening is looked for up to f / Rg2_min
+    bump_slope_window_dec: float = 0.30     # decades of the sliding regression that gives the local slope
+    bump_smooth_pts: int = 3
+    bump_edge_pts: int = 3
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -95,11 +108,191 @@ class UnifiedOptions:
                        rg1_bounds=(self.rg1_bounds[0], self.relaxed_rg1_max))
 
 
+    def knee_window(self) -> Tuple[float, float]:
+        """The q range in which a level with Rg inside ``rg2_bounds`` turns the profile over
+        (q ~ 1/Rg), widened by ``bump_window_factor`` on both sides."""
+        f = max(float(self.bump_window_factor), 1.0)
+        return 1.0 / (f * self.rg2_bounds[1]), f / self.rg2_bounds[0]
+
+    def knee_range(self) -> Tuple[float, float]:
+        """The q range of the Guinier knee itself, [1/Rg2_max, 1/Rg2_min], unwidened."""
+        return 1.0 / self.rg2_bounds[1], 1.0 / self.rg2_bounds[0]
+
+    def steep_limit(self) -> float:
+        """How far above the knee the level's own Porod region is looked for."""
+        return float(self.bump_steep_factor) / self.rg2_bounds[0]
+
+
 def candidate_name(l2: bool, tail: bool) -> str:
     return "L1" + ("_L2" if l2 else "") + ("_T" if tail else "")
 
 
 CANDIDATES: Tuple[Tuple[bool, bool], ...] = ((False, False), (False, True), (True, False), (True, True))
+
+
+# ------------------------------------------------------------------------------------ visibility gate
+@dataclass
+class BumpEvidence:
+    """Model-free evidence that a second level is VISIBLE in the curve (see :func:`bump_evidence`)."""
+    present: bool = False
+    reason: str = ""
+    q: float = float("nan")
+    prominence: float = 0.0
+    sigma: float = float("nan")
+    noise: float = float("nan")
+    kratky_q: float = float("nan")
+    kratky_prominence: float = 0.0
+    porod_q: float = float("nan")
+    porod_prominence: float = 0.0
+    recovery: float = 0.0
+    recovery_err: float = float("nan")
+    recovery_sigma: float = float("nan")
+    q_knee: float = float("nan")
+    q_steep: float = float("nan")
+    n_knee: float = float("nan")
+    n_steep: float = float("nan")
+    q_maximum: float = float("nan")
+    maximum_sigma: float = float("nan")
+    window: Tuple[float, float] = (float("nan"), float("nan"))
+    amplitude_ok: bool = False
+    significance_ok: bool = False
+    recovery_ok: bool = False
+    shoulder_ok: bool = True
+    shape_ok: bool = False
+
+    @property
+    def category(self) -> str:
+        """A three-word label for why level 2 is or is not eligible, for tables and plots."""
+        if self.present:
+            return "visible bump"
+        if not self.shoulder_ok:
+            return "maximum in I"
+        if not self.recovery_ok:
+            return "no knee"
+        if not self.significance_ok:
+            return "knee not significant"
+        if not self.amplitude_ok:
+            return "bump too small"
+        return "no visible bump"
+
+    @property
+    def Rg_from_knee_A(self) -> float:
+        """The radius of gyration the observed knee implies, before any fit (R_g ~ 1/q_knee)."""
+        return 1.0 / self.q_knee if self.q_knee == self.q_knee and self.q_knee > 0 else float("nan")
+
+    def summary(self) -> str:
+        if self.present:
+            return (f"bump at q = {self.q:.4g} 1/A, {self.prominence:.3f} dex "
+                    f"({100 * (10 ** self.prominence - 1):.0f} % of the intensity, {self.sigma:.1f} sigma); "
+                    f"slope recovers {self.recovery:.2f} ({self.recovery_sigma:.1f} sigma) after a knee at q = {self.q_knee:.4g} "
+                    f"(R_g ~ {self.Rg_from_knee_A / 10:.1f} nm)")
+        return self.reason or "no visible bump"
+
+
+def bump_evidence(q: np.ndarray, I: np.ndarray, base_values: Dict[str, float], base_tail: bool,
+                  options: Optional[UnifiedOptions] = None) -> BumpEvidence:
+    """Is a second level VISIBLE in this curve, as opposed to merely statistically significant?
+
+    An information criterion tests SIGNIFICANCE, and significance is easy on a clean profile: a
+    systematic mismatch of the grain level of two percent is overwhelming evidence when the counting
+    noise is half a percent, and the second level bought with it then describes the shape of the
+    first one rather than a population. This test asks instead whether a level is *visible*, which
+    is what a reader does when they look at the profile.
+
+    The discriminator is the local logarithmic slope n(q) = d log I / d log q. A population of
+    finite size flattens it at its Guinier knee and steepens it again in its own Porod region, while
+    a power law, a flat background and a rising tail can only make it rise with q, whatever their
+    exponents and amplitudes. The grain level has a knee of its own, but one or two decades below
+    the window searched here, so inside that window it too contributes only a monotone decay. The
+    non-monotonicity therefore belongs to the nanoscale level alone; it needs no background
+    subtraction, and it grows monotonically with the level's contribution.
+
+    Conditions, all necessary, all computed from the data and the L1-only fit alone (no sample
+    identity, no composition):
+
+    1. **recovery** - n(q), by a sliding regression over ``bump_slope_window_dec`` decades, must have
+       an *interior* local maximum inside the knee range of the admitted radii
+       (:meth:`UnifiedOptions.knee_range`) and fall again below
+       :meth:`UnifiedOptions.steep_limit` by at least ``bump_min_recovery``
+       (:func:`~saxs.core.descriptors.slope_recovery`). Interior is what keeps the grain level's own
+       Guinier transition, at the low-q edge of the measured range, from counting as a knee.
+    2. **significance** - that recovery must exceed ``bump_min_sigma`` times its own standard error,
+       propagated from the scatter of the points about the two local regressions, so that noise on a
+       poor profile cannot pass.
+    3. **shoulder, not a peak** - I itself must have no significant maximum inside the window
+       (:func:`~saxs.core.descriptors.maximum_test`). A Guinier knee is a flattening; a maximum of
+       the intensity is an interference peak or a reduction artefact, and this model describes
+       neither, so its parameters would be meaningless.
+
+    Also measured and reported, but not required unless their thresholds are raised above zero: the
+    height of the interior hump the L1-only fit leaves in log10 I (``bump_min_prominence``) and the
+    prominence of the knee in the background-subtracted Kratky / Porod representations
+    (``bump_min_shape``, :func:`~saxs.core.descriptors.knee_signature`). Neither is a good
+    discriminator on its own - the residual hump SATURATES once a level dominates, because the
+    refitted grain level absorbs part of it, so it is not monotone in the level's amplitude; and
+    dividing by a subtracted background makes the Kratky prominence noise-sensitive.
+
+    The test can only veto. Where it passes, the information criterion still decides and can still
+    refuse the level.
+
+    ``base_values`` are the fitted values of the L1-only candidate and ``base_tail`` says whether it
+    carried the rising tail; the background it implies is what is subtracted for the Kratky/Porod
+    signature."""
+    from .descriptors import interior_peaks, knee_signature, maximum_test, slope_recovery
+
+    o = options or UnifiedOptions()
+    q, I = np.asarray(q, float), np.asarray(I, float)
+    lo, hi = o.knee_window()
+    ev = BumpEvidence(window=(lo, hi))
+    comp = components(base_values, q, False, base_tail, o.tail_exponent)
+    resid = np.log10(np.maximum(I, 1e-300)) - np.log10(np.maximum(sum(comp.values()), 1e-300))
+    k = max(int(o.bump_smooth_pts) | 1, 1)
+    if len(q) < 3 * k + 2 * o.bump_edge_pts:
+        ev.reason = "too few points to test for a bump"
+        return ev
+    dd = np.diff(resid)
+    ev.noise = float(max(1.4826 * np.median(np.abs(dd - np.median(dd))) / math.sqrt(2), 1e-6) / math.sqrt(k))
+    pk = interior_peaks(q, resid, (lo, hi), edge_pts=o.bump_edge_pts, smooth_pts=k)
+    if pk:
+        ev.q, ev.prominence = pk[0][0], pk[0][1]
+        ev.sigma = ev.prominence / ev.noise
+    sig = knee_signature(q, I, comp["background"], (lo, hi), edge_pts=o.bump_edge_pts, smooth_pts=k)
+    ev.kratky_q, ev.kratky_prominence = sig["kratky_q"], sig["kratky_prominence"]
+    ev.porod_q, ev.porod_prominence = sig["porod_q"], sig["porod_prominence"]
+    rec = slope_recovery(q, I, o.knee_range(), o.steep_limit(), window_dec=o.bump_slope_window_dec,
+                         edge_pts=max(o.bump_edge_pts - 1, 1))
+    ev.recovery, ev.q_knee, ev.q_steep = rec["recovery"], rec["q_knee"], rec["q_steep"]
+    ev.recovery_err = rec["recovery_err"]
+    ev.recovery_sigma = (ev.recovery / ev.recovery_err) if (ev.recovery_err and np.isfinite(ev.recovery_err) and ev.recovery_err > 0) else float("inf")
+    ev.n_knee, ev.n_steep = rec["n_knee"], rec["n_steep"]
+    mx = maximum_test(q, I, None, weights=("I",), smooth_pts=max(k, 5),
+                      min_prominence_sigma=o.bump_min_sigma, qrange=(lo, hi))["I"]
+    ev.q_maximum = float(mx["q_max"]) if mx["q_max"] is not None else float("nan")
+    ev.maximum_sigma = float(mx["prominence_sigma"])
+    ev.shoulder_ok = not bool(mx["significant"])
+    ev.amplitude_ok = ev.prominence >= o.bump_min_prominence
+    ev.significance_ok = bool(ev.recovery_sigma >= o.bump_min_sigma)   # NaN fails, inf (a perfect local fit) passes
+    ev.recovery_ok = ev.recovery >= o.bump_min_recovery
+    ev.shape_ok = max(ev.kratky_prominence, ev.porod_prominence) >= o.bump_min_shape
+    ev.present = bool(ev.amplitude_ok and ev.significance_ok and ev.recovery_ok and ev.shoulder_ok and ev.shape_ok)
+    if ev.present:
+        ev.reason = ""
+    elif not ev.shoulder_ok:
+        ev.reason = (f"I itself has a maximum at q = {ev.q_maximum:.4g} ({ev.maximum_sigma:.1f} sigma): "
+                     f"a Guinier knee is a shoulder, never a maximum, so this curve is outside the model")
+    elif not ev.recovery_ok:
+        ev.reason = (f"the log-log slope does not steepen again after a knee "
+                     f"(recovery {ev.recovery:.2f}, needs {o.bump_min_recovery:g})")
+    elif not ev.significance_ok:
+        ev.reason = f"the recovery is only {ev.recovery_sigma:.1f} of its own error (needs {o.bump_min_sigma:g})"
+    elif not ev.amplitude_ok:
+        ev.reason = (f"the residual hump at q = {ev.q:.4g} is only {ev.prominence:.3f} dex "
+                     f"(needs {o.bump_min_prominence:g})")
+    else:
+        ev.reason = (f"no Guinier knee in the background-subtracted curve "
+                     f"(Kratky {ev.kratky_prominence:.3f}, Porod {ev.porod_prominence:.3f} dex, "
+                     f"needs {o.bump_min_shape:g})")
+    return ev
 
 
 # ------------------------------------------------------------------------------------ model
@@ -205,16 +398,19 @@ def fit_candidate(q: np.ndarray, I: np.ndarray, sigma: np.ndarray, l2: bool, tai
 
 
 def forward_select(bics: Dict[Tuple[bool, bool], float], g2: Dict[Tuple[bool, bool], Optional[float]], I_max: float,
-                   options: UnifiedOptions) -> Tuple[Tuple[bool, bool], List[Tuple[Tuple[bool, bool], float]]]:
+                   options: UnifiedOptions, l2_allowed: bool = True) -> Tuple[Tuple[bool, bool], List[Tuple[Tuple[bool, bool], float]]]:
     """Forward selection from (L1) over the available candidates: at each step the candidate with one
     more term and the lowest BIC is adopted when it lowers the BIC by more than ``dbic_min``. An L2
-    candidate whose G2 is below ``amplitude_floor`` x I_max is never eligible (a fake level).
+    candidate whose G2 is below ``amplitude_floor`` x I_max is never eligible (a fake level), and
+    none is eligible at all when ``l2_allowed`` is False (no visible bump: :func:`bump_evidence`).
     Returns (chosen, path of (candidate, BIC))."""
     chosen = (False, False)
     path = [(chosen, bics[chosen])]
     for _ in range(2):
         options_ = [k for k in bics if k != chosen and sum(k) == sum(chosen) + 1 and all(a >= b for a, b in zip(k, chosen))]
         options_ = [k for k in options_ if not (k[0] and g2.get(k) is not None and g2[k] < options.amplitude_floor * I_max)]
+        if not l2_allowed:
+            options_ = [k for k in options_ if not k[0]]
         if not options_:
             break
         best = min(options_, key=lambda k: bics[k])
@@ -279,6 +475,8 @@ class UnifiedFitResult:
     I: np.ndarray = field(default_factory=lambda: np.array([]))
     sigma: np.ndarray = field(default_factory=lambda: np.array([]))
     options: Dict[str, object] = field(default_factory=dict)
+    bump: BumpEvidence = field(default_factory=BumpEvidence)
+    l2_gated: bool = False
     relaxed: Optional["UnifiedFitResult"] = None
     resolved: Optional[bool] = None
 
@@ -317,8 +515,13 @@ class UnifiedFitResult:
         d = dict(d)
         params = {k: ParamValue(**v) for k, v in (d.pop("params") or {}).items()}
         relaxed = d.pop("relaxed", None)
+        bump = d.pop("bump", None)
         q, I, s = (np.asarray(d.pop(k, []), float) for k in ("q", "I", "sigma"))
         out = cls(params=params, q=q, I=I, sigma=s, **d)
+        if bump:
+            bump = dict(bump)
+            bump["window"] = tuple(bump.get("window", (float("nan"), float("nan"))))
+            out.bump = BumpEvidence(**bump)
         out.relaxed = cls.from_json(relaxed) if relaxed else None
         return out
 
@@ -374,12 +577,18 @@ def fit_unified_levels(curve: Curve, options: Optional[UnifiedOptions] = None) -
     bics = {k: float(r.bic) for k, r in fits.items()}
     g2 = {k: (10 ** float(r.params["logG2"].value) if k[0] else None) for k, r in fits.items()}
     I_max = float(np.max(I))
+    # is a second level visible at all? judged on the best L1-only candidate, before any L2 is considered
+    base_key = min((k for k in fits if not k[0]), key=lambda k: bics[k])
+    res.bump = bump_evidence(q, I, _values(fits[base_key].params), base_key[1], o)
+    l2_allowed = bool(res.bump.present or not o.require_bump)
+    res.l2_gated = bool(o.require_bump and not res.bump.present and any(k[0] for k in fits))
     for k, r in fits.items():
         res.candidates[candidate_name(*k)] = {"bic": float(r.bic), "chisqr": float(r.chisqr), "chi2r": float(r.redchi),
                                               "rms_log": _rms_log(r, q, y, k[0], k[1], o.tail_exponent), "n_params": int(r.nvarys),
                                               "success": bool(r.success), "G2": g2[k],
-                                              "fake_level": bool(k[0] and g2[k] is not None and g2[k] < o.amplitude_floor * I_max)}
-    chosen, path = forward_select(bics, g2, I_max, o)
+                                              "fake_level": bool(k[0] and g2[k] is not None and g2[k] < o.amplitude_floor * I_max),
+                                              "gated": bool(k[0] and not l2_allowed)}
+    chosen, path = forward_select(bics, g2, I_max, o, l2_allowed=l2_allowed)
     res.selection_path = [candidate_name(*k) for k, _ in path]
     r = fits[chosen]
     res.l2, res.tail = chosen
@@ -404,6 +613,8 @@ def fit_unified_levels(curve: Curve, options: Optional[UnifiedOptions] = None) -
     for k, c in res.candidates.items():
         if c["fake_level"]:
             res.warnings.append(f"candidate {k} rejected: G2 below {o.amplitude_floor:g} of the curve maximum")
+    if res.l2_gated:
+        res.warnings.append(f"level 2 not eligible: {res.bump.reason}")
     return res
 
 
@@ -438,7 +649,10 @@ def fit_with_robustness(curve: Curve, options: Optional[UnifiedOptions] = None) 
 TABLE_COLUMNS = ["sample", "cls", "fitted", "skip_reason", "n_pts", "q_min", "n_params", "l2", "tail", "chi2r", "rms_log", "chi2r_base",
                  "rms_base", "dBIC_vs_base", "dBIC_L2", "dBIC_tail", "logC", "logT", "Rg1_A", "Rg1_err", "d1", "d1_err", "logG1",
                  "logB1", "Rg1_at_bound", "d1_at_bound", "Rg2_A", "Rg2_err", "d2", "d2_err", "logG2", "logpf2", "logB2",
-                 "Rg2_at_bound", "d2_at_bound", "pf2_at_bound", "D2_eq_nm", "covariance_ok", "at_bounds", "relaxed_l2",
+                 "Rg2_at_bound", "d2_at_bound", "pf2_at_bound", "D2_eq_nm", "covariance_ok", "at_bounds",
+                 "bump_present", "bump_q", "bump_prominence", "bump_sigma", "bump_recovery", "bump_recovery_sigma", "bump_q_knee",
+                 "bump_Rg_knee_A", "bump_q_maximum", "bump_kratky_prom", "bump_porod_prom", "l2_gated",
+                 "bump_reason", "relaxed_l2",
                  "relaxed_Rg2_A", "relaxed_d1", "relaxed_Rg1_A", "relaxed_rms_log", "resolved", "warnings"]
 
 
@@ -463,6 +677,11 @@ def result_row(res: UnifiedFitResult) -> Dict[str, object]:
            "Rg2_at_bound": bool(p["Rg2"].at_bound) if "Rg2" in p else False, "d2_at_bound": bool(p["d2"].at_bound) if "d2" in p else False,
            "pf2_at_bound": bool(p["logpf2"].at_bound) if "logpf2" in p else False, "D2_eq_nm": res.derived.get("D2_eq_nm", nan),
            "covariance_ok": res.covariance_ok, "at_bounds": ";".join(res.at_bound_names()),
+           "bump_present": res.bump.present, "bump_q": res.bump.q, "bump_prominence": res.bump.prominence,
+           "bump_sigma": res.bump.sigma, "bump_recovery": res.bump.recovery, "bump_recovery_sigma": res.bump.recovery_sigma, "bump_q_knee": res.bump.q_knee,
+           "bump_q_maximum": res.bump.q_maximum,
+           "bump_Rg_knee_A": res.bump.Rg_from_knee_A, "bump_kratky_prom": res.bump.kratky_prominence,
+           "bump_porod_prom": res.bump.porod_prominence, "l2_gated": res.l2_gated, "bump_reason": res.bump.reason,
            "relaxed_l2": (res.relaxed.l2 if res.relaxed is not None else None),
            "relaxed_Rg2_A": (res.relaxed.params["Rg2"].value if (res.relaxed is not None and "Rg2" in res.relaxed.params) else nan),
            "relaxed_d1": (res.relaxed.params["d1"].value if (res.relaxed is not None and "d1" in res.relaxed.params) else nan),

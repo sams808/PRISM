@@ -220,7 +220,10 @@ auto region detection; <b>WAXS</b> auto-finds and fits pseudo-Voigt peaks
 SAXS 2.0 adds <b>Frames</b> (raw 2D frames: inventory, refined beam centres,
 lobe diagnostics, pairing with the session empties, sector reduction with
 loading classes), <b>Unified fit</b> (two-level unified fits with BIC
-selection and a robustness pass) and <b>Series figures</b> (publication
+selection, a robustness pass, and a visibility gate that offers the second
+level to the selection only where the curve itself shows a Guinier knee: the
+local log-log slope must flatten and steepen again, which a power law with a
+background can never do) and <b>Series figures</b> (publication
 figures and tables driven by a series table) &mdash; details in the module guide.
 The XAS workspace also gained a <b>Sample mass</b> tab — the Hephaestus
 calculator on oxide compositions (mol%/wt%) or formulas: masses for total
@@ -442,9 +445,19 @@ absolute, so leave the scale factor free.</p>
 level (Rg 25&ndash;150 nm, free Porod term), an optional nanoscale level whose
 Porod prefactor is tied to its Guinier amplitude (so a level is a population
 with a knee or it is not kept), a flat background and an optional rising
-tail. Level 2 and the tail are added only when they lower the BIC by more
-than 10; every parameter at a bound is flagged; a level with a vanishing
-amplitude is never kept. <b>Robustness check</b> refits with relaxed grain
+tail. The second level is offered to the selection only where a level is
+<b>visible</b> in the curve: the local log-log slope must flatten at a Guinier
+knee inside the q range the allowed radii imply and steepen again (the
+"recovery"), by at least three times its own error, with no maximum of the
+intensity there. A power law with a background can only make that slope rise
+with q, so it can never pass &mdash; which is the point: an information
+criterion is a test of <i>significance</i>, and on a very clean curve a
+two-percent mismatch of the grain level is overwhelming evidence while being
+invisible, so the level it buys describes the grain term rather than a
+population. When the gate passes, the BIC (dBIC &gt; 10) still decides and can
+still say no; when it fails, the report says which condition failed. Every
+parameter at a bound is flagged; a level with a vanishing amplitude is never
+kept. <b>Robustness check</b> refits with relaxed grain
 bounds: a level is "resolved" only if both fits keep it with Rg within
 20 %. Read Rg and d as robust, amplitudes as comparable between quantified
 loadings only, opaque loadings as shapes only. Batch, CSV/XLSX/JSON.</p>
