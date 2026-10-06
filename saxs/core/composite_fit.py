@@ -45,6 +45,7 @@ DEFAULT_PREFIXES: Dict[str, str] = {
     "broad_peak": "bp_",
     "beaucage_tied": "bt_",
     "rising_tail": "rt_",
+    "sphere_schulz": "sph_",
 }
 
 # spec §2.2 registered composite presets (BG_TS_PL2 added in v2:

@@ -244,6 +244,84 @@ def load_curve(path: str, file_role: str = "sample") -> Curve:
     return curve
 
 
+Q_NAMES = ("q", "q_a", "q_inva", "q_nm", "q_invnm", "q_1/a", "q(1/a)")
+I_NAMES = ("i", "i_cm", "intensity", "i_abs", "dsigma_domega", "corrected")
+SIGMA_NAMES = ("sigma", "sigma_total_cm", "sigma_cm", "di", "err", "error", "sigma_corrected", "idev")
+DQ_NAMES = ("dq", "dq_a", "dq_inva", "sigma_q", "qdev")
+
+
+def _pick(columns: List[str], wanted: Optional[str], candidates: Tuple[str, ...]) -> Optional[str]:
+    if wanted is not None:
+        if wanted not in columns:
+            raise KeyError(f"column {wanted!r} not in {columns}")
+        return wanted
+    low = {c.lower(): c for c in columns}
+    for name in candidates:
+        if name in low:
+            return low[name]
+    return None
+
+
+def load_tabular_curve(
+    path: str,
+    q_col: Optional[str] = None,
+    i_col: Optional[str] = None,
+    sigma_col: Optional[str] = None,
+    dq_col: Optional[str] = None,
+    file_role: str = "sample",
+) -> Curve:
+    """Load a delimited table with one header row of column names (after any comment lines).
+
+    Unlike `load_curve`, text columns are allowed (e.g. a per-point provenance label). q / I / sigma are chosen by
+    name (or given explicitly); every other column is kept, row-aligned with q, in ``curve.metadata["columns"]``
+    (numeric columns as float arrays, text columns as lists), and the resolution column, if any, in
+    ``curve.metadata["dq"]``. Rows with non-finite q or I, or with q <= 0, are dropped and COUNTED in
+    ``curve.metadata["n_dropped"]`` (never silently).
+    """
+    header_lines: List[str] = []
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+        lines = fh.read().splitlines()
+    start = 0
+    for start, raw in enumerate(lines):
+        s = raw.strip()
+        if not s or s.startswith(COMMENT_PREFIXES):
+            header_lines.append(raw)
+            continue
+        break
+    table_text = "\n".join(lines[start:])
+    sep = "\t" if "\t" in lines[start] else ("," if "," in lines[start] else r"\s+")
+    import io
+    df = pd.read_csv(io.StringIO(table_text), sep=sep, engine="python")
+    cols = [str(c) for c in df.columns]
+    qc = _pick(cols, q_col, Q_NAMES)
+    ic = _pick(cols, i_col, I_NAMES)
+    if qc is None or ic is None:
+        raise ValueError(f"cannot identify q / I columns among {cols}; pass q_col= and i_col=")
+    sc = _pick(cols, sigma_col, SIGMA_NAMES)
+    dc = _pick(cols, dq_col, DQ_NAMES)
+    q = pd.to_numeric(df[qc], errors="coerce").to_numpy(float)
+    intensity = pd.to_numeric(df[ic], errors="coerce").to_numpy(float)
+    keep = np.isfinite(q) & np.isfinite(intensity) & (q > 0)
+    n_dropped = int((~keep).sum())
+    order = np.argsort(q[keep])
+    extra: Dict[str, object] = {}
+    for c in cols:
+        num = pd.to_numeric(df[c], errors="coerce")
+        if num.notna().sum() == df[c].notna().sum():
+            extra[c] = num.to_numpy(float)[keep][order]
+        else:
+            extra[c] = [str(v) for v in np.asarray(df[c].astype(str))[keep][order]]
+    sigma = None if sc is None else np.asarray(extra[sc], dtype=float)
+    metadata = extract_metadata_from_header(header_lines)
+    metadata.update({"columns": extra, "q_col": qc, "i_col": ic, "sigma_col": sc, "dq_col": dc, "n_dropped": n_dropped,
+                     "dq": None if dc is None else np.asarray(extra[dc], dtype=float)})
+    curve = Curve(q=q[keep][order], intensity=intensity[keep][order], sigma=sigma, name=Path(path).stem,
+                  path=str(Path(path).resolve()), header_lines=header_lines, metadata=metadata,
+                  transmission=metadata.get("transmission"), thickness_mm=metadata.get("thickness_mm"), file_role=file_role)
+    curve.record("load_tabular", path=str(path), columns={"q": qc, "I": ic, "sigma": sc, "dq": dc}, n_dropped=n_dropped)
+    return curve
+
+
 # ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------

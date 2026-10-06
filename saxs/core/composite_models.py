@@ -586,10 +586,136 @@ class RisingTail(Component):
         return {"T": 0.3 * level / qmax ** 2, "m": 2.0}
 
 
+# =============================================================================
+# 1.11 sphere_schulz — polydisperse homogeneous spheres on an ABSOLUTE scale:
+# I(q) = phi drho^2 <V^2 P(qR)> / <V> (cm^-1), Schulz (gamma) number
+# distribution of radii (Kotlarchyk & Chen 1983, J. Chem. Phys. 79, 2461),
+# optional Percus-Yevick hard-sphere structure factor in the monodisperse
+# approximation at the mean radius (Percus & Yevick 1958; closed form of
+# Kinning & Thomas 1984, Macromolecules 17, 1712). phi is the volume fraction
+# of the spheres; drho is the X-ray scattering-length-density contrast in
+# 1e10 cm^-2 (= r_e x electron-density difference) and is normally FIXED from
+# compositions, so that the fitted amplitude IS a volume fraction.
+# =============================================================================
+
+_N_SCHULZ = 64
+
+
+def sphere_amplitude(x: np.ndarray) -> np.ndarray:
+    """F(x) = 3 (sin x - x cos x) / x^3, with its series below x = 1e-3 (F -> 1)."""
+    x = np.asarray(x, dtype=float)
+    small = np.abs(x) < 1e-3
+    xs = np.where(small, 1.0, x)
+    f = 3.0 * (np.sin(xs) - xs * np.cos(xs)) / xs ** 3
+    return np.where(small, 1.0 - x ** 2 / 10.0, f)
+
+
+def schulz_radii(R_mean: float, sig_rel: float, n: int = _N_SCHULZ):
+    """Radii and weights of the Schulz (gamma) number distribution with mean R_mean and relative standard deviation
+    sig_rel, by generalised Gauss-Laguerre quadrature (weight x^(a-1) e^-x, a = 1/sig_rel^2) computed with the
+    Golub-Welsch eigenvalue method (no overflow for narrow distributions): every moment <R^k> up to k = 2n - 1 is
+    integrated exactly, which matters because the forward intensity is carried by <R^6>/<R^3>.
+    Returns (radii, weights) with weights summing to 1."""
+    a = 1.0 / max(float(sig_rel), 1e-3) ** 2
+    alpha = a - 1.0
+    k = np.arange(int(n), dtype=float)
+    diag = 2.0 * k + alpha + 1.0
+    off = np.sqrt(k[1:] * (k[1:] + alpha))
+    x, vec = np.linalg.eigh(np.diag(diag) + np.diag(off, 1) + np.diag(off, -1))
+    w = vec[0, :] ** 2
+    w = w / w.sum()
+    return x * float(R_mean) / a, w
+
+
+def schulz_moment(R_mean: float, sig_rel: float, n: int) -> float:
+    """<R^n> of the Schulz distribution (exact): R_mean^n Gamma(a + n) / (a^n Gamma(a)), a = 1/sig_rel^2."""
+    from scipy.special import gammaln
+    a = 1.0 / max(float(sig_rel), 1e-3) ** 2
+    return float(R_mean) ** n * math.exp(gammaln(a + n) - gammaln(a) - n * math.log(a))
+
+
+def percus_yevick_sq(q: np.ndarray, R: float, phi_hs: float) -> np.ndarray:
+    """Hard-sphere structure factor, Percus-Yevick closure (radius R, hard-sphere volume fraction phi_hs)."""
+    q = np.asarray(q, dtype=float)
+    if phi_hs <= 0:
+        return np.ones_like(q)
+    eta = float(phi_hs)
+    a = (1 + 2 * eta) ** 2 / (1 - eta) ** 4
+    b = -6 * eta * (1 + eta / 2) ** 2 / (1 - eta) ** 4
+    c = eta * a / 2
+    x = 2 * q * float(R)
+    x = np.where(x < 0.05, 0.05, x)              # below: cancellation; S is flat to < 1e-3 there
+    s, co = np.sin(x), np.cos(x)
+    g = (a * (s - x * co) / x ** 2
+         + b * (2 * x * s + (2 - x ** 2) * co - 2) / x ** 3
+         + c * (-x ** 4 * co + 4 * ((3 * x ** 2 - 6) * co + (x ** 3 - 6 * x) * s + 6)) / x ** 5)
+    return 1.0 / (1.0 + 24 * eta * g / x)
+
+
+class SphereSchulz(Component):
+    """Polydisperse spheres, absolute scale. Use for particulate morphologies only (crystallites or droplets
+    in a matrix); the amplitude is a volume fraction once drho is fixed from the compositions."""
+    name = "sphere_schulz"
+
+    def params(self) -> List[Param]:
+        return [
+            Param("phi", 0.01, 0.0, 0.74, doc="Volume fraction of the spheres (absolute when drho is fixed)."),
+            Param("R", 100.0, 5.0, 5000.0, unit="Å", doc="Number-mean radius of the Schulz distribution."),
+            Param("sig", 0.3, 0.05, 0.7, doc=(
+                "Relative standard deviation of the radius distribution (0.7 = the broadest distribution for which the "
+                "component is accurate to ~3 %; a fit wanting more is not describing a particle population).")),
+            Param("drho", 1.0, 0.0, 1e3, vary=False, unit="1e10 cm^-2",
+                  doc="X-ray SLD contrast sphere - matrix (r_e x delta electron density); fix it from compositions."),
+            Param("phi_hs", 0.0, 0.0, 0.5, vary=False,
+                  doc="Hard-sphere volume fraction of the Percus-Yevick S(q) (0 = no interference)."),
+        ]
+
+    def eval(self, q: np.ndarray, phi: float = 0.01, R: float = 100.0, sig: float = 0.3,
+             drho: float = 1.0, phi_hs: float = 0.0) -> np.ndarray:
+        q = np.asarray(q, dtype=float)
+        shape = q.shape
+        q = q.ravel()
+        radii, wts = schulz_radii(R, sig)                             # number-weighted quadrature nodes
+        vol = 4.0 / 3.0 * math.pi * radii ** 3                        # Å^3
+        x = q * float(R)
+        # Deep in the Porod regime a finite quadrature aliases (onset near q R_mean ~ 6 / sig, measured against a dense
+        # 8000-radius average); there the polydisperse average is the Porod law 2 pi (S/V) q^-4 with S/V = 3 <R^2>/<R^3>
+        # (exact Schulz moments). Smooth hand-over from q R_mean = 2.5/sig over a third of that: <= 2.5 % for sig <= 0.6.
+        x0 = 2.5 / max(float(sig), 1e-3)
+        w = np.clip((x - x0) / (x0 / 3.0), 0.0, 1.0)
+        p_avg = np.empty_like(q)
+        grid = w < 1
+        if grid.any():
+            F = sphere_amplitude(q[grid].reshape(-1, 1) * radii.reshape(1, -1))
+            p_avg[grid] = (F ** 2 @ (wts * vol ** 2)) / np.sum(wts * vol)       # <V^2 P> / <V>, Å^3
+        sv = 3.0 * schulz_moment(R, sig, 2) / schulz_moment(R, sig, 3)
+        porod = 2.0 * math.pi * sv * q ** -4.0
+        p_avg = np.where(grid, (1 - w) * np.where(grid, p_avg, 0.0) + w * porod, porod)
+        # phi (1e10 cm^-2)^2 Å^3 = phi x 1e20 cm^-4 x 1e-24 cm^3 = 1e-4 cm^-1
+        out = float(phi) * float(drho) ** 2 * p_avg * 1e-4
+        if phi_hs > 0:
+            out = out * percus_yevick_sq(q, float(R), float(phi_hs))
+        return out.reshape(shape)
+
+    def derived(self, phi: float = 0.01, R: float = 100.0, sig: float = 0.3, **_) -> Dict[str, float]:
+        """Diameters in Å: number mean, volume-weighted mean <D^4>/<D^3>, the Scherrer-comparable volume-weighted
+        column length L_vol = (3/4) <D^4>/<D^3> (spheres; Langford & Wilson 1978, J. Appl. Cryst. 11, 102), and the
+        ensemble radius of gyration sqrt(3/5 <R^8>/<R^6>)."""
+        m = lambda n: schulz_moment(R, sig, n)
+        d43 = 2.0 * m(4) / m(3)
+        return {"D_number": 2.0 * float(R), "D_vol_weighted": d43, "L_vol_scherrer": 0.75 * d43,
+                "Rg_ensemble": math.sqrt(0.6 * m(8) / m(6))}
+
+    def seed(self, q, I, windows=None) -> Dict[str, float]:
+        base = Guinier().seed(q, I, windows)
+        return {"phi": 0.01, "R": float(np.clip(base["Rg"] * math.sqrt(5.0 / 3.0), 5.0, 5000.0)), "sig": 0.3,
+                "drho": 1.0, "phi_hs": 0.0}
+
+
 COMPONENTS: Dict[str, Type[Component]] = {
     cls.name: cls for cls in (
         FlatBackground, PowerLaw, PowerLaw2, Guinier, GuinierPorod,
         BeaucageUnified, Dab, LorentzOZ, TeubnerStrey, BroadPeak,
-        BeaucageTied, RisingTail,
+        BeaucageTied, RisingTail, SphereSchulz,
     )
 }
