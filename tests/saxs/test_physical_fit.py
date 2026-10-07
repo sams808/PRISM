@@ -1,6 +1,6 @@
-"""Tests for the physical-fit building blocks: tabular loader, per-point Gaussian resolution smearing, the absolute
-polydisperse-sphere component, the log-weighted fit engine, visibility runs, reference ratio, contrast and invariant
-helpers. Every numerical check is against an independent closed form, not against the code's own output."""
+"""Tests for the fit engine (saxs/core/physical_fit.py), the tabular loader and the per-point resolution smearing:
+synthetic recovery, BIC preference, bound flags, exclusions, prescreen, JSON round trip, residual runs and the
+reference ratio. Numerical checks are against independent closed forms."""
 from __future__ import annotations
 
 import math
@@ -8,13 +8,9 @@ import math
 import numpy as np
 import pytest
 
-from saxs.core.composite_models import (
-    COMPONENTS, Dab, SphereSchulz, percus_yevick_sq, schulz_moment, schulz_radii, sphere_amplitude,
-)
 from saxs.core.loader import load_tabular_curve
 from saxs.core.physical_fit import (
-    N_A, R_E_CM, TermSpec, electron_density_cm3, fit_physical, invariant, reference_ratio, residual_runs,
-    two_phase_product_cm4, volume_fraction_from_invariant, xray_sld_1e10cm2,
+    PhysFitResult, TermSpec, fit_physical, is_at_bound, reference_ratio, residual_runs,
 )
 from saxs.core.resolution import smear_points
 
@@ -46,6 +42,24 @@ def test_tabular_loader_explicit_columns(tmp_path):
 
 
 # ---------------------------------------------------------------- resolution
+def test_tabular_loader_converts_q_in_inverse_nm(tmp_path):
+    from saxs.core.loader import load_tabular_curve
+
+    p = tmp_path / "nm.dat"
+    p.write_text("q_nm\tI\tsigma\tdQ\n0.5\t10\t1\t0.02\n1.0\t5\t0.5\t0.02\n", encoding="utf-8")
+    c = load_tabular_curve(str(p))
+    assert np.allclose(c.q, [0.05, 0.1]) and np.allclose(c.metadata["dq"], [0.002, 0.002])
+    assert c.metadata["q_unit_converted"] == "1/nm -> 1/A" and np.allclose(c.metadata["columns"]["q_nm"], [0.5, 1.0])
+    p2 = tmp_path / "nm_dqA.dat"
+    p2.write_text("q_invnm,I,dQ_A\n0.5,10,0.002\n1.0,5,0.002\n", encoding="utf-8")
+    c2 = load_tabular_curve(str(p2))
+    assert np.allclose(c2.q, [0.05, 0.1]) and np.allclose(c2.metadata["dq"], [0.002, 0.002])     # dQ_A is already 1/Å
+    p3 = tmp_path / "A.dat"
+    p3.write_text("q_A\tI_cm\n0.05\t10\n0.1\t5\n", encoding="utf-8")
+    c3 = load_tabular_curve(str(p3))
+    assert np.allclose(c3.q, [0.05, 0.1]) and c3.metadata["q_unit_converted"] is None
+
+
 def test_smearing_preserves_constants_and_linear_functions():
     q = np.linspace(0.05, 0.2, 7); dq = np.full_like(q, 0.005)
     assert np.allclose(smear_points(lambda x: np.full_like(x, 3.0), q, dq), 3.0)
@@ -77,81 +91,6 @@ def test_smearing_truncates_at_zero_q():
 def test_zero_dq_returns_unsmeared():
     q = np.array([0.01, 0.02]); f = lambda x: x ** -3
     assert np.allclose(smear_points(f, q, np.zeros(2)), f(q))
-
-
-# ---------------------------------------------------------------- spheres
-def test_sphere_amplitude_limits_and_first_zero():
-    assert sphere_amplitude(np.array([0.0]))[0] == pytest.approx(1.0)
-    assert sphere_amplitude(np.array([4.493409457909064]))[0] == pytest.approx(0.0, abs=1e-12)  # tan x = x
-
-
-def test_schulz_quadrature_integrates_moments_exactly():
-    for sig in (0.05, 0.3, 0.8):
-        radii, w = schulz_radii(100.0, sig)
-        assert w.sum() == pytest.approx(1.0)
-        for k in (1, 3, 6, 8):
-            assert np.sum(w * radii ** k) == pytest.approx(schulz_moment(100.0, sig, k), rel=1e-8)
-    assert schulz_moment(100.0, 0.3, 1) == pytest.approx(100.0)
-    # variance = (sig R)^2
-    assert schulz_moment(100.0, 0.3, 2) - 100.0 ** 2 == pytest.approx((30.0) ** 2, rel=1e-9)
-
-
-def test_sphere_forward_scattering_is_phi_drho2_v2_over_v():
-    comp = SphereSchulz()
-    phi, R, sig, drho = 0.02, 120.0, 0.2, 8.0
-    I0 = comp.eval(np.array([1e-6]), phi=phi, R=R, sig=sig, drho=drho)[0]
-    v2_over_v = (4 / 3 * math.pi) * schulz_moment(R, sig, 6) / schulz_moment(R, sig, 3)
-    assert I0 == pytest.approx(phi * drho ** 2 * v2_over_v * 1e-4, rel=1e-6)
-
-
-def test_monodisperse_limit_of_sphere_component():
-    comp = SphereSchulz(); q = np.array([0.005, 0.02, 0.03])
-    R = 100.0; V = 4 / 3 * math.pi * R ** 3
-    exact = 0.01 * 2.0 ** 2 * V * sphere_amplitude(q * R) ** 2 * 1e-4
-    got = comp.eval(q, phi=0.01, R=R, sig=0.05, drho=2.0)
-    assert got[0] == pytest.approx(exact[0], rel=0.05)
-
-
-def test_sphere_matches_dense_numerical_average():
-    # independent reference: 4000-point grid over the Schulz pdf (scipy.stats.gamma), q over the whole window
-    from scipy.stats import gamma
-    q = np.logspace(-2.6, -0.15, 120)
-    for R, sig in [(150.0, 0.15), (150.0, 0.4), (40.0, 0.3), (20.0, 0.6), (300.0, 0.1), (300.0, 0.05), (80.0, 0.7)]:
-        a = 1 / sig ** 2
-        r = np.linspace(gamma.ppf(1e-8, a, scale=R / a), gamma.ppf(1 - 1e-8, a, scale=R / a), 8000)
-        w = gamma.pdf(r, a, scale=R / a); V = 4 / 3 * math.pi * r ** 3
-        F = sphere_amplitude(q[:, None] * r[None, :])
-        ref = 0.01 * 64 * (np.sum(w * V ** 2 * F ** 2, axis=1) / np.sum(w * V)) * 1e-4
-        got = SphereSchulz().eval(q, phi=0.01, R=R, sig=sig, drho=8.0)
-        assert np.max(np.abs(got / ref - 1)) < 0.035, (R, sig)
-
-
-def test_sphere_porod_limit():
-    # High q: I -> 2 pi phi drho^2 (S/V) q^-4 with S/V = 3 <R^2>/<R^3>
-    comp = SphereSchulz(); R, sig, phi, drho = 80.0, 0.4, 0.05, 3.0
-    q = np.array([0.6])
-    sv = 3 * schulz_moment(R, sig, 2) / schulz_moment(R, sig, 3)
-    porod = 2 * math.pi * phi * (drho * 1e10) ** 2 * sv * 1e8 * (q * 1e8) ** -4.0     # all in cm units
-    assert comp.eval(q, phi=phi, R=R, sig=sig, drho=drho)[0] == pytest.approx(porod[0], rel=0.08)
-
-
-def test_percus_yevick_low_q_limit_is_the_compressibility():
-    eta = 0.2
-    s0 = percus_yevick_sq(np.array([1e-6]), 50.0, eta)[0]
-    assert s0 == pytest.approx((1 - eta) ** 4 / (1 + 2 * eta) ** 2, rel=1e-3)
-    assert np.allclose(percus_yevick_sq(np.array([0.1, 0.2]), 50.0, 0.0), 1.0)
-
-
-def test_sphere_derived_sizes():
-    d = SphereSchulz().derived(R=100.0, sig=0.0501)
-    assert d["D_number"] == pytest.approx(200.0)
-    assert d["D_vol_weighted"] == pytest.approx(200.0, rel=0.02)
-    assert d["L_vol_scherrer"] == pytest.approx(150.0, rel=0.02)
-    assert d["Rg_ensemble"] == pytest.approx(math.sqrt(0.6) * 100.0, rel=0.03)
-
-
-def test_sphere_registered():
-    assert COMPONENTS["sphere_schulz"] is SphereSchulz
 
 
 # ---------------------------------------------------------------- fit engine
@@ -217,12 +156,11 @@ def test_fit_excludes_and_counts_bad_points():
 
 
 def test_bound_rule_for_zero_lower_bounds():
-    from saxs.core.physical_fit import _is_at_bound
-    assert not _is_at_bound(0.0056, 0.0, 0.74)          # small volume fraction: a result
-    assert _is_at_bound(1e-6, 0.0, 0.74)
-    assert _is_at_bound(0.739, 0.0, 0.74)
-    assert _is_at_bound(3.0, 3.0, 5.0) and not _is_at_bound(4.0, 3.0, 5.0)
-    assert _is_at_bound(29.9, 1.0, 30.0)
+    assert not is_at_bound(0.0056, 0.0, 0.74)          # small volume fraction: a result
+    assert is_at_bound(1e-6, 0.0, 0.74)
+    assert is_at_bound(0.739, 0.0, 0.74)
+    assert is_at_bound(3.0, 3.0, 5.0) and not is_at_bound(4.0, 3.0, 5.0)
+    assert is_at_bound(29.9, 1.0, 30.0)
 
 
 def test_residual_runs():
@@ -253,20 +191,22 @@ def test_reference_ratio_accepts_q_dependent_flat_terms():
     assert np.allclose(rr.ratio, 1.0, atol=1e-9) and rr.norm == pytest.approx(2.0)
 
 
-# ---------------------------------------------------------------- contrast / invariant
-def test_electron_density_of_silica_and_sld():
-    rho_e = electron_density_cm3({"SiO2": 1.0}, 2.2)
-    assert rho_e == pytest.approx(2.2 * N_A * 30 / 60.0843, rel=1e-4)
-    assert xray_sld_1e10cm2(rho_e) == pytest.approx(R_E_CM * rho_e / 1e10)
+def test_result_json_round_trip_and_reevaluation():
+    import json
+    q, I, s_, tr = _synthetic(3)
+    r = fit_physical("rt", q, I, s_, _terms(True), dq=0.02 * q, floor=0.0)
+    d = json.loads(json.dumps(r.to_dict()))
+    r2 = PhysFitResult.from_dict(d)
+    assert r2.bic == pytest.approx(r.bic) and r2.n_free == r.n_free
+    assert r2.params["dab_xi"].value == pytest.approx(r.params["dab_xi"].value)
+    np.testing.assert_allclose(r2.model, r.model)
+    np.testing.assert_allclose(r2.components["dab"], r.components["dab"])
+    ev = r2.eval(q, dq=0.02 * q)                    # same smeared model from the stored terms and values
+    np.testing.assert_allclose(ev["total"], r.model, rtol=1e-10)
+    assert set(ev) == {"grain", "flat", "dab", "total"}
 
 
-def test_invariant_of_dab_matches_closed_form_and_round_trips_phi():
-    A, xi = 20.0, 80.0
-    Q = invariant(lambda x: Dab().eval(x, A=A, xi=xi))
-    assert Q == pytest.approx(A * math.pi / (4 * xi ** 3), rel=1e-3)
-    drho = 5.0
-    phi = 0.03
-    Q2 = 2 * math.pi ** 2 * phi * (1 - phi) * (drho * 1e10) ** 2 / 1e24
-    assert two_phase_product_cm4(Q2) == pytest.approx(phi * (1 - phi) * (drho * 1e10) ** 2)
-    assert volume_fraction_from_invariant(Q2, drho) == pytest.approx(phi, rel=1e-9)
-    assert math.isnan(volume_fraction_from_invariant(Q2, 0.1))
+def test_too_few_points_is_an_error():
+    q = np.array([0.01, 0.02, 0.03]); I = np.array([3.0, 2.0, 1.0])
+    with pytest.raises(ValueError):
+        fit_physical("few", q, I, 0.1 * I, _terms(False))

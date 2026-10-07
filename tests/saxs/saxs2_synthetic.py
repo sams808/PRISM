@@ -1,12 +1,11 @@
-"""Synthetic 2D frames and curves shared by the SAXS 2.0 tests (frames, sector batch, pipeline, UI).
+"""Synthetic 2D frames and curves shared by the SAXS tests (frames, sector batch, pipeline, UI).
 
 Frames are small (400 x 380) numpy arrays with a Gaussian direct beam, an optional isotropic ring,
 optional capillary-wall lobes on the horizontal axis and an optional horizontal streak; the header
 centre can be offset from the true beam so centre refinement is exercised. Written with fabio as EDF
 into a folder tree that mimics a campaign (sessions with their own empty).
 
-Synthetic curves for the fits are generated in test_unified_levels.py (they anchor their Poisson
-noise to the feature under test, never to the global maximum).
+Synthetic curves for the physical fits are generated in fit_synthetic.py.
 """
 from __future__ import annotations
 

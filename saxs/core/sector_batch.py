@@ -263,7 +263,7 @@ class ReducedSample:
     def usable_curve(self, per_mm: bool = True) -> Curve:
         """The curve on its usable range, per mm when possible (``metadata['per_mm']`` says which),
         with the per-point ratio / empty columns kept in ``metadata['columns']``: the input of the
-        descriptors and of the unified fits."""
+        descriptors and of the physical fits."""
         base = self.curve_per_mm() if per_mm else None
         if base is None:
             base = self.curve.copy_with(name=self.name)

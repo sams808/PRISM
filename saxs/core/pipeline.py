@@ -1,34 +1,43 @@
-"""Headless SAXS 2.0 project pipeline: one JSON configuration, seven steps, a manifest.
+"""Headless SAXS project pipeline: one JSON configuration, seven steps, a manifest.
 
     inventory -> reduce -> describe -> fit -> robustness -> figures -> tables
 
 Each step reads the previous step's files from the output folder, so any step can be rerun alone
-(``run(config, steps=["tables"])``). The configuration (:class:`ProjectConfig`) holds the frame
-roots and patterns, the pairing rule, the samples table (mu or compositions), the option overrides
-of every module, the series table and the figure / table specifications. ``manifest.json`` records
-the code version, the options, the inputs (sizes, mtimes), the outputs and the timings of every step
-run. Sample-agnostic: everything sample-specific lives in the configuration and its tables.
+(``run(config, steps=["tables"])``). Two ways in:
+
+* raw 2D frames of a beamstopless instrument: ``frames_roots`` + pairing rules; ``inventory`` and ``reduce`` write the
+  reduced curves (sector reduction, loading classes, per-mm normalisation);
+* curves reduced elsewhere: a ``curves`` block (``{"dir": ..., "pattern": "*.dat", "name_regex": "^(.*)_merged$"}``,
+  named-column tables with q, I, sigma and optionally dQ, statistical sigma and smearing flags); start at ``describe``
+  or ``fit``.
+
+``fit`` runs the physical fitting workflow (saxs.core.fit_workflow) with the references, contrasts and tags defined in
+the ``fit`` block; ``robustness`` refits the retained models on perturbed data; ``figures`` and ``tables`` write the
+publication outputs. ``manifest.json`` records the code version, the options, the inputs (sizes, mtimes), the outputs
+and the timings of every step run. Sample-agnostic: everything sample-specific lives in the configuration and its
+tables.
 
 Layout of the output folder::
 
-    inventory.csv, pairs.csv, unpaired.csv          (inventory)
-    curves/<sample><suffix>.dat, reduction_summary.csv   (reduce)
-    curves_sasview/<sample>__sasview.dat            (reduce: three-column files for SasView / external fit engines)
-    descriptors.csv                                 (describe)
-    fits.json, fits.csv                             (fit; robustness updates them and adds fits_relaxed.csv)
-    figures/<name>.pdf|svg|png                      (figures)
-    tables/<base>.xlsx|csv|md                       (tables)
+    inventory.csv, pairs.csv, unpaired.csv                (inventory)
+    curves/<sample><suffix>.dat, reduction_summary.csv    (reduce)
+    curves_sasview/<sample>__sasview.dat                  (reduce: three-column files for SasView / external fit engines)
+    descriptors.csv                                       (describe)
+    fits.json, fits_summary.csv, fits/<curve>_fit.csv     (fit; robustness updates them and adds fits_robustness.csv)
+    figures/<name>.pdf|svg|png                            (figures)
+    tables/<base>.xlsx|csv|md                             (tables)
     manifest.json
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,6 +45,7 @@ import pandas as pd
 STEPS = ("inventory", "reduce", "describe", "fit", "robustness", "figures", "tables")
 Progress = Optional[Callable[[int, int, str], None]]
 Log = Callable[[str], None]
+FIT_KEYS = ("options", "references", "contrast", "tags", "robustness_variants")
 
 
 # ------------------------------------------------------------------------------------ config
@@ -50,6 +60,7 @@ class ProjectConfig:
     default_wavelength_A: Optional[float] = None
     pairing: Dict[str, object] = field(default_factory=lambda: {"rule": "same_folder", "explicit": None,
                                                                 "fallback_to_session": True, "default_capillary_mm": 1.0})
+    curves: Optional[Dict[str, object]] = None
     samples_table: Optional[str] = None
     sample_key_regex: Optional[str] = None
     energy_ev: Optional[float] = None
@@ -79,6 +90,9 @@ class ProjectConfig:
         pairing = {"rule": "same_folder", "explicit": None, "fallback_to_session": True, "default_capillary_mm": 1.0}
         pairing.update(cfg.pairing or {})
         cfg.pairing = pairing
+        bad_fit = [k for k in (cfg.fit or {}) if k not in FIT_KEYS]
+        if bad_fit:
+            raise KeyError(f"unknown 'fit' keys {bad_fit}; known: {list(FIT_KEYS)} (workflow options go under fit.options)")
         return cfg
 
     @classmethod
@@ -92,16 +106,24 @@ class ProjectConfig:
             json.dump({"_comment": TEMPLATE_COMMENT, **self.to_dict()}, fh, indent=2)
 
     @classmethod
-    def template(cls, frames_roots: Optional[Sequence[str]] = None, output_dir: str = "prism_saxs_output") -> "ProjectConfig":
-        return cls(frames_roots=list(frames_roots or ["path/to/session_1", "path/to/session_2"]), output_dir=output_dir,
-                   samples_table="samples.csv", series_table="series.csv",
+    def template(cls, frames_roots: Optional[Sequence[str]] = None, output_dir: str = "prism_saxs_output",
+                 curves_dir: Optional[str] = None) -> "ProjectConfig":
+        """A template to edit: from raw frames (``frames_roots``) or from reduced curves (``curves_dir``)."""
+        curves = None
+        if curves_dir is not None:
+            curves = {"dir": curves_dir, "pattern": "*.dat", "name_regex": None}
+        return cls(frames_roots=[] if curves_dir is not None else list(frames_roots or ["path/to/session_1", "path/to/session_2"]),
+                   curves=curves, output_dir=output_dir, samples_table="samples.csv", series_table="series.csv",
+                   fit={"options": {"floor": 0.03, "dbic_min": 10.0},
+                        "references": {"pattern": "^(?P<family>.*)_with_minority$", "replace": r"\g<family>_reference"},
+                        "contrast": None, "tags": {}, "robustness_variants": ["stat", "qmax", "noedge", "nosmear", "offset"]},
                    figures={"formats": ["pdf", "svg", "png"], "dpi": 600, "style": "Publication",
                             "grid": {"name": "Fig_curves", "shift_decades": 1.6, "x_range": [4e-3, 0.62], "q_max": 0.22, "per_decade": 60,
                                      "ylabel": "Intensity (normalized, shifted)"},
-                            "fit_panels": [{"name": "Fig_fits_{group}", "group": "*", "ncol": 3, "title": "{group}"}],
+                            "fit_panels": [{"name": "Fig_fits_{group}", "group": "*", "ncol": 3, "title": "{group}", "iq4": False}],
                             "trends": {"name": "Fig_trends", "x_label": "x"},
-                            "frame": None, "level_names": {"L1": "level 1", "L2": "level 2"}},
-                   tables={"base_name": "tables", "amplitude_unit": "", "extra_columns": {}})
+                            "frame": None},
+                   tables={"base_name": "tables", "extra_columns": {}})
 
     # -- helpers -------------------------------------------------------------------------
     def resolve(self, path: Optional[str]) -> Optional[str]:
@@ -118,12 +140,21 @@ class ProjectConfig:
 
 
 TEMPLATE_COMMENT = [
-    "PRISM SAXS 2.0 project. Paths are relative to this file. Steps: inventory, reduce, describe, fit, robustness, figures, tables.",
-    "samples_table: csv with 'sample' and either 'mu_mm' or 'composition' (e.g. 50.6(SiO2)13.6(B2O3)...) + 'density_g_cm3'; optional 'rho_e'.",
-    "series_table: csv with sample, panel_row, panel_col, stack_index, label (+ colour, marker, linestyle, x_value, family_label, col_title, "
-    "quantified, note_symbol, group, extra_panels, fit_order).",
-    "reduction / descriptors / fit: option overrides (see ReductionOptions, DescriptorOptions, UnifiedOptions).",
-    "figures.fit_panels: entries with 'samples' (a list) or 'group' ('*' = every group of the series table); '{group}' in names and titles.",
+    "PRISM SAXS project. Paths are relative to this file. Steps: inventory, reduce, describe, fit, robustness, figures, tables.",
+    "From raw 2D frames: frames_roots + pairing. From curves reduced elsewhere: curves = {'dir', 'pattern' (glob), 'name_regex' "
+    "(group 1 = curve name), optional q_col / i_col / sigma_col / dq_col}; then run from 'describe' or 'fit'.",
+    "samples_table: csv with 'sample' and either 'mu_mm' or 'composition' (e.g. 50.6(SiO2)13.6(B2O3)...) + 'density_g_cm3'.",
+    "fit.options: WorkflowOptions overrides (floor, grain_p_bounds, oz_xi_bounds, gate_window, norm_qmax, gate_span, gate_null_max, "
+    "families, second_population, dbic_min, visibility_fraction, visibility_qmax, report_q, robust_qmax, offset_variant ...).",
+    "fit.references: {'explicit': {curve: reference}} and/or {'pattern': regex, 'replace': replacement} (re.sub on the full "
+    "name) and/or {'column': samples-table column}; a reference must be one of the curves.",
+    "fit.contrast: {'phase': formula, 'density_g_cm3': rho, 'alt_density_g_cm3': rho2, 'composition_column', 'density_column'} "
+    "(particle contrast and stoichiometric ceiling from each sample's composition) or {'column': samples-table column, 1e10 cm^-2}.",
+    "fit.tags: {tag: 'header:<regex with one group>' or 'samples:<column>'} (used by the 'offset' robustness variant).",
+    "series_table: csv with sample, panel_row, panel_col, stack_index, label (+ colour, marker, linestyle, x_value, family_label, "
+    "col_title, quantified, note_symbol, group, extra_panels, fit_order); needed for the grid and trends figures.",
+    "figures.fit_panels: entries with 'samples' (a list) or 'group' ('*' = every group of the series table), 'only': "
+    "'structural' | 'all', 'iq4': true for I q^4 panels; '{group}' in names and titles.",
     "tables.extra_columns: {'column title': 'series:<column>[:<decimals>]' or 'samples:<column>[:<decimals>]'}.",
 ]
 
@@ -181,6 +212,15 @@ def _samples_df(cfg: ProjectConfig) -> Optional[pd.DataFrame]:
     return pd.read_csv(p, encoding="utf-8-sig") if p else None
 
 
+def _sample_key(cfg: ProjectConfig, name: str) -> str:
+    """The samples-table key of a curve name (``sample_key_regex`` group 1, else the name itself)."""
+    if cfg.sample_key_regex:
+        m = re.search(cfg.sample_key_regex, name)
+        if m:
+            return m.group(1) if m.groups() else m.group(0)
+    return name
+
+
 def _mu_source(cfg: ProjectConfig):
     from .sector_batch import MuSource
 
@@ -194,34 +234,80 @@ def _curves_dir(cfg: ProjectConfig) -> str:
     return os.path.join(cfg.out, "curves")
 
 
-def _load_curves(cfg: ProjectConfig):
+def _load_reduced(cfg: ProjectConfig):
     from .sector_batch import load_reduced_folder
 
     folder = _curves_dir(cfg)
     if not os.path.isdir(folder):
-        raise FileNotFoundError(f"{folder} does not exist: run the 'reduce' step first")
+        raise FileNotFoundError(f"{folder} does not exist: run the 'reduce' step first (or define a 'curves' block)")
     reduced = load_reduced_folder(folder, pattern=r".*\.dat$")
     if not reduced:
         raise FileNotFoundError(f"no reduced curve in {folder}: run the 'reduce' step first")
     return {r.name: r for r in reduced}
 
 
-def _series_table(cfg: ProjectConfig):
+def _curve_set(cfg: ProjectConfig, log: Log = print) -> Tuple[Dict[str, object], List[str]]:
+    """``{name: Curve}`` and the input paths: the external ``curves`` block when defined, else the reduce output."""
+    from .loader import load_tabular_curve
+
+    if cfg.curves:
+        spec = dict(cfg.curves)
+        folder = cfg.resolve(spec.get("dir"))
+        if not folder or not os.path.isdir(folder):
+            raise FileNotFoundError(f"curves.dir {folder!r} does not exist")
+        pattern = str(spec.get("pattern", "*.dat"))
+        name_re = spec.get("name_regex")
+        exclude = spec.get("exclude_regex")
+        curves, paths = {}, []
+        for fn in sorted(os.listdir(folder)):
+            if not fnmatch.fnmatch(fn, pattern):
+                continue
+            if exclude and re.search(str(exclude), fn):
+                continue
+            stem = os.path.splitext(fn)[0]
+            name = stem
+            if name_re:
+                m = re.search(str(name_re), stem)
+                if not m:
+                    continue
+                name = m.group(1) if m.groups() else m.group(0)
+            path = os.path.join(folder, fn)
+            c = load_tabular_curve(path, q_col=spec.get("q_col"), i_col=spec.get("i_col"), sigma_col=spec.get("sigma_col"),
+                                   dq_col=spec.get("dq_col"))
+            c.name = name
+            if c.metadata.get("n_dropped"):
+                log(f"  {name}: {c.metadata['n_dropped']} row(s) dropped (non-finite or q <= 0)")
+            curves[name] = c
+            paths.append(path)
+        if not curves:
+            raise FileNotFoundError(f"no file matching {pattern!r} (name_regex {name_re!r}) in {folder}")
+        return curves, paths
+    reduced = _load_reduced(cfg)
+    return {n: r.usable_curve() for n, r in reduced.items()}, [r.dat_path for r in reduced.values()]
+
+
+def _series_table(cfg: ProjectConfig, required: bool = True):
     from .series_figures import SeriesTable
 
     p = cfg.resolve(cfg.series_table)
-    if not p:
-        raise ValueError("the configuration has no series_table: figures and tables need one")
+    if not p or not os.path.exists(p):
+        if required:
+            raise ValueError("the configuration has no series_table (or the file is missing)")
+        return None
     return SeriesTable.from_csv(p)
 
 
-def _load_fits(cfg: ProjectConfig):
-    from .unified_levels import load_results_json
+def _fits_path(cfg: ProjectConfig) -> str:
+    return os.path.join(cfg.out, "fits.json")
 
-    p = os.path.join(cfg.out, "fits.json")
+
+def _load_fits(cfg: ProjectConfig):
+    from .fit_workflow import WorkflowResult
+
+    p = _fits_path(cfg)
     if not os.path.exists(p):
         raise FileNotFoundError(f"{p} does not exist: run the 'fit' step first")
-    return load_results_json(p)
+    return WorkflowResult.load(p)
 
 
 def _read_pairs(cfg: ProjectConfig):
@@ -248,6 +334,106 @@ def _read_pairs(cfg: ProjectConfig):
         s.name = str(r["sample"])
         pairs.append(FramePair(sample=s, empty=e))
     return pairs
+
+
+# ------------------------------------------------------------------------------------ fit inputs
+def references_for(cfg: ProjectConfig, names: Sequence[str], log: Log = print) -> Dict[str, Optional[str]]:
+    """Reference curve of every curve from ``fit.references`` (explicit pairs win over the regex rule, which wins over
+    a samples-table column). A reference equal to the curve itself, or not among the curves, is dropped (logged)."""
+    spec = dict((cfg.fit or {}).get("references") or {})
+    out: Dict[str, Optional[str]] = {n: None for n in names}
+    if spec.get("column"):
+        df = _samples_df(cfg)
+        if df is None or spec["column"] not in df.columns:
+            raise KeyError(f"fit.references.column {spec['column']!r} not in the samples table")
+        col = {str(k): v for k, v in zip(df["sample"], df[spec["column"]])}
+        for n in names:
+            v = col.get(_sample_key(cfg, n))
+            out[n] = None if (v is None or (isinstance(v, float) and np.isnan(v)) or str(v).strip() == "") else str(v)
+    if spec.get("pattern"):
+        pat = re.compile(str(spec["pattern"]))
+        for n in names:
+            if pat.fullmatch(n):
+                out[n] = pat.sub(str(spec.get("replace", "")), n)
+    for k, v in dict(spec.get("explicit") or {}).items():
+        if k in out:
+            out[k] = v
+    for n, r in list(out.items()):
+        if r == n:
+            out[n] = None
+        elif r is not None and r not in out:
+            log(f"  {n}: reference {r!r} is not among the curves -> no reference")
+            out[n] = None
+    return out
+
+
+def contrasts_for(cfg: ProjectConfig, names: Sequence[str], log: Log = print) -> Dict[str, Dict[str, Optional[float]]]:
+    """Particle contrast (and an alternative, and the stoichiometric ceiling) per curve from ``fit.contrast``."""
+    spec = (cfg.fit or {}).get("contrast")
+    out = {n: {"contrast": None, "contrast_alt": None, "phi_max": None} for n in names}
+    if not spec:
+        return out
+    df = _samples_df(cfg)
+    if df is None:
+        raise ValueError("fit.contrast needs a samples_table")
+    rows = {str(k): r for k, r in df.set_index("sample", drop=False).iterrows()}
+    if spec.get("column"):
+        for n in names:
+            r = rows.get(_sample_key(cfg, n))
+            if r is not None and pd.notna(r.get(spec["column"])):
+                out[n]["contrast"] = float(r[spec["column"]])
+        return out
+    from .contrast import phase_contrast_1e10cm2, stoichiometric_ceiling
+
+    phase, rho_p = spec["phase"], float(spec["density_g_cm3"])
+    rho_alt = spec.get("alt_density_g_cm3")
+    ccol, dcol = spec.get("composition_column", "composition"), spec.get("density_column", "density_g_cm3")
+    for n in names:
+        r = rows.get(_sample_key(cfg, n))
+        if r is None or pd.isna(r.get(ccol)) or pd.isna(r.get(dcol)):
+            log(f"  {n}: no composition/density in the samples table -> spheres on a relative scale")
+            continue
+        comp, rho_s = str(r[ccol]), float(r[dcol])
+        out[n]["contrast"] = phase_contrast_1e10cm2(phase, rho_p, comp, rho_s)
+        if rho_alt:
+            out[n]["contrast_alt"] = phase_contrast_1e10cm2(phase, float(rho_alt), comp, rho_s)
+        if spec.get("ceiling", True):
+            out[n]["phi_max"] = stoichiometric_ceiling(phase, rho_p, comp, rho_s)
+    return out
+
+
+def tags_for(cfg: ProjectConfig, curves: Dict[str, object]) -> Dict[str, Dict[str, str]]:
+    """``fit.tags``: {tag: 'header:<regex with one group>' | 'samples:<column>'}."""
+    spec = dict((cfg.fit or {}).get("tags") or {})
+    out = {n: {} for n in curves}
+    df = _samples_df(cfg) if any(str(v).startswith("samples:") for v in spec.values()) else None
+    rows = {str(k): r for k, r in df.set_index("sample", drop=False).iterrows()} if df is not None else {}
+    for tag, src in spec.items():
+        kind, _, arg = str(src).partition(":")
+        for n, c in curves.items():
+            if kind == "header":
+                for h in getattr(c, "header_lines", []) or []:
+                    m = re.search(arg, h)
+                    if m:
+                        out[n][tag] = m.group(1) if m.groups() else m.group(0)
+                        break
+            elif kind == "samples":
+                r = rows.get(_sample_key(cfg, n))
+                if r is not None and arg in r and pd.notna(r[arg]):
+                    out[n][tag] = str(r[arg])
+    return out
+
+
+def fit_inputs(cfg: ProjectConfig, log: Log = print):
+    """The CurveInputs of the project (curves, references, contrasts, tags) and the input paths."""
+    from .fit_workflow import CurveInput
+
+    curves, paths = _curve_set(cfg, log)
+    refs = references_for(cfg, list(curves), log)
+    con = contrasts_for(cfg, list(curves), log)
+    tags = tags_for(cfg, curves)
+    inputs = [CurveInput.from_curve(c, name=n, reference=refs[n], tags=tags[n], **con[n]) for n, c in curves.items()]
+    return inputs, paths
 
 
 # ------------------------------------------------------------------------------------ steps
@@ -289,7 +475,7 @@ def step_inventory(cfg: ProjectConfig, progress: Progress = None, log: Log = pri
 
 
 def step_reduce(cfg: ProjectConfig, progress: Progress = None, log: Log = print) -> Dict[str, object]:
-    from .sector_batch import ReductionOptions, reduce_pairs, summary_table
+    from .sector_batch import SASVIEW_SUFFIX, ReductionOptions, reduce_pairs, summary_table
 
     pairs = _read_pairs(cfg)
     opts = ReductionOptions.from_dict(cfg.reduction)
@@ -305,7 +491,6 @@ def step_reduce(cfg: ProjectConfig, progress: Progress = None, log: Log = print)
     for r in results:
         log(f"  {r.name:20s} T={r.transmission.T:.3g} mu t={r.mu_t:.2f} {r.loading_class:10s} usable [{r.q_min_use}, {r.q_max_use}] centre: {r.centre_source}")
     inputs = [os.path.join(cfg.out, "pairs.csv")] + ([cfg.resolve(cfg.samples_table)] if cfg.samples_table else [])
-    from .sector_batch import SASVIEW_SUFFIX
     sasview_files = [os.path.join(sasview_dir, f"{r.name}{SASVIEW_SUFFIX}.dat") for r in results]
     log(f"  {len(sasview_files)} SasView-ready three-column curve(s) -> {sasview_dir}")
     return {"outputs": [r.dat_path for r in results] + sasview_files + [summary], "inputs": inputs, "options": opts.to_dict(),
@@ -316,62 +501,74 @@ def step_reduce(cfg: ProjectConfig, progress: Progress = None, log: Log = print)
 def step_describe(cfg: ProjectConfig, progress: Progress = None, log: Log = print) -> Dict[str, object]:
     from .descriptors import DescriptorOptions, describe_batch
 
-    reduced = _load_curves(cfg)
+    curves, paths = _curve_set(cfg, log)
     opts = DescriptorOptions.from_dict(cfg.descriptors)
     mu = _mu_source(cfg)
     rho = (lambda n: mu.rho_e_for(n)) if mu is not None else None
-    curves = [r.usable_curve() for r in reduced.values()]
-    _results, df = describe_batch(curves, opts, rho_e=rho, progress=progress)
+    _results, df = describe_batch(list(curves.values()), opts, rho_e=rho, progress=progress)
     path = os.path.join(cfg.out, "descriptors.csv")
+    os.makedirs(cfg.out, exist_ok=True)
     df.to_csv(path, index=False, encoding="utf-8-sig")
     log(f"  {len(df)} curves described -> {path}")
-    return {"outputs": [path], "inputs": [r.dat_path for r in reduced.values()], "options": opts.to_dict(),
+    return {"outputs": [path], "inputs": paths, "options": opts.to_dict(),
             "notes": {"n_with_maximum": int(df["has_maximum"].sum()) if "has_maximum" in df else 0}}
 
 
-def step_fit(cfg: ProjectConfig, progress: Progress = None, log: Log = print) -> Dict[str, object]:
-    from .unified_levels import UnifiedOptions, batch_fit, save_results_json
+def _write_curve_fits(result, folder: str) -> List[str]:
+    from .fit_workflow import curve_table
+    from .tables import transliterate_frame
 
-    reduced = _load_curves(cfg)
-    opts = UnifiedOptions.from_dict(cfg.fit)
-    curves = [r.usable_curve() for r in reduced.values()]
-    results, df = batch_fit(curves, opts, robustness=False, progress=progress)
-    jpath, cpath = os.path.join(cfg.out, "fits.json"), os.path.join(cfg.out, "fits.csv")
-    save_results_json(results, jpath)
-    df.to_csv(cpath, index=False, encoding="utf-8-sig")
-    for r in results:
-        log(f"  {r.sample:20s} " + (f"{r.name:8s} par={r.n_params} rms={r.rms_log:.3f}" + (f" Rg2={r.derived['Rg2_nm']:.1f} nm" if r.l2 else "")
-                                    if r.fitted else f"skipped: {r.skip_reason}"))
-    return {"outputs": [jpath, cpath], "inputs": [r.dat_path for r in reduced.values()], "options": opts.to_dict(),
-            "notes": {"n_fitted": int(sum(r.fitted for r in results)), "n_l2": int(sum(r.l2 for r in results)),
-                      "n_tail": int(sum(r.tail for r in results))}}
+    os.makedirs(folder, exist_ok=True)
+    out = []
+    for name, cr in result.curves.items():
+        p = os.path.join(folder, f"{name}_fit.csv")
+        transliterate_frame(curve_table(cr)).to_csv(p, index=False, encoding="utf-8-sig")
+        out.append(p)
+    return out
+
+
+def step_fit(cfg: ProjectConfig, progress: Progress = None, log: Log = print) -> Dict[str, object]:
+    from .fit_workflow import WorkflowOptions, run_workflow, summary_table
+
+    inputs, paths = fit_inputs(cfg, log)
+    opts = WorkflowOptions.from_dict((cfg.fit or {}).get("options"))
+    os.makedirs(cfg.out, exist_ok=True)
+    result = run_workflow(inputs, opts, progress=progress)
+    jpath, cpath = _fits_path(cfg), os.path.join(cfg.out, "fits_summary.csv")
+    result.save(jpath)
+    summary_table(result).to_csv(cpath, index=False, encoding="utf-8-sig")
+    curve_files = _write_curve_fits(result, os.path.join(cfg.out, "fits"))
+    if np.isfinite(result.null_max):
+        log(f"  reference/reference null maximum {result.null_max:.3g} ({result.null_pairs} pairs)")
+    for name, cr in result.curves.items():
+        f = cr.retained_fit
+        g = cr.gate
+        log(f"  {name:20s} gate {g.method}{' PASS' if g.passed else ''}{f' (peak {g.peak:.3g})' if np.isfinite(g.peak) else ''}"
+            f" -> {cr.retained:12s} chi2_r {f.redchi:5.2f}")
+    return {"outputs": [jpath, cpath] + curve_files, "inputs": paths, "options": opts.to_dict(),
+            "notes": {"n_curves": len(result.curves), "n_structural": int(sum(c.structural for c in result.curves.values())),
+                      "null_max": result.null_max}}
 
 
 def step_robustness(cfg: ProjectConfig, progress: Progress = None, log: Log = print) -> Dict[str, object]:
-    from .tables import robustness_sheet
-    from .unified_levels import UnifiedOptions, results_table, robustness_pass, save_results_json
+    from .fit_workflow import robust_flags, robustness, summary_table
 
-    reduced = _load_curves(cfg)
-    results = _load_fits(cfg)
-    opts = UnifiedOptions.from_dict(cfg.fit)
-    n = len(results)
-    for i, r in enumerate(results):
-        if progress is not None:
-            progress(i, n, r.sample)
-        if r.fitted and r.sample in reduced:
-            robustness_pass(reduced[r.sample].usable_curve(), r, opts)
-    if progress is not None:
-        progress(n, n, "done")
-    jpath, cpath, rpath = os.path.join(cfg.out, "fits.json"), os.path.join(cfg.out, "fits.csv"), os.path.join(cfg.out, "fits_relaxed.csv")
-    save_results_json(results, jpath)
-    results_table(results).to_csv(cpath, index=False, encoding="utf-8-sig")
-    robustness_sheet(results).to_csv(rpath, index=False, encoding="utf-8-sig")
-    for r in results:
-        if r.fitted and r.l2:
-            log(f"  {r.sample:20s} Rg2 {r.derived['Rg2_nm']:.1f} nm, relaxed {r.relaxed.derived.get('Rg2_nm', float('nan')):.1f} nm -> "
-                f"{'resolved' if r.resolved else 'not resolved'}")
-    return {"outputs": [jpath, cpath, rpath], "inputs": [jpath], "options": opts.relaxed().to_dict(),
-            "notes": {"n_resolved": int(sum(bool(r.resolved) for r in results))}}
+    result = _load_fits(cfg)
+    inputs, paths = fit_inputs(cfg, log)
+    variants = tuple((cfg.fit or {}).get("robustness_variants") or ("stat", "qmax", "noedge", "nosmear", "offset"))
+    df = robustness(result, inputs, variants, progress=progress)
+    jpath, rpath, cpath = _fits_path(cfg), os.path.join(cfg.out, "fits_robustness.csv"), os.path.join(cfg.out, "fits_summary.csv")
+    result.save(jpath)
+    df.to_csv(rpath, index=False, encoding="utf-8-sig")
+    summary_table(result).to_csv(cpath, index=False, encoding="utf-8-sig")
+    for name, cr in result.curves.items():
+        if cr.structural:
+            fl = robust_flags(df, name)
+            log(f"  {name:20s} {cr.retained:12s} primary {'robust' if fl.get('robust_primary') else 'NOT robust'}"
+                + (f", second {'robust' if fl.get('robust_second') else 'NOT robust'}" if fl.get("robust_second") is not None else "")
+                + (f"  [{fl.get('robustness_failures')}]" if fl.get("robustness_failures") else ""))
+    return {"outputs": [jpath, rpath, cpath], "inputs": [jpath] + paths, "options": {"variants": list(variants)},
+            "notes": {"n_rows": int(len(df))}}
 
 
 def _fmt(text: str, **kw) -> str:
@@ -385,103 +582,114 @@ def step_figures(cfg: ProjectConfig, progress: Progress = None, log: Log = print
     from . import series_figures as sf
 
     spec = dict(cfg.figures or {})
-    table = _series_table(cfg)
-    reduced = _load_curves(cfg)
-    curves = {n: r.usable_curve() for n, r in reduced.items()}
+    table = _series_table(cfg, required=False)
+    curves, paths = _curve_set(cfg, log)
     fig_dir = os.path.join(cfg.out, "figures")
     os.makedirs(fig_dir, exist_ok=True)
     formats = tuple(spec.get("formats", ("pdf", "svg", "png")))
     dpi = int(spec.get("dpi", 600))
     style = spec.get("style", "Publication")
     outputs: List[str] = []
-    jobs: List[str] = []
+    try:
+        result = _load_fits(cfg)
+    except FileNotFoundError as exc:
+        result = None
+        log(f"  fit figures skipped: {exc}")
+    jobs: List[Tuple[str, object]] = []
     grid = spec.get("grid", {"name": "Fig_curves"})
-    if grid:
-        jobs.append("grid")
-    fit_specs = spec.get("fit_panels", [{"name": "Fig_fits_{group}", "group": "*", "ncol": 3, "title": "{group}"}])
-    jobs += ["fit_panels"] * len(fit_specs)
-    if spec.get("trends", {"name": "Fig_trends"}):
-        jobs.append("trends")
-    if spec.get("frame"):
-        jobs.append("frame")
-    n_jobs, k = len(jobs), 0
-
-    def tick(msg):
-        nonlocal k
-        if progress is not None:
-            progress(k, n_jobs, msg)
-        k += 1
-
-    if grid:
-        tick(grid.get("name", "Fig_curves"))
-        g = dict(grid)
-        name = g.pop("name", "Fig_curves")
-        if "x_range" in g:
-            g["x_range"] = tuple(g["x_range"])
-        if g.get("figsize"):
-            g["figsize"] = tuple(g["figsize"])
-        fig = sf.grid_figure(curves, table, style=style, **g)
-        outputs += sf.export_figure(fig, os.path.join(fig_dir, name), formats, dpi)
-    fits = None
-    if fit_specs or spec.get("trends", True):
-        try:
-            fits = {r.sample: r for r in _load_fits(cfg)}
-        except FileNotFoundError as exc:
-            log(f"  fit figures skipped: {exc}")
-    level_names = spec.get("level_names")
-    class_notes = spec.get("class_notes")
-    if fits:
-        for fs in fit_specs:
-            fs = dict(fs)
-            name = fs.pop("name", "Fig_fits_{group}")
-            groups = [None]
-            if "group" in fs:
-                g = fs.pop("group")
-                groups = table.groups() if g in ("*", None) else [g]
-            for grp in groups:
-                samples = fs.get("samples") or (table.samples_in_group(grp) if grp is not None else table.samples)
-                title = fs.get("title")
-                tick(_fmt(name, group=grp or ""))
-                fig = sf.fit_panels_figure(fits, samples, table, ncol=int(fs.get("ncol", 3)), letters=fs.get("letters", True),
-                                           title=(_fmt(title, group=grp or "") if title else None), style=style, level_names=level_names,
-                                           class_notes=class_notes, ylabel=fs.get("ylabel", spec.get("ylabel_fits", "Intensity")),
-                                           x_range=tuple(fs.get("x_range", (4.5e-3, 0.22))))
-                outputs += sf.export_figure(fig, os.path.join(fig_dir, _fmt(name, group=grp or "")), formats, dpi)
+    if grid and table is not None:
+        jobs.append(("grid", grid))
+    elif grid:
+        log("  grid figure skipped: it needs a series_table")
+    if result is not None:
+        for fs in spec.get("fit_panels", [{"name": "Fig_fits_{group}", "group": "*", "ncol": 3, "title": "{group}"}]):
+            jobs.append(("fit_panels", fs))
     trends = spec.get("trends", {"name": "Fig_trends"})
-    if trends:
-        tick(trends.get("name", "Fig_trends"))
-        desc_path = os.path.join(cfg.out, "descriptors.csv")
-        desc = pd.read_csv(desc_path, encoding="utf-8-sig") if os.path.exists(desc_path) else None
-        fits_df = pd.read_csv(os.path.join(cfg.out, "fits.csv"), encoding="utf-8-sig") if os.path.exists(os.path.join(cfg.out, "fits.csv")) else None
-        panels = None
-        if trends.get("panels"):
-            panels = [sf.TrendPanel(**{**p, "ylim": tuple(p["ylim"]) if p.get("ylim") else None,
-                                       "require": tuple(p["require"]) if p.get("require") else None,
-                                       "hlines": tuple(p.get("hlines", ()))}) for p in trends["panels"]]
-        fig = sf.trends_figure(table, desc, fits_df, panels=panels, x_label=trends.get("x_label", "x"), style=style,
-                               figsize=tuple(trends["figsize"]) if trends.get("figsize") else None)
-        outputs += sf.export_figure(fig, os.path.join(fig_dir, trends.get("name", "Fig_trends")), formats, dpi)
-    frame = spec.get("frame")
-    if frame:
-        tick(frame.get("name", "Fig_frames"))
-        sample_frame, empty_frame = frame.get("sample_frame"), frame.get("empty_frame")
-        if frame.get("sample") and not (sample_frame and empty_frame):
-            pairs = pd.read_csv(os.path.join(cfg.out, "pairs.csv"), encoding="utf-8-sig").set_index("sample")
-            row = pairs.loc[frame["sample"]]
-            sample_frame, empty_frame = row["sample_path"], row["empty_path"]
-        fig = sf.frame_figure(cfg.resolve(sample_frame), cfg.resolve(empty_frame), crop_px=int(frame.get("crop_px", 45)),
-                              q_marker=frame.get("q_marker"), titles=tuple(frame.get("titles", ("sample", "empty"))), style=style,
-                              default_wavelength_A=cfg.default_wavelength_A)
-        outputs += sf.export_figure(fig, os.path.join(fig_dir, frame.get("name", "Fig_frames")), formats, dpi)
+    if trends and table is not None and (result is not None or os.path.exists(os.path.join(cfg.out, "descriptors.csv"))):
+        jobs.append(("trends", trends))
+    if spec.get("frame"):
+        jobs.append(("frame", spec["frame"]))
+    n_jobs = len(jobs)
+    for k, (kind, js) in enumerate(jobs):
+        if progress is not None:
+            progress(k, n_jobs, kind)
+        if kind == "grid":
+            g = dict(js)
+            name = g.pop("name", "Fig_curves")
+            if "x_range" in g:
+                g["x_range"] = tuple(g["x_range"])
+            if g.get("figsize"):
+                g["figsize"] = tuple(g["figsize"])
+            fig = sf.grid_figure(curves, table, style=style, **g)
+            outputs += sf.export_figure(fig, os.path.join(fig_dir, name), formats, dpi)
+        elif kind == "fit_panels":
+            outputs += _fit_panel_figures(dict(js), result, table, fig_dir, formats, dpi, style, log)
+        elif kind == "trends":
+            desc_path = os.path.join(cfg.out, "descriptors.csv")
+            desc = pd.read_csv(desc_path, encoding="utf-8-sig") if os.path.exists(desc_path) else None
+            fits_df = None
+            if result is not None:
+                from .fit_workflow import summary_table
+                fits_df = summary_table(result)
+            panels = None
+            if js.get("panels"):
+                panels = [sf.TrendPanel(**{**p, "ylim": tuple(p["ylim"]) if p.get("ylim") else None,
+                                           "require": tuple(p["require"]) if p.get("require") else None,
+                                           "hlines": tuple(p.get("hlines", ()))}) for p in js["panels"]]
+            fig = sf.trends_figure(table, desc, fits_df, panels=panels, x_label=js.get("x_label", "x"), style=style,
+                                   figsize=tuple(js["figsize"]) if js.get("figsize") else None)
+            outputs += sf.export_figure(fig, os.path.join(fig_dir, js.get("name", "Fig_trends")), formats, dpi)
+        elif kind == "frame":
+            frame = js
+            sample_frame, empty_frame = frame.get("sample_frame"), frame.get("empty_frame")
+            if frame.get("sample") and not (sample_frame and empty_frame):
+                pairs = pd.read_csv(os.path.join(cfg.out, "pairs.csv"), encoding="utf-8-sig").set_index("sample")
+                row = pairs.loc[frame["sample"]]
+                sample_frame, empty_frame = row["sample_path"], row["empty_path"]
+            fig = sf.frame_figure(cfg.resolve(sample_frame), cfg.resolve(empty_frame), crop_px=int(frame.get("crop_px", 45)),
+                                  q_marker=frame.get("q_marker"), titles=tuple(frame.get("titles", ("sample", "empty"))), style=style,
+                                  default_wavelength_A=cfg.default_wavelength_A)
+            outputs += sf.export_figure(fig, os.path.join(fig_dir, frame.get("name", "Fig_frames")), formats, dpi)
     if progress is not None:
         progress(n_jobs, n_jobs, "done")
     log(f"  {len(outputs)} figure files -> {fig_dir}")
-    return {"outputs": outputs, "inputs": [cfg.resolve(cfg.series_table)] + [r.dat_path for r in reduced.values()], "options": spec}
+    return {"outputs": outputs, "inputs": ([cfg.resolve(cfg.series_table)] if table is not None else []) + paths, "options": spec}
 
 
-def _extra_columns(cfg: ProjectConfig, table, samples_df: Optional[pd.DataFrame]) -> Dict[str, Dict[str, object]]:
-    """``{"column title": "series:<column>[:<decimals>]" | "samples:<column>[:<decimals>]"}``."""
-    out: Dict[str, Dict[str, object]] = {}
+def _fit_panel_figures(fs: Dict[str, object], result, table, fig_dir: str, formats, dpi: int, style: str, log: Log) -> List[str]:
+    from . import series_figures as sf
+
+    name = str(fs.pop("name", "Fig_fits_{group}"))
+    only = fs.get("only", "all")
+    per_figure = int(fs.get("per_figure", 12))
+    pick = (lambda names: [n for n in names if n in result.curves and (only != "structural" or result.curves[n].structural)])
+    batches: List[Tuple[str, List[str]]] = []
+    if fs.get("samples"):
+        batches.append((_fmt(name, group=""), pick(list(fs["samples"]))))
+    elif table is not None and "group" in fs:
+        g = fs.get("group")
+        for grp in (table.groups() if g in ("*", None) else [g]):
+            batches.append((_fmt(name, group=grp or ""), pick(table.samples_in_group(grp))))
+    else:
+        names = pick(list(result.curves))
+        for i in range(0, len(names), per_figure):
+            batches.append((_fmt(name, group=str(i // per_figure + 1)), names[i:i + per_figure]))
+    out = []
+    for fname, samples in batches:
+        if not samples:
+            continue
+        title = fs.get("title")
+        fig = sf.fit_panels_figure(result, samples, table, ncol=int(fs.get("ncol", 3)), letters=fs.get("letters", True),
+                                   title=(_fmt(title, group=fname) if title else None), style=style, iq4=bool(fs.get("iq4", False)),
+                                   x_range=tuple(fs["x_range"]) if fs.get("x_range") else None)
+        out += sf.export_figure(fig, os.path.join(fig_dir, fname), formats, dpi)
+    return out
+
+
+def _extra_columns(cfg: ProjectConfig, table, samples_df: Optional[pd.DataFrame], names: Sequence[str]) -> Dict[str, Dict[str, object]]:
+    """``{curve: {column title: value}}`` from ``tables.extra_columns`` =
+    ``{"column title": "series:<column>[:<decimals>]" | "samples:<column>[:<decimals>]"}``."""
+    out: Dict[str, Dict[str, object]] = {n: {} for n in names}
     for title, source in (cfg.tables or {}).get("extra_columns", {}).items():
         parts = str(source).split(":")
         kind, col = parts[0], parts[1] if len(parts) > 1 else ""
@@ -495,10 +703,14 @@ def _extra_columns(cfg: ProjectConfig, table, samples_df: Optional[pd.DataFrame]
             except (TypeError, ValueError):
                 return v
 
-        if kind == "series" and col in table.df.columns:
-            out[title] = {s: fmt(table.get(s, col)) for s in table.samples}
-        elif kind == "samples" and samples_df is not None and col in samples_df.columns:
-            out[title] = {str(s): fmt(v) for s, v in zip(samples_df["sample"], samples_df[col])}
+        for n in names:
+            if kind == "series" and table is not None and col in table.df.columns and table.has(n):
+                out[n][title] = fmt(table.get(n, col))
+            elif kind == "samples" and samples_df is not None and col in samples_df.columns:
+                key = _sample_key(cfg, n)
+                vals = samples_df.loc[samples_df["sample"].astype(str) == key, col]
+                if len(vals):
+                    out[n][title] = fmt(vals.iloc[0])
     return out
 
 
@@ -506,28 +718,19 @@ def step_tables(cfg: ProjectConfig, progress: Progress = None, log: Log = print)
     from . import tables as tb
 
     spec = dict(cfg.tables or {})
-    table = _series_table(cfg)
-    results = _load_fits(cfg)
-    by = {r.sample: r for r in results}
-    ordered = [by[n] for n in table.samples if n in by] + [r for r in results if r.sample not in table.df.index]
-    summary_path = os.path.join(cfg.out, "reduction_summary.csv")
-    summary = pd.read_csv(summary_path, encoding="utf-8-sig") if os.path.exists(summary_path) else None
+    table = _series_table(cfg, required=False)
+    result = _load_fits(cfg)
+    if table is not None:                       # series-table order first, then the rest
+        order = [n for n in table.samples if n in result.curves] + [n for n in result.curves if not table.has(n)]
+        result.curves = {n: result.curves[n] for n in order}
     desc_path = os.path.join(cfg.out, "descriptors.csv")
     desc = pd.read_csv(desc_path, encoding="utf-8-sig") if os.path.exists(desc_path) else None
-    extra = _extra_columns(cfg, table, _samples_df(cfg))
-    sheets = {spec.get("fits_sheet", "fits"): tb.fit_sheet(ordered, summary, extra=extra, amplitude_unit=spec.get("amplitude_unit", ""))}
-    if desc is not None:
-        d = desc.set_index("sample", drop=False)
-        d = d.loc[[n for n in table.samples if n in d.index] + [n for n in d.index if n not in table.df.index]]
-        sheets[spec.get("modelfree_sheet", "model-free")] = tb.modelfree_sheet(d.reset_index(drop=True), extra=extra)
-    sheets[spec.get("robustness_sheet", "robustness")] = tb.robustness_sheet(ordered)
-    from .unified_levels import UnifiedOptions
-    notes = spec.get("notes") or tb.default_notes(UnifiedOptions.from_dict(cfg.fit).to_dict())
+    extra = _extra_columns(cfg, table, _samples_df(cfg), list(result.curves))
     tdir = os.path.join(cfg.out, "tables")
-    paths = tb.write_tables(sheets, os.path.join(tdir, spec.get("base_name", "tables")), notes=notes,
-                            formats=tuple(spec.get("formats", ("xlsx", "csv", "md"))))
+    paths = tb.write_workflow_tables(result, os.path.join(tdir, spec.get("base_name", "tables")), extra=extra, descriptors=desc,
+                                     formats=tuple(spec.get("formats", ("xlsx", "csv", "md"))))
     log(f"  tables -> {tdir}: {sorted(paths)}")
-    return {"outputs": list(paths.values()), "inputs": [os.path.join(cfg.out, "fits.json"), summary_path, desc_path], "options": spec}
+    return {"outputs": list(paths.values()), "inputs": [_fits_path(cfg), desc_path], "options": spec}
 
 
 STEP_FUNCTIONS = {"inventory": step_inventory, "reduce": step_reduce, "describe": step_describe, "fit": step_fit,
@@ -535,13 +738,17 @@ STEP_FUNCTIONS = {"inventory": step_inventory, "reduce": step_reduce, "describe"
 
 
 def run(config: ProjectConfig, steps: Sequence[str] = STEPS, progress: Progress = None, log: Log = print) -> Manifest:
-    """Run the requested steps in pipeline order and record them in the manifest."""
+    """Run the requested steps in pipeline order and record them in the manifest. With a ``curves`` block the
+    inventory and reduce steps are skipped (the curves are already reduced)."""
     bad = [s for s in steps if s not in STEP_FUNCTIONS]
     if bad:
         raise ValueError(f"unknown steps {bad}; known: {list(STEPS)}")
     os.makedirs(config.out, exist_ok=True)
     manifest = Manifest(config.out)
     for step in [s for s in STEPS if s in steps]:
+        if config.curves and step in ("inventory", "reduce"):
+            log(f"[{step}] skipped: the project reads reduced curves (curves block)")
+            continue
         log(f"[{step}]")
         t0 = time.time()
         info = STEP_FUNCTIONS[step](config, progress, log)

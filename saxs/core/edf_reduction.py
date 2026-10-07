@@ -58,9 +58,8 @@ direct beam averaged over the beam footprint, and subtracts the empty of the
 same session. New work should use that module; this one is kept for the
 full-azimuth integration and the AgBeh geometry check.
 
-pyFAI and fabio are optional at import time (matching the sasmodels/bumps
-pattern in ``saxs_core.modelfit``) so the rest of the suite works without
-them.
+pyFAI and fabio are optional at import time so the rest of the suite works
+without them.
 """
 
 from __future__ import annotations

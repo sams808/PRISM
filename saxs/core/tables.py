@@ -1,7 +1,7 @@
-"""Table writers for the SAXS 2.0 outputs: xlsx (several sheets, widths, frozen header, notes sheet),
-csv (utf-8 with BOM after ASCII transliteration of every cell, because Excel garbles en-dashes in
-plain UTF-8) and markdown ("-" for missing values, notes as bullets), plus the builders of the
-standard sheets (fits / model-free / robustness) from the results of the other modules.
+"""Table writers for the SAXS outputs: xlsx (several sheets, widths, frozen header, notes sheet), csv (utf-8 with BOM
+after ASCII transliteration of every cell, because Excel garbles en-dashes in plain UTF-8) and markdown ("-" for
+missing values, notes as bullets), the model-free sheet of saxs.core.descriptors, and the sheets of a fit-workflow
+result (summary, models, parameters, robustness).
 
 Sample-agnostic: extra columns (compositions, x-values) are supplied by the caller.
 """
@@ -11,7 +11,7 @@ import math
 import os
 import re
 import unicodedata
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -135,53 +135,6 @@ def _round(v, n):
     return None if _is_missing(v) else round(float(v), n)
 
 
-def fit_sheet(results: Iterable[object], summary: Optional[pd.DataFrame] = None,
-              extra: Optional[Dict[str, Dict[str, object]]] = None, amplitude_unit: str = "") -> pd.DataFrame:
-    """The fits sheet (one row per :class:`UnifiedFitResult`): loading, T, t_eff, parameters of both
-    levels with at-bound markers (*), dBIC, the relaxed-bounds Rg2, the resolved flag, the tail and
-    the RMS; ``extra`` adds ``{column: {sample: value}}`` columns (compositions, x-values)."""
-    summ = summary.set_index("sample") if (summary is not None and "sample" in summary.columns) else summary
-    if summ is not None and summ.index.duplicated().any():
-        summ = summ[~summ.index.duplicated(keep="last")]
-    unit = f" ({amplitude_unit})" if amplitude_unit else ""
-    rows = []
-    for r in results:
-        p = r.params
-        star = lambda k: "*" if (k in p and p[k].at_bound) else ""      # noqa: E731
-        s = r.sample
-        row = {"Sample": s, "Loading": r.cls}
-        if summ is not None and s in summ.index:
-            row["T"] = _sig(summ.loc[s].get("T_used"), 3)
-            row["t_eff (mm)"] = _round(summ.loc[s].get("t_eff_mm"), 2)
-        if not r.fitted:
-            row.update({"Parameters": None, "Note": r.skip_reason})
-            rows.append(row)
-            continue
-        d = r.derived
-        row.update({"q_min (1/A)": _sig(r.q_min, 2), "Parameters": int(r.n_params),
-                    "Rg1 (nm)": f"{d['Rg1_nm']:.1f}{star('Rg1')}", "d1": f"{d['d1']:.2f}{star('d1')}", f"G1{unit}": _sig(d["G1"], 3),
-                    "Rg2 (nm)": f"{d['Rg2_nm']:.1f}{star('Rg2')}" if r.l2 else None,
-                    "Rg2 err (nm)": (_round(p["Rg2"].stderr / 10, 1) if (r.l2 and p["Rg2"].stderr is not None) else None),
-                    "D_eq (nm)": _round(d.get("D2_eq_nm"), 1) if r.l2 else None,
-                    "d2": f"{d['d2']:.2f}{star('d2')}" if r.l2 else None,
-                    f"G2{unit}": _sig(d.get("G2"), 3) if r.l2 else None,
-                    "pf2": f"{d['pf2']:.2f}{star('logpf2')}" if r.l2 else None,
-                    "Knee recovery": _round(getattr(getattr(r, "bump", None), "recovery", float("nan")), 2),
-                    "Level 2": ("kept" if r.l2 else (getattr(getattr(r, "bump", None), "category", "no visible bump")
-                                                     if getattr(r, "l2_gated", False) else "not preferred (BIC)")),
-                    "dBIC (level 2)": _round(r.dBIC_L2, 0) if _sig(r.dBIC_L2) is not None else None,
-                    "Rg2, relaxed bounds (nm)": (_round(r.relaxed.params["Rg2"].value / 10, 1)
-                                                 if (r.relaxed is not None and r.relaxed.fitted and r.relaxed.l2) else None),
-                    "Level 2 resolved": ("yes" if r.resolved else "no") if r.l2 else "-",
-                    "Rising tail": "yes" if r.tail else "no", "RMS log10 I": _round(r.rms_log, 3),
-                    "Covariance": "ok" if r.covariance_ok else "unavailable"})
-        rows.append(row)
-    df = pd.DataFrame(rows)
-    for col, mapping in (extra or {}).items():
-        df[col] = [mapping.get(s) for s in df["Sample"]]
-    return df
-
-
 def modelfree_sheet(descriptors: pd.DataFrame, extra: Optional[Dict[str, Dict[str, object]]] = None) -> pd.DataFrame:
     """The model-free sheet from :func:`saxs.core.descriptors.describe_batch`'s table."""
     d = descriptors.set_index("sample", drop=False) if "sample" in descriptors.columns else descriptors
@@ -209,45 +162,35 @@ def modelfree_sheet(descriptors: pd.DataFrame, extra: Optional[Dict[str, Dict[st
     return df
 
 
-def robustness_sheet(results: Iterable[object]) -> pd.DataFrame:
-    """The relaxed-bounds variant next to the retained fit."""
-    rows = []
-    for r in results:
-        if not r.fitted:
-            continue
-        w = r.relaxed
-        row = {"Sample": r.sample, "Model": r.name, "Rg1 (nm)": _round(r.derived["Rg1_nm"], 1), "d1": _round(r.derived["d1"], 2),
-               "Rg2 (nm)": _round(r.derived.get("Rg2_nm"), 1) if r.l2 else None, "RMS log10 I": _round(r.rms_log, 3)}
-        if w is not None and w.fitted:
-            row.update({"Relaxed model": w.name, "Relaxed Rg1 (nm)": _round(w.derived["Rg1_nm"], 1), "Relaxed d1": _round(w.derived["d1"], 2),
-                        "Relaxed Rg2 (nm)": _round(w.derived.get("Rg2_nm"), 1) if w.l2 else None,
-                        "Relaxed RMS log10 I": _round(w.rms_log, 3), "Level 2 resolved": ("yes" if r.resolved else "no") if r.l2 else "-"})
-        rows.append(row)
-    return pd.DataFrame(rows)
+def workflow_sheets(result, extra: Optional[Dict[str, Dict[str, object]]] = None,
+                    descriptors: Optional[pd.DataFrame] = None) -> Dict[str, pd.DataFrame]:
+    """The sheets of a :class:`saxs.core.fit_workflow.WorkflowResult`: summary (one row per curve), models (every
+    candidate with its verdict), parameters (long format), robustness (when run) and the model-free descriptors.
+    ``extra``: ``{curve: {column: value}}`` columns placed first in the summary."""
+    from .fit_workflow import comparison_table, parameters_table, summary_table
+
+    sheets = {"summary": summary_table(result, extra), "models": comparison_table(result), "parameters": parameters_table(result)}
+    if result.robustness is not None and len(result.robustness):
+        sheets["robustness"] = result.robustness
+    if descriptors is not None and len(descriptors):
+        sheets["model-free"] = modelfree_sheet(descriptors)
+    return sheets
 
 
-def default_notes(fit_options: Optional[Dict[str, object]] = None) -> List[str]:
-    o = fit_options or {}
-    d1 = o.get("d1_bounds", (3.0, 4.5))
-    rg1 = o.get("rg1_bounds", (250.0, 1500.0))
-    rg2 = o.get("rg2_bounds", (40.0, 200.0))
-    d2 = o.get("d2_bounds", (2.0, 4.5))
-    pf = o.get("logpf2_bounds", (-1.0, 0.18))
-    return [
-        f"Fits: two-level unified fits (Beaucage 1995; Tomita et al. 2024 Eq. 10) of the reduced profiles, q <= {o.get('q_max', 0.20)} 1/A, "
-        f"{o.get('per_decade', 40)} points per decade, log10 I weighted by the propagated sigma with a {100 * float(o.get('sigma_floor', 0.03)):.0f} % floor.",
-        f"Level 1: Rg1 {rg1[0] / 10:.0f}-{rg1[1] / 10:.0f} nm, d1 {d1[0]}-{d1[1]}, G1 and B1 free. Level 2: Rg2 {rg2[0] / 10:.0f}-{rg2[1] / 10:.0f} nm, "
-        f"d2 {d2[0]}-{d2[1]}, B2 tied to G2 by the Beaucage (1996) relation times pf2 in {10 ** pf[0]:.1f}-{10 ** pf[1]:.1f}.",
-        f"Level 2 and the rising tail (T q^{o.get('tail_exponent', 2.0):g}) are kept only when they lower the BIC by more than {o.get('dbic_min', 10.0):g} (column dBIC),",
-        f"and level 2 is eligible at all only where a level is VISIBLE in the curve itself: the local log-log slope must shallow at a "
-        f"Guinier knee inside {1 / rg2[1]:.4g}-{1 / rg2[0]:.4g} 1/A and steepen again by at least {o.get('bump_min_recovery', 0.3):g} "
-        f"(column 'Knee recovery'), by at least {o.get('bump_min_sigma', 3.0):g} of its own standard error, and the intensity itself must "
-        f"have no maximum there. A grain power law with a background can only make the slope rise with q, so it cannot pass; an "
-        f"information criterion alone would buy a level on the cleanest curves, where a few-percent mismatch of the grain level is "
-        f"highly significant but invisible. Column 'Level 2': kept / no visible bump / not preferred (BIC).",
-        f"'Level 2 resolved' = level kept by both bound sets (d1 <= {d1[1]}, Rg1 <= {rg1[1] / 10:.0f} nm; d1 <= {o.get('relaxed_d1_max', 5.0)}, "
-        f"Rg1 <= {float(o.get('relaxed_rg1_max', 3000.0)) / 10:.0f} nm) with Rg2 agreeing within {100 * float(o.get('robust_tol', 0.2)):.0f} %.",
-        "D_eq = 2 Rg2 sqrt(5/3), diameter of the equivalent sphere. A star (*) marks a parameter at a bound.",
-        "Amplitudes are comparable between quantified loadings only (measurable, marginal); opaque loadings: shapes only; "
-        "unreliable: non-uniform loading.",
-    ]
+def write_workflow_tables(result, base_path: str, extra: Optional[Dict[str, Dict[str, object]]] = None,
+                          descriptors: Optional[pd.DataFrame] = None, formats: Sequence[str] = ("xlsx", "csv", "md")) -> Dict[str, str]:
+    """``base_path.xlsx`` with every sheet + notes, ``.csv`` / ``.md`` of the summary, and one csv per further sheet
+    (``base_path_models.csv`` ...)."""
+    from .fit_workflow import method_notes
+
+    sheets = workflow_sheets(result, extra, descriptors)
+    notes = method_notes(result)
+    out = write_tables(sheets, base_path, notes=notes, md_sheet="summary", formats=formats)
+    if "csv" in formats:
+        for name, df in sheets.items():
+            if name == "summary":
+                continue
+            path = f"{base_path}_{name.replace('-', '_')}.csv"
+            transliterate_frame(df).to_csv(path, index=False, encoding="utf-8-sig")
+            out[f"csv:{name}"] = path
+    return out

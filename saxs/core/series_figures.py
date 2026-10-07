@@ -7,10 +7,10 @@ family labels, column titles, x-values and "quantified" flags all come from a :c
 * :func:`grid_figure`: one panel per (panel_row, panel_col), curves normalised and shifted by
   ``shift_decades`` per stack index, labels with a short leader line at the curve ends, panel
   letters top-left, family label bottom-left, column titles on the top row;
-* :func:`fit_panels_figure`: one main + residual pair per sample (nested gridspec, 3:1), data as
-  open markers, total fit, level components and background, letters bottom-left;
+* :func:`fit_panels_figure`: one main + residual pair per curve of a fit-workflow result (nested gridspec,
+  3:1), data as open markers, the retained model and its labelled components, normalised residuals, I or I q^4;
 * :func:`trends_figure`: descriptors or fit results against the table's x-value; open markers for
-  non-quantified samples, faded markers for a level that is not resolved, error bars when resolved;
+  non-quantified samples, faded markers for a parameter that is not robust, error bars when robust;
 * :func:`frame_figure`: two 2D frames cropped about the refined beam centre plus their horizontal /
   vertical sector profiles (the instrumental-feature figure);
 * :func:`export_figure`: pdf / svg / png at a given dpi.
@@ -31,8 +31,10 @@ from .curve import Curve
 
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 DEFAULT_COLOURS = ["#7f7f7f", "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#bcbd22", "#17becf"]
-COMPONENT_STYLE = {"L1": dict(color="#1f77b4", ls="--", lw=0.9), "L2": dict(color="#d62728", ls="--", lw=0.9),
-                   "background": dict(color="0.55", ls=":", lw=0.9)}
+COMPONENT_STYLE = {"grain": dict(color="0.45", ls="--", lw=0.9), "flat": dict(color="0.6", ls=":", lw=0.9),
+                   "oz": dict(color="0.6", ls=":", lw=0.9), "sph": dict(color="#0072B2", ls="-.", lw=0.9),
+                   "ts": dict(color="#D55E00", ls="-.", lw=0.9), "dab": dict(color="#009E73", ls="-.", lw=0.9),
+                   "uni": dict(color="#CC79A7", ls="-.", lw=0.9), "uni2": dict(color="#56B4E9", ls=(0, (1, 1)), lw=0.9)}
 SERIES_RC_COMMON = {"font.family": "sans-serif", "font.sans-serif": ["DejaVu Sans", "Arial"], "pdf.fonttype": 42,
                     "svg.fonttype": "none", "xtick.direction": "in", "ytick.direction": "in"}
 SERIES_RC_PUBLICATION = {"font.size": 8, "axes.labelsize": 8, "axes.titlesize": 9, "legend.fontsize": 6.5,
@@ -281,57 +283,79 @@ def grid_figure(curves: Dict[str, Union[Curve, Tuple[np.ndarray, np.ndarray]]], 
 
 
 # ------------------------------------------------------------------------------------ fit panels
-def draw_fit_panel(ax, axr, result, table: Optional[SeriesTable] = None, letter: Optional[str] = None,
-                   x_range: Tuple[float, float] = (4.5e-3, 0.22), level_names: Optional[Dict[str, str]] = None,
-                   class_notes: Optional[Dict[str, str]] = None, resid_ylim: float = 0.25) -> None:
-    """Main panel (data, fit, components) and residual panel of one :class:`UnifiedFitResult`."""
-    level_names = level_names or {"L1": "level 1", "L2": "level 2"}
-    class_notes = class_notes if class_notes is not None else {"opaque": "opaque, shape only", "unreliable": "non-uniform loading"}
-    name = result.sample
-    q, I = result.q, result.I
-    Im = result.model()
-    comps = result.components()
+def component_label(f, key: str) -> str:
+    """Legend text of one component of a PhysFitResult, with its key parameters (* = at a bound)."""
+    p = f.params
+    star = lambda k: "*" if (k in p and p[k].vary and p[k].at_bound) else ""      # noqa: E731
+    v = lambda k: p[k].value                                                    # noqa: E731
+    if key == "grain":
+        return f"grain law, p {v('grain_p'):.2f}{star('grain_p')}"
+    if key == "flat":
+        return f"flat level {v('flat_C'):.3g}"
+    if key == "oz":
+        return f"OZ, $\\xi$ {v('oz_xiL'):.1f} Å{star('oz_xiL')}"
+    if key == "sph":
+        return f"spheres D {2 * v('sph_R') / 10:.1f} nm{star('sph_R')}, $\\sigma$ {v('sph_sig'):.2f}{star('sph_sig')}"
+    if key == "ts":
+        return f"TS d {v('ts_d') / 10:.1f} nm{star('ts_d')}, $\\xi$ {v('ts_xi') / 10:.1f} nm{star('ts_xi')}"
+    if key == "dab":
+        return f"Debye $\\xi$ {v('dab_xi') / 10:.2f} nm{star('dab_xi')}"
+    if key in ("uni", "uni2"):
+        return f"{'unified' if key == 'uni' else 'small pop.'} R$_g$ {v(key + '_Rg') / 10:.1f} nm{star(key + '_Rg')}, d {v(key + '_d'):.1f}{star(key + '_d')}"
+    return key
+
+
+def draw_fit_panel(ax, axr, cr, table: Optional[SeriesTable] = None, letter: Optional[str] = None,
+                   x_range: Optional[Tuple[float, float]] = None, iq4: bool = False, model_key: Optional[str] = None,
+                   resid_ylim: float = 5.0, legend: bool = True) -> None:
+    """Main panel (data, model, components) and residual panel (normalised, sigma units) of one
+    :class:`saxs.core.fit_workflow.CurveResult` (the retained model unless ``model_key`` is given)."""
+    f = cr.fits[model_key or cr.retained]
+    name = cr.name
+    q, I = f.q, f.I
+    w = q ** 4 if iq4 else np.ones_like(q)
     col = table.colour(name) if (table is not None and table.has(name)) else "#1f77b4"
     marker = table.marker(name) if (table is not None and table.has(name)) else "o"
-    ax.plot(q, I, ls="none", marker=marker, ms=2.8, mfc="none", mec=col, mew=0.6, label="data")
-    ax.plot(q, Im, color="k", lw=1.1, label=f"fit ({result.n_params} par., RMS {result.rms_log:.3f})")
-    d = result.derived
-    star = lambda k: "*" if (k in result.params and result.params[k].at_bound) else ""      # noqa: E731
-    ax.plot(q, comps["L1"], label=f"{level_names['L1']}: R$_g$ {d['Rg1_nm']:.0f} nm{star('Rg1')}, d {d['d1']:.1f}{star('d1')}", **COMPONENT_STYLE["L1"])
-    if "L2" in comps:
-        ax.plot(q, comps["L2"], label=f"{level_names['L2']}: R$_g$ {d['Rg2_nm']:.1f} nm{star('Rg2')}, d {d['d2']:.1f}{star('d2')}", **COMPONENT_STYLE["L2"])
-    ax.plot(q, comps["background"], label="background" + (" + tail" if result.tail else ""), **COMPONENT_STYLE["background"])
+    ax.plot(q, I * w, ls="none", marker=marker, ms=2.6, mfc="none", mec=col, mew=0.6, label="data")
+    key = model_key or cr.retained
+    ax.plot(q, f.model * w, color="k", lw=1.1, label=f"{key}, $\\chi^2_r$ {f.redchi:.2f}")
+    for ck, cv in f.components.items():
+        ax.plot(q, cv * w, label=component_label(f, ck), **COMPONENT_STYLE.get(ck, dict(color="0.5", ls=":", lw=0.8)))
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlim(*x_range)
-    ax.set_ylim(np.nanmin(I) / 20, np.nanmax(I) * 3)
+    ax.set_xlim(*(x_range or (q.min() / 1.1, q.max() * 1.1)))
+    yy = I * w
+    ax.set_ylim(np.nanmin(yy[yy > 0]) / 5, np.nanmax(yy) * 3)
     light_grid(ax)
     ax.tick_params(labelbottom=False)
-    note = class_notes.get(result.cls, "")
-    ax.set_title(name + (f"  ({note})" if note else ""), fontsize=8)
+    ax.set_title(name, fontsize=8)
     if letter:
         ax.text(0.04, 0.05, letter, transform=ax.transAxes, fontsize=9, va="bottom")
-    ax.legend(loc="upper right", frameon=False, fontsize=6, handlelength=1.8)
-    axr.plot(q, np.log10(I) - np.log10(np.maximum(Im, 1e-300)), ls="none", marker=".", ms=3, color=col)
+    if legend:
+        ax.legend(loc="upper right" if not iq4 else "upper left", frameon=False, fontsize=5.5, handlelength=1.8)
+    axr.axhspan(-1, 1, color="0.92", lw=0)
+    axr.plot(q, f.residual, ls="none", marker=".", ms=3, color=col)
     axr.axhline(0, color="k", lw=0.5)
     axr.set_xscale("log")
-    axr.set_xlim(*x_range)
+    axr.set_xlim(*(x_range or (q.min() / 1.1, q.max() * 1.1)))
     axr.set_ylim(-resid_ylim, resid_ylim)
-    axr.set_yticks([-0.2, 0, 0.2] if resid_ylim >= 0.25 else [-resid_ylim / 2, 0, resid_ylim / 2])
     light_grid(axr)
 
 
-def fit_panels_figure(results: Dict[str, object], samples: Sequence[str], table: Optional[SeriesTable] = None, ncol: int = 3,
-                      letters: Union[bool, str] = True, title: Optional[str] = None, x_range: Tuple[float, float] = (4.5e-3, 0.22),
-                      panel_h: float = 3.6, panel_w: float = 4.33, style: str = "Publication", xlabel: str = "Q (Å$^{-1}$)",
-                      ylabel: str = "Intensity", resid_ylabel: str = "$\\Delta$log$_{10}$ I", level_names: Optional[Dict[str, str]] = None,
-                      class_notes: Optional[Dict[str, str]] = None, overrides: Optional[Dict[str, object]] = None):
-    """Main + residual pairs (nested gridspec 3:1) for ``samples`` in that order, ``ncol`` per row."""
+def fit_panels_figure(results, samples: Optional[Sequence[str]] = None, table: Optional[SeriesTable] = None, ncol: int = 3,
+                      letters: Union[bool, str] = True, title: Optional[str] = None, x_range: Optional[Tuple[float, float]] = None,
+                      iq4: bool = False, panel_h: float = 3.6, panel_w: float = 4.33, style: str = "Publication",
+                      xlabel: str = "Q (Å$^{-1}$)", ylabel: Optional[str] = None, resid_ylabel: str = "residual ($\\sigma$)",
+                      overrides: Optional[Dict[str, object]] = None):
+    """Main + residual pairs (nested gridspec 3:1) for ``samples`` (default: every curve) of a fit-workflow result
+    (a WorkflowResult or a ``{name: CurveResult}`` mapping), ``ncol`` per row."""
     from matplotlib.figure import Figure
 
-    names = [s for s in samples if s in results and getattr(results[s], "fitted", True)]
+    curves = getattr(results, "curves", results)
+    names = [s for s in (samples if samples is not None else list(curves)) if s in curves]
     if not names:
-        raise ValueError("no fitted sample to draw")
+        raise ValueError("no fitted curve to draw")
+    ylabel = ylabel or ("I q$^4$" if iq4 else "Intensity")
     nrow = int(np.ceil(len(names) / ncol))
     with apply_style(style, overrides):
         fig = Figure(figsize=(panel_w * ncol, panel_h * nrow + (0.4 if title else 0)))
@@ -343,7 +367,7 @@ def fit_panels_figure(results: Dict[str, object], samples: Sequence[str], table:
             letter = None
             if letters:
                 letter = (table.get(s, "fit_letter") if table is not None else None) or (letters[i] if isinstance(letters, str) and i < len(letters) else LETTERS[i % 26])
-            draw_fit_panel(ax, axr, results[s], table, letter=letter, x_range=x_range, level_names=level_names, class_notes=class_notes)
+            draw_fit_panel(ax, axr, curves[s], table, letter=letter, x_range=x_range, iq4=iq4)
             if rr == nrow - 1 or i + ncol >= len(names):
                 axr.set_xlabel(xlabel)
             if cc == 0:
@@ -366,7 +390,7 @@ class TrendPanel:
     transform: Optional[Union[str, Callable[[float], float]]] = None      # "neg" | "pow10" | "div10" | callable
     err_column: Optional[str] = None
     only_quantified: bool = False
-    fade_unresolved: bool = False
+    fade_column: Optional[str] = None  # a boolean column of the source table: False -> faded marker, no error bar
     require: Optional[Tuple[str, str, float]] = None                     # (column, ">"|"<"|">="|"<=", value)
     hlines: Tuple[float, ...] = ()
 
@@ -379,11 +403,12 @@ class TrendPanel:
 
 
 def default_trend_panels() -> List[TrendPanel]:
+    """Grain exponent, high-q level, Teubner-Strey spacing, small-population Rg (columns of the workflow summary)."""
     return [
-        TrendPanel("exponent", "descriptors", "n_at_0.04", "local exponent at 0.04 Å$^{-1}$", transform="neg", hlines=(4.0,)),
-        TrendPanel("plateau", "descriptors", "C_hi", "plateau 0.15–0.20 Å$^{-1}$", yscale="log", require=("ratio_hi", ">", 2.0)),
-        TrendPanel("G2", "fits", "logG2", "level 2: G$_2$", yscale="log", transform="pow10", only_quantified=True, fade_unresolved=True),
-        TrendPanel("Rg2", "fits", "Rg2_A", "level 2: R$_g$ (nm)", transform="div10", err_column="Rg2_err", fade_unresolved=True),
+        TrendPanel("grain", "fits", "grain_p", "grain power-law exponent", err_column="grain_p_err", hlines=(4.0,)),
+        TrendPanel("highq", "fits", "highq_at_report_q", "high-q term (I units)", yscale="log"),
+        TrendPanel("ts_d", "fits", "ts_d_nm", "Teubner-Strey d (nm)", err_column="ts_d_err_nm", fade_column="robust_primary"),
+        TrendPanel("uni2", "fits", "uni2_Rg_nm", "small population R$_g$ (nm)", err_column="uni2_Rg_err_nm", fade_column="robust_second"),
     ]
 
 
@@ -399,8 +424,8 @@ def trends_figure(table: SeriesTable, descriptors_df: Optional[pd.DataFrame], fi
                   figsize: Optional[Tuple[float, float]] = None, legend: bool = True, letters: bool = True,
                   overrides: Optional[Dict[str, object]] = None):
     """Descriptors / fit results against the table's ``x_value``: filled marker = quantified, open =
-    not quantified, faded = level not resolved (``resolved`` column of the fits table), error bars
-    (``err_column``) only for resolved levels."""
+    not quantified, faded = the panel's ``fade_column`` is False (e.g. not robust), error bars
+    (``err_column``) only when not faded. The fits table is the workflow summary (column ``curve``)."""
     from matplotlib.figure import Figure
     from matplotlib.lines import Line2D
 
@@ -425,13 +450,16 @@ def trends_figure(table: SeriesTable, descriptors_df: Optional[pd.DataFrame], fi
                 quantified = table.quantified(s)
                 if spec.only_quantified and not quantified:
                     continue
-                resolved = bool(row["resolved"]) if ("resolved" in row and _ok(row["resolved"]) and row["resolved"] is not None) else None
+                robust = None
+                if spec.fade_column and spec.fade_column in row and row[spec.fade_column] is not None and not (
+                        isinstance(row[spec.fade_column], float) and np.isnan(row[spec.fade_column])):
+                    robust = bool(row[spec.fade_column])
                 y = spec.apply(float(row[spec.column]))
                 col = table.colour(s)
                 kw = dict(marker=table.marker(s), ms=5, ls="none", color=col, mfc=col if quantified else "none", mew=0.9,
-                          alpha=(0.35 if (spec.fade_unresolved and resolved is False) else 1.0))
+                          alpha=(0.35 if robust is False else 1.0))
                 err = spec.apply(float(row[spec.err_column])) if (spec.err_column and spec.err_column in row and _ok(row[spec.err_column])) else None
-                if err is not None and (resolved or not spec.fade_unresolved):
+                if err is not None and robust is not False:
                     ax.errorbar(float(x), y, yerr=abs(err), capsize=0, lw=0.7, **kw)
                 else:
                     ax.plot(float(x), y, **kw)
@@ -463,8 +491,8 @@ def trends_figure(table: SeriesTable, descriptors_df: Optional[pd.DataFrame], fi
                     seen_m.add(key)
                     handles.append(Line2D([], [], color="0.3", marker=table.marker(s), ls="none", ms=5, label=str(fam)))
             handles.append(Line2D([], [], color="0.3", marker="o", ls="none", ms=5, mfc="none", label="not quantified"))
-            if any(p.fade_unresolved for p in panels):
-                handles.append(Line2D([], [], color="0.3", marker="o", ls="none", ms=5, alpha=0.35, label="level not resolved"))
+            if any(p.fade_column for p in panels):
+                handles.append(Line2D([], [], color="0.3", marker="o", ls="none", ms=5, alpha=0.35, label="not robust"))
             axes[0].legend(handles=handles, loc="lower left", frameon=False, ncol=2, fontsize=6)
     return fig
 
@@ -472,8 +500,9 @@ def trends_figure(table: SeriesTable, descriptors_df: Optional[pd.DataFrame], fi
 def _indexed(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     if df is None:
         return None
-    if "sample" in df.columns:
-        return df.set_index("sample", drop=False)
+    for key in ("sample", "curve"):
+        if key in df.columns:
+            return df.set_index(key, drop=False)
     return df
 
 

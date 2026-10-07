@@ -1,16 +1,14 @@
-"""qt_saxs2.py — the SAXS 2.0 tabs of the SAXS/WAXS workspace, mixed into SaxsWorkspace:
+"""qt_saxs2.py - the Frames and Series figures tabs of the SAXS/WAXS workspace, mixed into SaxsWorkspace (the Fit
+tab between them comes from qt_saxs_fit.py):
 
 * **Frames**: inventory of raw 2D frames (roles, sessions, refined beam centres, lobe / streak
   diagnostics), pairing with the session empties, batch sector reduction with loading classes and
   per-mm normalisation; the reduced curves join the workspace list.
-* **Unified fit**: the two-level unified fit (grains + optional nanoscale level with a tied Porod
-  prefactor + flat background + optional rising tail) with BIC forward selection, at-bound flags, the
-  robustness pass (relaxed grain bounds -> "resolved"), batch over selected curves, CSV / XLSX / JSON.
-* **Series figures**: a series table (import / edit) drives the grid figure, the fit-panel figures,
-  the trends figure and the 2D frame figure; export as pdf / svg / png; tables as xlsx / csv / md.
+* **Series figures**: a series table (import / edit) drives the grid figure, the fit-panel figures (from the Fit tab
+  results), the trends figure and the 2D frame figure; export as pdf / svg / png; tables as xlsx / csv / md.
 
 Every long step runs through core.qt_worker.run_in_thread with progress. The science lives in
-saxs.core (frames, sector_batch, descriptors, unified_levels, series_figures, tables); nothing here
+saxs.core (frames, sector_batch, descriptors, fit_workflow, series_figures, tables); nothing here
 knows a sample.
 """
 from __future__ import annotations
@@ -33,11 +31,6 @@ from saxs.core.curve import Curve
 
 SERIES_COLUMNS = ["sample", "panel_row", "panel_col", "stack_index", "label", "colour", "marker", "linestyle", "x_value",
                   "family_label", "col_title", "quantified", "note_symbol", "group", "extra_panels", "fit_order"]
-UNIFIED_FIELDS = [("q_max", "q max (1/Å)"), ("per_decade", "points / decade"), ("sigma_floor", "sigma floor"), ("dbic_min", "dBIC min"),
-                  ("rg1_min", "Rg1 min (Å)"), ("rg1_max", "Rg1 max (Å)"), ("d1_min", "d1 min"), ("d1_max", "d1 max"),
-                  ("rg2_min", "Rg2 min (Å)"), ("rg2_max", "Rg2 max (Å)"), ("d2_min", "d2 min"), ("d2_max", "d2 max"),
-                  ("relaxed_d1_max", "relaxed d1 max"), ("relaxed_rg1_max", "relaxed Rg1 max (Å)"), ("robust_tol", "robust tol"),
-                  ("amplitude_floor", "G2 floor (x max)")]
 
 
 def _item(text) -> QTableWidgetItem:
@@ -89,37 +82,20 @@ class FigurePreview(QWidget):
 
 
 class Saxs2Mixin:
-    """Builds the Frames / Unified fit / Series figures tabs onto a SaxsWorkspace."""
+    """Builds the Frames / Fit / Series figures tabs onto a SaxsWorkspace (the Fit tab via SaxsFitMixin)."""
 
     # ================================================================== construction
     def _build_saxs2_tabs(self) -> None:
         self._fr_records = []
         self._fr_pairing = None
         self._fr_results = []
-        self._uf_last = None
-        self._uf_results: Dict[str, object] = {}
-        self._uf_batch = []
         self._sr_fig = None
         self._build_frames_tab()
-        self._build_unified_tab()
+        self._build_fit_tab()
         self._build_series_tab()
 
     def _refresh_saxs2_combos(self) -> None:
-        names = [c.name for c in self.curves]
-        for combo in (self.uf_combo,):
-            current = combo.currentText()
-            combo.clear()
-            combo.addItems(names)
-            idx = combo.findText(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-        selected = {i.text() for i in self.uf_batch_list.selectedItems()}
-        self.uf_batch_list.clear()
-        for n in names:
-            self.uf_batch_list.addItem(n)
-        for i in range(self.uf_batch_list.count()):
-            if self.uf_batch_list.item(i).text() in selected:
-                self.uf_batch_list.item(i).setSelected(True)
+        self._refresh_fit_lists()
 
     # ------------------------------------------------------------------ Frames
     def _build_frames_tab(self) -> None:
@@ -238,86 +214,6 @@ class Saxs2Mixin:
         splitter.setStretchFactor(1, 1)
         self.tabs.addTab(tab, "Frames")
 
-    # ------------------------------------------------------------------ Unified fit
-    def _build_unified_tab(self) -> None:
-        from saxs.core.unified_levels import UnifiedOptions
-
-        tab = QWidget()
-        root = QHBoxLayout(tab)
-        splitter = QSplitter()
-        root.addWidget(splitter)
-        left = QWidget()
-        left.setMaximumWidth(360)
-        ll = QVBoxLayout(left)
-        ll.addWidget(QLabel("Curve (usable range, per mm when reduced here)"))
-        self.uf_combo = QComboBox()
-        ll.addWidget(self.uf_combo)
-        box = QGroupBox("Options (rethink defaults)")
-        g = QGridLayout(box)
-        o = UnifiedOptions()
-        defaults = {"q_max": o.q_max, "per_decade": o.per_decade, "sigma_floor": o.sigma_floor, "dbic_min": o.dbic_min,
-                    "rg1_min": o.rg1_bounds[0], "rg1_max": o.rg1_bounds[1], "d1_min": o.d1_bounds[0], "d1_max": o.d1_bounds[1],
-                    "rg2_min": o.rg2_bounds[0], "rg2_max": o.rg2_bounds[1], "d2_min": o.d2_bounds[0], "d2_max": o.d2_bounds[1],
-                    "relaxed_d1_max": o.relaxed_d1_max, "relaxed_rg1_max": o.relaxed_rg1_max, "robust_tol": o.robust_tol,
-                    "amplitude_floor": o.amplitude_floor}
-        self.uf_edits: Dict[str, QLineEdit] = {}
-        for i, (key, lab) in enumerate(UNIFIED_FIELDS):
-            e = QLineEdit(f"{defaults[key]:g}")
-            e.setMaximumWidth(70)
-            self.uf_edits[key] = e
-            g.addWidget(QLabel(lab), i // 2, 2 * (i % 2))
-            g.addWidget(e, i // 2, 2 * (i % 2) + 1)
-        self.uf_usable_check = QCheckBox("restrict to the usable range")
-        self.uf_usable_check.setChecked(True)
-        g.addWidget(self.uf_usable_check, len(UNIFIED_FIELDS) // 2 + 1, 0, 1, 4)
-        ll.addWidget(box)
-        self.uf_fit_btn = QPushButton("Fit selected curve")
-        self.uf_fit_btn.setObjectName("Primary")
-        self.uf_fit_btn.clicked.connect(self.uf_fit)
-        ll.addWidget(self.uf_fit_btn)
-        self.uf_robust_btn = QPushButton("Robustness check (relaxed grain bounds)")
-        self.uf_robust_btn.clicked.connect(self.uf_robustness)
-        ll.addWidget(self.uf_robust_btn)
-        ll.addWidget(QLabel("Batch (selected curves, with robustness)"))
-        self.uf_batch_list = QListWidget()
-        self.uf_batch_list.setSelectionMode(QListWidget.ExtendedSelection)
-        ll.addWidget(self.uf_batch_list, 1)
-        self.uf_batch_btn = QPushButton("Run batch")
-        self.uf_batch_btn.clicked.connect(self.uf_batch)
-        ll.addWidget(self.uf_batch_btn)
-        row = QHBoxLayout()
-        for lab, fn in (("CSV…", self.uf_export_csv), ("XLSX…", self.uf_export_xlsx), ("Save JSON…", self.uf_save_json), ("Load JSON…", self.uf_load_json)):
-            b = QPushButton(lab)
-            b.clicked.connect(fn)
-            row.addWidget(b)
-        ll.addLayout(row)
-        self.uf_progress = QProgressBar()
-        self.uf_progress.setRange(0, 100)
-        ll.addWidget(self.uf_progress)
-        splitter.addWidget(left)
-
-        right = QSplitter(Qt.Vertical)
-        self.uf_plot = PlotWidget(figsize=(7, 4.5))
-        right.addWidget(self.uf_plot)
-        lower = QWidget()
-        lw = QHBoxLayout(lower)
-        self.uf_param_table = QTableWidget(0, 6)
-        self.uf_param_table.setHorizontalHeaderLabels(["parameter", "value", "stderr", "min", "max", "at bound"])
-        self.uf_param_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        lw.addWidget(self.uf_param_table, 1)
-        self.uf_report = QPlainTextEdit()
-        self.uf_report.setReadOnly(True)
-        lw.addWidget(self.uf_report, 1)
-        right.addWidget(lower)
-        self.uf_batch_table = QTableWidget(0, 12)
-        self.uf_batch_table.setHorizontalHeaderLabels(["sample", "class", "model", "params", "RMS log10", "Rg1 (nm)", "d1", "Rg2 (nm)",
-                                                       "d2", "G2", "dBIC L2", "resolved"])
-        self.uf_batch_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        right.addWidget(self.uf_batch_table)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(1, 1)
-        self.tabs.addTab(tab, "Unified fit")
-
     # ------------------------------------------------------------------ Series figures
     def _build_series_tab(self) -> None:
         tab = QWidget()
@@ -343,6 +239,7 @@ class Saxs2Mixin:
         self.sr_grid_btn.clicked.connect(self.sr_grid_figure)
         self.sr_fits_btn = QPushButton("Fit panels (group)")
         self.sr_fits_btn.clicked.connect(self.sr_fit_figure)
+        self.sr_iq4_check = QCheckBox("fit panels in I q⁴")
         self.sr_group_combo = QComboBox()
         self.sr_group_combo.setEditable(True)
         self.sr_group_combo.setPlaceholderText("group (blank = all)")
@@ -354,7 +251,8 @@ class Saxs2Mixin:
         g.addWidget(self.sr_trends_btn, 0, 1)
         g.addWidget(self.sr_fits_btn, 1, 0)
         g.addWidget(self.sr_group_combo, 1, 1)
-        g.addWidget(self.sr_frame_btn, 2, 0, 1, 2)
+        g.addWidget(self.sr_iq4_check, 2, 0, 1, 2)
+        g.addWidget(self.sr_frame_btn, 6, 0, 1, 2)
         self.sr_shift_edit = QLineEdit("1.6")
         self.sr_shift_edit.setMaximumWidth(50)
         self.sr_xlabel_edit = QLineEdit("x")
@@ -592,225 +490,6 @@ class Saxs2Mixin:
         sb.summary_table(self._fr_results).to_csv(path, index=False, encoding="utf-8-sig")
         self.fr_status.setText(f"Summary exported to {path}")
 
-    # ================================================================== Unified fit actions
-    def _uf_options(self):
-        from saxs.core.unified_levels import UnifiedOptions
-
-        v = {k: _to_float(e.text()) for k, e in self.uf_edits.items()}
-        o = UnifiedOptions()
-        return UnifiedOptions(q_max=v["q_max"] or o.q_max, per_decade=int(v["per_decade"] or o.per_decade), sigma_floor=v["sigma_floor"] if v["sigma_floor"] is not None else o.sigma_floor,
-                              dbic_min=v["dbic_min"] if v["dbic_min"] is not None else o.dbic_min,
-                              rg1_bounds=(v["rg1_min"] or o.rg1_bounds[0], v["rg1_max"] or o.rg1_bounds[1]),
-                              d1_bounds=(v["d1_min"] or o.d1_bounds[0], v["d1_max"] or o.d1_bounds[1]),
-                              rg2_bounds=(v["rg2_min"] or o.rg2_bounds[0], v["rg2_max"] or o.rg2_bounds[1]),
-                              d2_bounds=(v["d2_min"] or o.d2_bounds[0], v["d2_max"] or o.d2_bounds[1]),
-                              relaxed_d1_max=v["relaxed_d1_max"] or o.relaxed_d1_max, relaxed_rg1_max=v["relaxed_rg1_max"] or o.relaxed_rg1_max,
-                              robust_tol=v["robust_tol"] if v["robust_tol"] is not None else o.robust_tol,
-                              amplitude_floor=v["amplitude_floor"] if v["amplitude_floor"] is not None else o.amplitude_floor,
-                              use_usable=self.uf_usable_check.isChecked())
-
-    def uf_fit(self) -> None:
-        from core.qt_worker import run_in_thread
-        from saxs.core.unified_levels import fit_unified_levels
-
-        c = self._curve_by_name(self.uf_combo.currentText())
-        if c is None:
-            QMessageBox.warning(self, "Unified fit", "Import or reduce a curve and pick it first.")
-            return
-        opts = self._uf_options()
-        self.uf_fit_btn.setEnabled(False)
-        run_in_thread(lambda: fit_unified_levels(c, opts), self._uf_on_fit, self._uf_on_error)
-
-    def _uf_on_error(self, traceback_text: str) -> None:
-        self.uf_fit_btn.setEnabled(True)
-        self.uf_robust_btn.setEnabled(True)
-        self.uf_batch_btn.setEnabled(True)
-        QMessageBox.critical(self, "Unified fit", traceback_text)
-
-    def _uf_on_fit(self, result) -> None:
-        self.uf_fit_btn.setEnabled(True)
-        self._uf_last = result
-        self._uf_results[result.sample] = result
-        self.uf_plot.cancel_pending()
-        self._uf_render(result)
-        self._uf_fill_params(result)
-        self.uf_report.setPlainText(self._uf_report_text(result))
-
-    def uf_robustness(self) -> None:
-        from core.qt_worker import run_in_thread
-        from saxs.core.unified_levels import robustness_pass
-
-        r = self._uf_last
-        if r is None or not r.fitted:
-            QMessageBox.warning(self, "Unified fit", "Fit a curve first.")
-            return
-        c = self._curve_by_name(r.sample)
-        if c is None:
-            QMessageBox.warning(self, "Unified fit", f"The curve {r.sample} is no longer loaded.")
-            return
-        opts = self._uf_options()
-        self.uf_robust_btn.setEnabled(False)
-        run_in_thread(lambda: robustness_pass(c, r, opts), self._uf_on_robust, self._uf_on_error)
-
-    def _uf_on_robust(self, result) -> None:
-        self.uf_robust_btn.setEnabled(True)
-        self._uf_on_fit(result)
-
-    def uf_batch(self) -> None:
-        from core.qt_worker import run_in_thread
-        from saxs.core.unified_levels import batch_fit
-
-        names = [i.text() for i in self.uf_batch_list.selectedItems()]
-        curves = [c for n in names for c in [self._curve_by_name(n)] if c is not None]
-        if not curves:
-            QMessageBox.warning(self, "Unified fit", "Select at least one curve in the batch list.")
-            return
-        opts = self._uf_options()
-        self.uf_batch_btn.setEnabled(False)
-        self.uf_progress.setValue(0)
-        run_in_thread(lambda progress: batch_fit(curves, opts, robustness=True, progress=progress), self._uf_on_batch, self._uf_on_error,
-                      on_progress=lambda i, n, m: self._set_progress(self.uf_progress, i, n, m))
-
-    def _uf_on_batch(self, payload) -> None:
-        results, _df = payload
-        self.uf_batch_btn.setEnabled(True)
-        self._uf_batch = results
-        for r in results:
-            self._uf_results[r.sample] = r
-        t = self.uf_batch_table
-        t.setRowCount(len(results))
-        for i, r in enumerate(results):
-            d = r.derived
-            cells = (r.sample, r.cls, r.name if r.fitted else f"skipped: {r.skip_reason}", r.n_params, _fmt(r.rms_log, 3), _fmt(d.get("Rg1_nm"), 3),
-                     _fmt(d.get("d1"), 3), _fmt(d.get("Rg2_nm"), 3), _fmt(d.get("d2"), 3), _fmt(d.get("G2"), 3), _fmt(r.dBIC_L2, 3),
-                     "-" if r.resolved is None else _fmt(r.resolved))
-            for c, text in enumerate(cells):
-                t.setItem(i, c, _item(text))
-        t.resizeColumnsToContents()
-        self.uf_progress.setValue(100)
-        if results:
-            self._uf_on_fit(results[-1])
-        self.status_label.setText(f"Unified fits: {len(results)} curve(s).")
-
-    def _uf_render(self, r) -> None:
-        fig = self.uf_plot.figure
-        fig.clf()
-        if not r.fitted:
-            ax = fig.add_subplot(111)
-            ax.text(0.5, 0.5, f"{r.sample}: {r.skip_reason}", ha="center", va="center", transform=ax.transAxes)
-            self.uf_plot.canvas.draw_idle()
-            return
-        ax = fig.add_subplot(211)
-        axr = fig.add_subplot(212, sharex=ax)
-        q, I = r.q, r.I
-        ax.loglog(q, I, ".", ms=3, color="black", label=r.sample)
-        ax.loglog(q, r.model(), color="crimson", lw=1.5, label=f"{r.name}: {r.n_params} par., RMS {r.rms_log:.3f}")
-        for name, comp in r.components().items():
-            ax.loglog(q, np.clip(comp, 1e-300, None), lw=0.9, ls="--", label=name)
-        if r.relaxed is not None and r.relaxed.fitted:
-            ax.loglog(q, r.relaxed.model(), color="0.5", lw=0.9, ls=":", label=f"relaxed bounds ({r.relaxed.name})")
-        ax.set_ylim(np.nanmin(I) / 20, np.nanmax(I) * 3)
-        ax.legend(fontsize=7)
-        ax.set_ylabel("I")
-        ax.grid(alpha=0.25, which="both")
-        ax.tick_params(labelbottom=False)
-        axr.semilogx(q, r.residual_log(), ".", ms=3, color="steelblue")
-        axr.axhline(0, color="0.5", lw=0.8)
-        axr.set_ylim(-0.25, 0.25)
-        axr.set_xlabel("q (Å⁻¹)")
-        axr.set_ylabel("Δlog10 I")
-        axr.grid(alpha=0.25, which="both")
-        fig.tight_layout()
-        self.uf_plot.canvas.draw_idle()
-
-    def _uf_fill_params(self, r) -> None:
-        t = self.uf_param_table
-        t.setRowCount(len(r.params))
-        for i, (k, p) in enumerate(r.params.items()):
-            for c, text in enumerate((k, _fmt(p.value, 5), _fmt(p.stderr, 3), _fmt(p.min, 4), _fmt(p.max, 4), "yes" if p.at_bound else "")):
-                t.setItem(i, c, _item(text))
-        t.resizeColumnsToContents()
-
-    @staticmethod
-    def _uf_report_text(r) -> str:
-        if not r.fitted:
-            return f"{r.sample}: not fitted ({r.skip_reason})"
-        d = r.derived
-        lines = [f"{r.sample} ({r.cls or 'class unknown'}): model {r.name}, {r.n_params} parameters, {r.n_pts} points, q {r.q_min:.4g}-{r.q_max:.4g}",
-                 f"RMS log10 I {r.rms_log:.4f} (base {r.rms_base:.4f}), chi2r {r.chi2r:.3f}, dBIC vs base {r.dBIC_vs_base:.1f}, "
-                 f"dBIC level 2 {r.dBIC_L2:.1f}, dBIC tail {r.dBIC_tail:.1f}",
-                 f"Level 1: Rg {d['Rg1_nm']:.1f} nm, d {d['d1']:.2f}, G {d['G1']:.3g}, B {d['B1']:.3g}"]
-        if r.l2:
-            lines.append(f"Level 2: Rg {d['Rg2_nm']:.1f} nm (D_eq {d['D2_eq_nm']:.1f} nm), d {d['d2']:.2f}, G {d['G2']:.3g}, pf {d['pf2']:.2f}")
-        lines.append(f"Background C {d['C']:.3g}" + (f", tail T {d['T']:.3g} q^{r.options.get('tail_exponent', 2.0):g}" if r.tail else ""))
-        b = getattr(r, "bump", None)
-        if b is not None:
-            lines.append("Visible bump: yes" if b.present else ("Level 2 not eligible: " + b.reason))
-            lines.append(f"  slope recovery {b.recovery:.2f} +- {b.recovery_err:.2f} ({b.recovery_sigma:.1f} sigma) after a knee at "
-                         f"q = {b.q_knee:.4g} 1/A (R_g ~ {b.Rg_from_knee_A / 10:.1f} nm); residual hump {b.prominence:.3f} dex; "
-                         f"Kratky {b.kratky_prominence:.3f}, Porod {b.porod_prominence:.3f} dex")
-        lines.append("Candidates: " + "; ".join(
-            f"{k} BIC {v['bic']:.1f}" + (" [gated]" if v.get("gated") else "") for k, v in r.candidates.items()))
-        if r.relaxed is not None:
-            rl = r.relaxed
-            lines.append(f"Relaxed bounds: {rl.name}, RMS {rl.rms_log:.4f}" + (f", Rg2 {rl.derived['Rg2_nm']:.1f} nm" if rl.l2 else "")
-                         + f" -> level 2 {'resolved' if r.resolved else ('not resolved' if r.resolved is not None else 'absent')}")
-        if r.warnings:
-            lines.append("Warnings: " + "; ".join(r.warnings))
-        return "\n".join(lines)
-
-    def _uf_results_list(self) -> List[object]:
-        return list(self._uf_results.values())
-
-    def uf_export_csv(self) -> None:
-        from saxs.core.unified_levels import results_table
-
-        if not self._uf_results:
-            QMessageBox.information(self, "Unified fit", "Fit at least one curve first.")
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "Export the unified fits", "unified_fits.csv", "CSV (*.csv)")
-        if path:
-            results_table(self._uf_results_list()).to_csv(path, index=False, encoding="utf-8-sig")
-
-    def uf_export_xlsx(self) -> None:
-        from saxs.core import tables as tb
-        from saxs.core.unified_levels import results_table
-
-        if not self._uf_results:
-            QMessageBox.information(self, "Unified fit", "Fit at least one curve first.")
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "Export the unified fits", "unified_fits.xlsx", "Excel (*.xlsx)")
-        if path:
-            base = path[:-5] if path.lower().endswith(".xlsx") else path
-            res = self._uf_results_list()
-            tb.write_tables({"fits": tb.fit_sheet(res), "all columns": results_table(res), "robustness": tb.robustness_sheet(res)}, base,
-                            notes=tb.default_notes(self._uf_options().to_dict()), formats=("xlsx",))
-
-    def uf_save_json(self) -> None:
-        from saxs.core.unified_levels import save_results_json
-
-        if not self._uf_results:
-            QMessageBox.information(self, "Unified fit", "Fit at least one curve first.")
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "Save the unified fits", "unified_fits.json", "JSON (*.json)")
-        if path:
-            save_results_json(self._uf_results_list(), path)
-
-    def uf_load_json(self) -> None:
-        from saxs.core.unified_levels import load_results_json
-
-        path, _ = QFileDialog.getOpenFileName(self, "Load unified fits", "", "JSON (*.json)")
-        if not path:
-            return
-        try:
-            results = load_results_json(path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Unified fit", str(exc))
-            return
-        for r in results:
-            self._uf_results[r.sample] = r
-        self._uf_on_batch((results, None))
-
     # ================================================================== Series actions
     def _sr_dataframe(self) -> pd.DataFrame:
         rows = []
@@ -823,7 +502,7 @@ class Saxs2Mixin:
                 rows.append(row)
         df = pd.DataFrame(rows, columns=SERIES_COLUMNS)
         for col in ("panel_row", "panel_col", "stack_index", "x_value", "fit_order"):
-            df[col] = pd.to_numeric(df[col].replace("", np.nan), errors="coerce")
+            df[col] = pd.to_numeric(df[col], errors="coerce")          # blank cells become NaN
         for col in ("panel_row", "panel_col", "stack_index"):
             df[col] = df[col].fillna(0)
         df["quantified"] = df["quantified"].replace("", "yes")
@@ -900,14 +579,16 @@ class Saxs2Mixin:
     def sr_fit_figure(self) -> None:
         from saxs.core.series_figures import fit_panels_figure
 
-        if not self._uf_results:
-            QMessageBox.information(self, "Series figures", "Run unified fits first (Unified fit tab).")
+        res = getattr(self, "_fit_result", None)
+        if res is None:
+            QMessageBox.information(self, "Series figures", "Fit curves first (Fit tab).")
             return
         try:
             table = self._sr_series_table()
             group = self.sr_group_combo.currentText().strip()
             samples = table.samples_in_group(group) if group else table.samples
-            fig = fit_panels_figure(self._uf_results, samples, table, ncol=3, title=group or None)
+            fig = fit_panels_figure(res, [s for s in samples if s in res.curves], table, ncol=3, title=group or None,
+                                    iq4=self.sr_iq4_check.isChecked())
         except Exception as exc:
             QMessageBox.critical(self, "Series figures", str(exc))
             return
@@ -915,14 +596,15 @@ class Saxs2Mixin:
 
     def sr_trends_figure(self) -> None:
         from saxs.core.descriptors import describe_batch
+        from saxs.core.fit_workflow import summary_table
         from saxs.core.series_figures import trends_figure
-        from saxs.core.unified_levels import results_table
 
         try:
             table = self._sr_series_table()
             curves = [c for c in self.curves if table.has(c.name)]
             _res, desc = describe_batch(curves) if curves else (None, None)
-            fits_df = results_table(self._uf_results_list()) if self._uf_results else None
+            res = getattr(self, "_fit_result", None)
+            fits_df = summary_table(res) if res is not None else None
             fig = trends_figure(table, desc, fits_df, x_label=self.sr_xlabel_edit.text() or "x")
         except Exception as exc:
             QMessageBox.critical(self, "Series figures", str(exc))
@@ -964,12 +646,12 @@ class Saxs2Mixin:
         self.sr_status.setText("Exported: " + ", ".join(os.path.basename(p) for p in paths))
 
     def sr_export_tables(self) -> None:
-        from saxs.core import sector_batch as sb
         from saxs.core import tables as tb
         from saxs.core.descriptors import describe_batch
 
-        if not self._uf_results:
-            QMessageBox.information(self, "Series figures", "Run unified fits first (Unified fit tab).")
+        res = getattr(self, "_fit_result", None)
+        if res is None:
+            QMessageBox.information(self, "Series figures", "Fit curves first (Fit tab).")
             return
         path, _ = QFileDialog.getSaveFileName(self, "Export the tables (base name)", "tables", "All files (*.*)")
         if not path:
@@ -977,17 +659,13 @@ class Saxs2Mixin:
         base = os.path.splitext(path)[0] if os.path.splitext(path)[1].lower().lstrip(".") in ("xlsx", "csv", "md") else path
         try:
             table = self._sr_series_table()
-            order = [n for n in table.samples if n in self._uf_results] + [n for n in self._uf_results if not table.has(n)]
-            results = [self._uf_results[n] for n in order]
-            summary = sb.summary_table(self._fr_results) if self._fr_results else None
-            extra = {"x": {s: table.get(s, "x_value") for s in table.samples}} if table.df["x_value"].notna().any() else None
-            sheets = {"fits": tb.fit_sheet(results, summary, extra=extra)}
+            order = [n for n in table.samples if n in res.curves] + [n for n in res.curves if not table.has(n)]
+            res.curves = {n: res.curves[n] for n in order}
+            extra = ({n: {"x": table.get(n, "x_value")} for n in order if table.has(n)}
+                     if table.df["x_value"].notna().any() else None)
             curves = [c for c in self.curves if c.name in set(order)]
-            if curves:
-                _r, desc = describe_batch(curves)
-                sheets["model-free"] = tb.modelfree_sheet(desc, extra=extra)
-            sheets["robustness"] = tb.robustness_sheet(results)
-            paths = tb.write_tables(sheets, base, notes=tb.default_notes(self._uf_options().to_dict()))
+            desc = describe_batch(curves)[1] if curves else None
+            paths = tb.write_workflow_tables(res, base, extra=extra, descriptors=desc)
         except Exception as exc:
             QMessageBox.critical(self, "Series figures", str(exc))
             return

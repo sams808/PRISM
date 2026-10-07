@@ -1,4 +1,4 @@
-"""Tests for saxs.core.tables: transliteration, the three writers and the standard sheet builders."""
+"""Tests for saxs.core.tables: transliteration, the three writers, the model-free sheet and the fit-workflow sheets."""
 from __future__ import annotations
 
 import numpy as np
@@ -54,47 +54,7 @@ def test_write_tables_xlsx_csv_md(tmp_path):
         tb.write_tables({}, str(tmp_path / "none"))
 
 
-class _P:
-    def __init__(self, value, stderr=None, at_bound=False):
-        self.value, self.stderr, self.at_bound = value, stderr, at_bound
-
-
-class _R:
-    """A minimal stand-in for UnifiedFitResult."""
-
-    def __init__(self, sample, l2=True, tail=True, resolved=True, fitted=True, relaxed=None, at_bound=()):
-        self.sample, self.cls, self.fitted, self.skip_reason = sample, "marginal", fitted, None if fitted else "too short"
-        self.l2, self.tail, self.resolved, self.relaxed = l2, tail, resolved, relaxed
-        self.n_params = 10 if l2 else 6
-        self.q_min, self.rms_log, self.dBIC_L2, self.covariance_ok = 0.0051, 0.0123, 66.4 if l2 else float("nan"), True
-        self.params = {"Rg1": _P(600.0, 20.0, "Rg1" in at_bound), "d1": _P(4.5, None, "d1" in at_bound),
-                       "Rg2": _P(120.0, 6.0, "Rg2" in at_bound), "d2": _P(3.5, 0.2, "d2" in at_bound), "logpf2": _P(-0.3, None, "logpf2" in at_bound)}
-        self.derived = {"Rg1_nm": 60.0, "d1": 4.5, "G1": 1234.5, "Rg2_nm": 12.0, "D2_eq_nm": 31.0, "d2": 3.5, "G2": 137.2, "pf2": 0.5}
-        self.name = "L1" + ("_L2" if l2 else "") + ("_T" if tail else "")
-
-
-def test_fit_sheet_marks_bounds_and_missing_levels():
-    relaxed = _R("a")
-    relaxed.params["Rg2"] = _P(125.0)
-    relaxed.derived["Rg2_nm"] = 12.5
-    a = _R("a", relaxed=relaxed, at_bound=("d1",))
-    b = _R("b", l2=False, tail=False, resolved=None)
-    c = _R("c", fitted=False)
-    summary = pd.DataFrame({"sample": ["a", "b"], "T_used": [0.1681, 0.0445], "t_eff_mm": [0.2529, 0.284]})
-    df = tb.fit_sheet([a, b, c], summary, extra={"x (mol%)": {"a": 1.1, "b": 2.2}}, amplitude_unit="per mm")
-    assert list(df["Sample"]) == ["a", "b", "c"]
-    ra, rb, rc = (df.set_index("Sample").loc[k] for k in "abc")
-    assert ra["d1"] == "4.50*" and ra["Rg1 (nm)"] == "60.0" and ra["Rg2 (nm)"] == "12.0" and ra["Rg2 err (nm)"] == 0.6
-    assert ra["Level 2 resolved"] == "yes" and ra["Rg2, relaxed bounds (nm)"] == 12.5 and ra["dBIC (level 2)"] == 66
-    assert ra["G1 (per mm)"] == 1230.0 and ra["G2 (per mm)"] == 137.0 and ra["T"] == 0.168 and ra["t_eff (mm)"] == 0.25
-    assert ra["Rising tail"] == "yes" and ra["RMS log10 I"] == 0.012 and ra["x (mol%)"] == 1.1
-    assert rb["Rg2 (nm)"] is None and rb["Level 2 resolved"] == "-" and rb["Rising tail"] == "no" and rb["Parameters"] == 6
-    assert pd.isna(rc["Parameters"]) and rc["Note"] == "too short" and pd.isna(rc["Rg1 (nm)"])
-    md = tb.dataframe_to_markdown(df)
-    assert "| c | marginal |" in md and "4.50*" in md
-
-
-def test_modelfree_and_robustness_sheets_and_notes():
+def test_modelfree_sheet():
     d = pd.DataFrame({"sample": ["a"], "cls": ["opaque"], "n_low": [4.734], "n_at_0.02": [-4.1], "n_at_0.04": [-3.94], "C_hi": [0.0123456],
                       "ratio_hi": [12.34], "K4_over_rhoe2": [1.23e-6], "shoulder_size_nm": [np.nan], "has_maximum": [False]})
     mf = tb.modelfree_sheet(d, extra={"x": {"a": 5}})
@@ -103,10 +63,17 @@ def test_modelfree_and_robustness_sheets_and_notes():
     assert r["High-q plateau"] == 0.0123 and r["Sample/(T x empty) at high q"] == 12.3 and r["Porod shoulder (nm)"] is None
     assert r["Maximum in I"] == "no" and r["x"] == 5
     assert list(mf.columns).index("Local exponent at 0.02") < list(mf.columns).index("Local exponent at 0.04")
-    relaxed = _R("a")
-    rs = tb.robustness_sheet([_R("a", relaxed=relaxed), _R("b", fitted=False)])
-    assert len(rs) == 1 and rs.iloc[0]["Relaxed model"] == "L1_L2_T" and rs.iloc[0]["Level 2 resolved"] == "yes"
-    notes = tb.default_notes({"q_max": 0.2, "dbic_min": 10.0, "relaxed_d1_max": 5.0, "relaxed_rg1_max": 3000.0, "robust_tol": 0.2})
-    assert any("BIC by more than 10" in n for n in notes) and any("Rg1 <= 300 nm" in n for n in notes)
-    assert any("Knee recovery" in n and "no maximum" in n for n in notes), "the visibility gate must be stated in the notes"
-    assert len(tb.default_notes()) == 7
+
+
+def test_workflow_sheets_and_writer(tmp_path):
+    import fit_synthetic as fsyn
+    res = fsyn.small_result()
+    desc = pd.DataFrame({"sample": list(res.curves), "cls": "", "n_low": 4.2})
+    sheets = tb.workflow_sheets(res, extra={"B_struct": {"x": 2.0}}, descriptors=desc)
+    assert list(sheets) == ["summary", "models", "parameters", "model-free"]
+    assert sheets["summary"].columns[0] == "x" and len(sheets["summary"]) == len(res.curves)
+    paths = tb.write_workflow_tables(res, str(tmp_path / "w"), descriptors=desc)
+    assert {"xlsx", "csv", "md", "csv:models", "csv:parameters", "csv:model-free"} <= set(paths)
+    import openpyxl
+    assert openpyxl.load_workbook(paths["xlsx"]).sheetnames == ["summary", "models", "parameters", "model-free", "notes"]
+    assert paths["csv:model-free"].endswith("w_model_free.csv")

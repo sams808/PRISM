@@ -210,24 +210,20 @@ your Raman spectrum with its accepted Mineral-ID phases above the XRD
 pattern with each accepted phase's reference stick pattern.</p>
 
 <h2>SAXS/WAXS</h2>
-<p>Small/wide-angle scattering (ported from the author's own POMME suite).
-Import Xenocs-style 1D ASCII curves; <b>Reduction</b> subtracts the empty
-capillary with manual, auto, transmission, or physics-based (xraydb)
-scaling; <b>Analysis</b> fits Guinier (Rg), generalized Porod (slope +
-background), and pseudo-Bragg peaks (d-spacing, correlation length) with
-auto region detection; <b>WAXS</b> auto-finds and fits pseudo-Voigt peaks
-(d-spacings, crystallinity index). Curves can be sent to the Library.
-SAXS 2.0 adds <b>Frames</b> (raw 2D frames: inventory, refined beam centres,
-lobe diagnostics, pairing with the session empties, sector reduction with
-loading classes), <b>Unified fit</b> (two-level unified fits with BIC
-selection, a robustness pass, and a visibility gate that offers the second
-level to the selection only where the curve itself shows a Guinier knee: the
-local log-log slope must flatten and steepen again, which a power law with a
-background can never do) and <b>Series figures</b> (publication
-figures and tables driven by a series table) &mdash; details in the module guide.
-The XAS workspace also gained a <b>Sample mass</b> tab — the Hephaestus
+<p>Small/wide-angle scattering (first ported from the author's own POMME suite). Import 1D curves &mdash; two/three-column files or named-column tables with q, I,
+sigma and optionally dQ (resolution), a statistical sigma and flags; <b>Reduction</b> subtracts an empty capillary
+from a 1D curve (manual, auto, transmission or physics-based scaling); <b>Analysis</b> fits Guinier (Rg), generalized
+Porod (slope + background) and pseudo-Bragg peaks with auto region detection; <b>WAXS</b> auto-finds and fits
+pseudo-Voigt peaks (d-spacings, crystallinity index); curves can be sent to the Library. <b>Frames</b> reduces the raw 2D frames of a beamstopless
+instrument (inventory, refined beam centres, pairing with the empties, sector reduction with loading classes);
+<b>Fit</b> is the physical fitting workflow &mdash; grain power law + high-q term as the base, a model-free gate
+against a reference curve deciding whether a structure exists, then spheres (absolute with a contrast),
+Teubner-Strey, Debye and unified levels compared by BIC under explicit physical rules; <b>Series figures</b> builds
+publication figures and tables from a series table. The same chain runs headless from one JSON project file
+(<code>scripts/saxs_pipeline.py</code>) &mdash; details in the module guide and docs/SAXS_FITTING.md.
+The XAS workspace also gained a <b>Sample mass</b> tab &mdash; the Hephaestus
 calculator on oxide compositions (mol%/wt%) or formulas: masses for total
-μt = 1 / 2.5 and edge step Δμt = 1 in a pellet of chosen diameter.</p>
+&mu;t = 1 / 2.5 and edge step &Delta;&mu;t = 1 in a pellet of chosen diameter.</p>
 
 <h2>Glass</h2>
 <p>Composition-based glass property calculation. Paste (or load as CSV) a
@@ -392,84 +388,54 @@ physical mixtures), statistics, and cluster analysis of spectral series
 (KMeans/hierarchical over a common grid, PCA scores, per-cluster means &mdash;
 for multi-point maps, find which spectra group together before averaging).</p>"""),
     "SAXS/WAXS": _guide("SAXS/WAXS module", """
-<p>Ported from POMME. <b>Reduction</b>: subtract the empty capillary &mdash;
-auto matches the high-q tail, transmission uses measured T, physics computes
-both attenuations from compositions via xraydb; inspect the corrected curve
-before analyzing.</p>
-<p><b>Analysis</b>: Guinier is only valid for qRg &#8818; 1.3 &mdash; the report
-prints qRg max, take it seriously; Rg &rarr; sphere-equivalent diameter shown.
-The generalized Porod slope m reads surface character (4 = smooth interface,
-3&ndash;4 rough, &lt;3 mass fractal). Pseudo-Bragg peaks give d = 2&pi;/q0 and an
-apparent correlation length from the width.</p>
-<p><b>WAXS</b>: pseudo-Voigt multi-peak fit with amorphous-hump detection &mdash;
-the crystallinity index is crystalline area / total area, comparable only
-between samples measured identically.</p>
-<p><b>Composite fit</b>: a physically-meaningful component library (flat
-background, power law, Guinier, Guinier-Porod, Beaucage unified, DAB,
-Teubner-Strey, broad peak) summed into a fittable composite &mdash; the
-general-purpose successor to the single pseudo-Bragg peak fit above, built
-for structure-factor peaks (a genuine correlation length &xi;, not just an
-apparent one) riding on top of other scattering contributions. <b>Auto (BIC
-ladder)</b> runs the full staged pipeline (hygiene &rarr; background &rarr;
-+peak &rarr; +low-q component &rarr; global refit &rarr; diagnostics &rarr;
-BIC-based model selection) and reports whichever composite the data actually
-supports; a specific preset fits that exact composite directly instead.
-Windows (W_peak/W_hiq/W_loq) auto-propose from the curve's own shape and stay
-editable. <b>Batch</b> fits every curve selected in the list below
-independently &mdash; each gets its own auto-proposed windows, never one
-curve's windows blanket-applied across the batch &mdash; with a results table
-and CSV export (including the d<sub>TS</sub>/d<sub>gauss</sub> cross-check
-against the pseudo-Bragg fit). A ladder-demoted preset (e.g. a peak-free
-curve landing on plain background) is the model-selection logic correctly
-saying the data doesn't support a peak &mdash; check the Flags line before
-overriding with a forced preset.</p>
-<p><b>Frames</b> (SAXS 2.0): the campaign starts from the raw 2D frames of a
-beamstopless instrument. Scan the session folders: every frame gets a role
-(sample / empty / calibrant from regexes), its session, the beam centre
-refined from the recorded direct beam (header centres can be off by several
-pixels), and diagnostics &mdash; capillary-wall lobes on the horizontal axis
-(the two bars that average into a fake low-q peak), slit streaks, saturation.
-Samples are paired with the empty of the same folder, configuration and
-capillary. <b>Reduce all pairs</b> integrates the four diagonal wedges only,
-scales the empty by the footprint transmission (a central-disc check flags
-uneven loadings), gives every curve a loading class (measurable &mu;t &lt; 3,
-marginal 3&ndash;6, opaque &gt; 6: shapes only, unreliable) and a usable
-q-range, and normalises per mm of material when the samples table gives
-&mu; (or a composition + density). The reduced curves join the curve list.
-The provenance <code>.dat</code> (ten columns) is for PRISM; <b>Export for
-SasView&hellip;</b> (also written as <code>sasview\</code> next to the output
-folder) gives three-column Q / I / dI files on the usable range that SasView
-and other fit engines open &mdash; the scale is per mm of material, not
-absolute, so leave the scale factor free.</p>
-<p><b>Unified fit</b> (SAXS 2.0): the two-level unified model &mdash; a grain
-level (Rg 25&ndash;150 nm, free Porod term), an optional nanoscale level whose
-Porod prefactor is tied to its Guinier amplitude (so a level is a population
-with a knee or it is not kept), a flat background and an optional rising
-tail. The second level is offered to the selection only where a level is
-<b>visible</b> in the curve: the local log-log slope must flatten at a Guinier
-knee inside the q range the allowed radii imply and steepen again (the
-"recovery"), by at least three times its own error, with no maximum of the
-intensity there. A power law with a background can only make that slope rise
-with q, so it can never pass &mdash; which is the point: an information
-criterion is a test of <i>significance</i>, and on a very clean curve a
-two-percent mismatch of the grain level is overwhelming evidence while being
-invisible, so the level it buys describes the grain term rather than a
-population. When the gate passes, the BIC (dBIC &gt; 10) still decides and can
-still say no; when it fails, the report says which condition failed. Every
-parameter at a bound is flagged; a level with a vanishing amplitude is never
-kept. <b>Robustness check</b> refits with relaxed grain
-bounds: a level is "resolved" only if both fits keep it with Rg within
-20 %. Read Rg and d as robust, amplitudes as comparable between quantified
-loadings only, opaque loadings as shapes only. Batch, CSV/XLSX/JSON.</p>
-<p><b>Series figures</b> (SAXS 2.0): a series table you import or edit
-(sample, panel, stacking order, label, colour, marker, family, x-value,
-quantified) drives the grid of normalised shifted curves with labels at the
-curve ends, the fit-panel figures with residuals, the trends against your
-x-value (open = not quantified, faded = level not resolved) and the 2D frame
-figure; export pdf/svg/png at your dpi, and the tables as xlsx (fits,
-model-free, robustness, notes), csv (Excel-safe ASCII) and markdown. The same
-chain runs headless: <code>scripts/saxs_pipeline.py init / run</code> with a
-JSON project file regenerates a whole campaign.</p>"""),
+<p><b>Curves</b>: the import reads named-column tables first (q / I / sigma, plus dQ, a statistical sigma, smearing
+flags and text columns, all kept) and falls back to plain two/three-column files. <b>Reduction</b>: subtract the empty
+capillary &mdash; auto matches the high-q tail, transmission uses measured T, physics computes both attenuations
+from compositions via xraydb; inspect the corrected curve before analyzing.</p>
+<p><b>Analysis</b>: Guinier is only valid for qRg &#8818; 1.3 &mdash; the report prints qRg max, take it seriously;
+Rg &rarr; sphere-equivalent diameter shown. The generalized Porod slope m reads surface character (4 = smooth
+interface, 3&ndash;4 rough, &lt;3 mass fractal). Pseudo-Bragg peaks give d = 2&pi;/q0 and an apparent correlation
+length from the width.</p>
+<p><b>WAXS</b>: pseudo-Voigt multi-peak fit with amorphous-hump detection &mdash; the crystallinity index is
+crystalline area / total area, comparable only between samples measured identically.</p>
+<p><b>Frames</b>: the campaign starts from the raw 2D frames of a beamstopless instrument. Scan the session folders:
+every frame gets a role (sample / empty / calibrant from regexes), its session, the beam centre refined from the
+recorded direct beam (header centres can be off by several pixels), and diagnostics &mdash; capillary-wall lobes on
+the horizontal axis (the two bars that average into a fake low-q peak), slit streaks, saturation. Samples are paired
+with the empty of the same folder, configuration and capillary. <b>Reduce all pairs</b> integrates the four diagonal
+wedges only, scales the empty by the footprint transmission, gives every curve a loading class (measurable &mu;t &lt; 3,
+marginal 3&ndash;6, opaque &gt; 6: shapes only, unreliable) and a usable q-range, and normalises per mm of material
+when the samples table gives &mu; (or a composition + density). The reduced curves join the curve list;
+<b>Export for SasView&hellip;</b> writes three-column Q / I / dI files.</p>
+<p><b>Fit</b>: one engine, physically constrained. Select the curves (with their references) and give each curve its
+<b>reference</b> &mdash; the same material without the minority component (a parent composition, an untreated
+state); a regex rule fills many at once (<code>^(.*)_x&#92;d+$</code> &rarr; <code>&#92;1_x0</code>: every member of a series gets its x = 0 member). For particles on an
+absolute scale give the <b>contrast</b> &Delta;&rho; (10<sup>10</sup> cm<sup>-2</sup>), typed or computed from a phase
+formula + density against the sample composition + density (the stoichiometric ceiling of the phase is computed
+too). What the fit does, for every curve: (1) <b>base</b> = grain power law (exponent 3.7&ndash;4.7: the outer
+surfaces of the powder grains, never a structural level) + a flat level, or + an Ornstein-Zernike term with
+&xi; &le; 5 &Aring; (sub-nanometre concentration fluctuations), chosen by BIC; (2) <b>gate</b>: the ratio of the
+curve to its reference, each with its high-q term subtracted and normalised at low q, must exceed 1 beyond its
+uncertainty over a factor &ge; 2 in q, with a peak above the largest ratio between the references themselves (the
+scatter between references, e.g. grinding batches). A curve used as a reference gets no structure. A residual run
+of the base is shown as a diagnostic only &mdash; on clean featureless curves it fires on the curvature of the
+grain law itself, so it cannot decide; (3) <b>candidates</b> on both bases: spheres (Schulz, + hard-sphere S(q)),
+Teubner-Strey (spacing d, correlation length &xi;), Debye (&xi;), a unified level with a tied Porod prefactor, each
+also with a second small population; (4) <b>selection</b>: a structure is retained only if it converged, has no
+parameter at a bound, beats its base by dBIC &gt; 10, is visible (&ge; 10 % of the model over a factor &ge; 2 in q)
+and, for spheres, has its Guinier knee inside the window. Every rejection is listed with its reason in the report.
+<b>Read the results</b>: sizes and spacings are the robust numbers; amplitudes become volume fractions only with a
+contrast you trust; near-degenerate families (dBIC &lt; 10 between them) are stated as such, not resolved.
+<b>Robustness</b> refits the retained models on perturbed data (statistical sigma only, q &le; 0.2, last point
+removed, unsmeared) and flags any parameter that moves by more than max(20 %, 2&sigma;). Results save / load as
+JSON; Tables writes xlsx + csv (Excel-safe ASCII) + md; Curves writes one fit file per curve.</p>
+<p><b>Series figures</b>: a series table you import or edit (sample, panel, stacking order, label, colour, marker,
+family, x-value, quantified) drives the grid of normalised shifted curves with labels at the curve ends, the
+fit-panel figures (data, model, labelled components, normalised residuals, I or I q<sup>4</sup>), the trends against
+your x-value (open = not quantified, faded = not robust) and the 2D frame figure; export pdf/svg/png at your dpi, and
+the tables as xlsx / csv / md. <b>Headless</b>: <code>scripts/saxs_pipeline.py init / run / fit / quick</code> with a
+JSON project file (curves reduced here or elsewhere, references, contrast, figures, tables) regenerates a whole
+campaign; see docs/SAXS_FITTING.md.</p>"""),
     "Figures": _guide("Figures module", """
 <p>Build the figure ONCE, export at the journal exact size.
 <b>XY builder</b>: add spectra as layers; each layer has type, color,

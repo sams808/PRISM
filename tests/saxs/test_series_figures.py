@@ -9,7 +9,6 @@ import pandas as pd
 import pytest
 
 from saxs.core import series_figures as sf
-from saxs.core import unified_levels as ul
 from saxs.core.curve import Curve
 
 Q = np.geomspace(5e-3, 0.22, 400)
@@ -100,70 +99,74 @@ def test_grid_figure_panels_letters_labels_and_export(tmp_path):
 
 @pytest.fixture(scope="module")
 def fits():
-    from test_unified_levels import poisson_curve, true_curve
-    out = {}
-    for i, name in enumerate(("G1_base", "G1_one_0", "G1_two_0", "G2_base")):
-        c = poisson_curve(true_curve(l2=(i % 2 == 0)), name=name, seed=i)
-        r = ul.fit_unified_levels(c, ul.UnifiedOptions(rg1_starts=(400.0,), rg2_starts=(80.0,)))
-        r.relaxed = r
-        r.resolved = True if (r.l2 and i == 0) else (False if r.l2 else None)
-        out[name] = r
-    return out
+    import fit_synthetic as fsyn
+    return fsyn.small_result()
+
+
+def _fit_table(res):
+    names = list(res.curves)
+    return sf.SeriesTable.from_dataframe(pd.DataFrame({
+        "sample": names, "panel_row": 0, "panel_col": 0, "stack_index": range(len(names)), "label": names,
+        "x_value": [float(i) for i in range(len(names))], "group": ["ref" if n.startswith("ref") else "s" for n in names],
+        "quantified": [n != "A_plain" for n in names], "colour": "#1f77b4", "marker": "o"}))
 
 
 def test_fit_panels_figure_has_main_and_residual_pairs(fits, tmp_path):
-    t = _table()
-    fig = sf.fit_panels_figure(fits, ["G1_base", "G1_one_0", "G1_two_0", "G2_base", "missing"], t, ncol=3, title="series G")
+    fig = sf.fit_panels_figure(fits, ["B_struct", "A_sph", "refA", "missing"], None, ncol=3, title="series")
     axes = fig.get_axes()
-    assert len(axes) == 8                                            # 4 samples x (main + residual)
+    assert len(axes) == 6                                            # 3 curves x (main + residual)
     mains = axes[0::2]
-    assert mains[0].get_title().startswith("G1_base") and mains[0].texts[0].get_text() == "A" and mains[3].texts[0].get_text() == "D"
+    assert mains[0].get_title() == "B_struct" and mains[0].texts[0].get_text() == "A" and mains[2].texts[0].get_text() == "C"
     labels = [h.get_label() for h in mains[0].get_legend().get_lines()]
-    assert labels[0] == "data" and labels[1].startswith("fit (") and any(l.startswith("level 1") for l in labels)
-    if fits["G1_base"].l2:
-        assert any(l.startswith("level 2") for l in labels)
-    assert axes[1].get_ylim() == (-0.25, 0.25) and axes[1].get_xscale() == "log"
-    assert mains[0].get_xlim()[0] == pytest.approx(4.5e-3) and axes[-1].get_xlabel().startswith("Q")
-    assert fig._suptitle.get_text() == "series G"
-    fig2 = sf.fit_panels_figure(fits, ["G1_base"], None, ncol=1, letters=False, level_names={"L1": "grains", "L2": "nano"})
-    lab2 = [h.get_label() for h in fig2.get_axes()[0].get_legend().get_lines()]
-    assert any(l.startswith("grains") for l in lab2) and not fig2.get_axes()[0].texts
+    assert labels[0] == "data" and labels[1].startswith("TS") and any(l.startswith("TS d 5") for l in labels)
+    assert any(l.startswith("grain law") for l in labels) and any(l.startswith("flat level") for l in labels)
+    sph_labels = [h.get_label() for h in mains[1].get_legend().get_lines()]
+    assert any(l.startswith("spheres D") for l in sph_labels)
+    assert axes[1].get_ylim() == (-5.0, 5.0) and axes[1].get_xscale() == "log" and axes[-1].get_xlabel().startswith("Q")
+    assert fig._suptitle.get_text() == "series"
+    fig2 = sf.fit_panels_figure(fits, None, _fit_table(fits), ncol=5, letters=False, iq4=True)
+    assert len(fig2.get_axes()) == 2 * len(fits.curves) and fig2.get_axes()[0].get_ylabel().startswith("I q")
+    assert not fig2.get_axes()[0].texts
     with pytest.raises(ValueError):
-        sf.fit_panels_figure(fits, ["missing"], t)
+        sf.fit_panels_figure(fits, ["missing"])
     sf.export_figure(fig, str(tmp_path / "fits"), formats=("png",), dpi=50)
     assert os.path.exists(tmp_path / "fits.png")
 
 
-def test_trends_figure_marks_unquantified_open_and_unresolved_faded(fits):
+def test_trends_figure_marks_unquantified_open_and_unrobust_faded(fits):
+    from saxs.core.fit_workflow import summary_table
     t = _table()
     desc = pd.DataFrame({"sample": t.samples, "n_at_0.04": -4.0 + 0.1 * np.arange(len(t.samples)),
                          "C_hi": 1e-3 * (1 + np.arange(len(t.samples))), "ratio_hi": [1.0] + [5.0] * (len(t.samples) - 1)})
-    fit_df = ul.results_table(list(fits.values()))
-    fig = sf.trends_figure(t, desc, fit_df, x_label="x (mol%)")
+    p = [sf.TrendPanel("exp", "descriptors", "n_at_0.04", "local exponent at 0.04", transform="neg", hlines=(4.0,)),
+         sf.TrendPanel("plateau", "descriptors", "C_hi", "plateau", yscale="log", require=("ratio_hi", ">", 2.0))]
+    fig = sf.trends_figure(t, desc, None, panels=p, x_label="x (mol%)")
     axes = fig.get_axes()
-    assert len(axes) == 4 and [a.texts[0].get_text() for a in axes] == list("ABCD")
-    # panel A: every sample with an x-value; open marker (no face colour) for the non-quantified ones
+    assert len(axes) == 2 and [a.texts[0].get_text() for a in axes] == list("AB")
     pts = [ln for ln in axes[0].get_lines() if ln.get_marker() not in ("", "None", None) and len(ln.get_xdata()) == 1]
     assert len(pts) == len(t.samples)
-    open_faces = [ln for ln in pts if ln.get_markerfacecolor() == "none"]
-    assert len(open_faces) == sum(not t.quantified(s) for s in t.samples)
+    assert len([ln for ln in pts if ln.get_markerfacecolor() == "none"]) == sum(not t.quantified(s) for s in t.samples)
     assert axes[0].get_ylabel().startswith("local exponent") and axes[0].get_xlabel() == "x (mol%)"
-    # panel B: the sample with ratio_hi = 1 is excluded by the requirement
     pts_b = [ln for ln in axes[1].get_lines() if len(ln.get_xdata()) == 1]
     assert len(pts_b) == len(t.samples) - 1 and axes[1].get_yscale() == "log"
-    # panels C / D: only fitted samples with a level 2; unresolved ones faded
-    pts_d = [ln for ln in axes[3].get_lines() if len(ln.get_xdata()) == 1 and ln.get_marker() not in ("", "None", None)]
-    faded = [ln for ln in pts_d if ln.get_alpha() == 0.35]
-    n_l2 = sum(1 for r in fits.values() if r.l2)
-    n_unres = sum(1 for r in fits.values() if r.l2 and r.resolved is False)
-    assert len(pts_d) + len(axes[3].containers) >= n_l2 and len(faded) == n_unres
-    legend_labels = [h.get_label() for h in axes[0].get_legend().legend_handles]
-    assert "G1" in legend_labels and "family X" in legend_labels and "not quantified" in legend_labels and "level not resolved" in legend_labels
+    # default panels on the workflow summary: grain exponent for every curve, TS d only where retained, faded if not robust
+    summ = summary_table(fits)
+    summ["robust_primary"] = [False if n == "B_struct" else None for n in summ["curve"]]
+    tf = _fit_table(fits)
+    fig2 = sf.trends_figure(tf, None, summ)
+    a = fig2.get_axes()
+    assert len(a) == 4 and a[0].get_ylabel().startswith("grain")
+    grain_pts = [ln for ln in a[0].get_lines() if len(ln.get_xdata()) == 1 and ln.get_marker() not in ("", "None", None)]
+    assert len(grain_pts) + len(a[0].containers) >= len(fits.curves)
+    ts_pts = [ln for ln in a[2].get_lines() if len(ln.get_xdata()) == 1 and ln.get_marker() not in ("", "None", None)]
+    assert len(ts_pts) == 1 and ts_pts[0].get_alpha() == 0.35          # not robust -> faded, no error bar
+    legend_labels = [h.get_label() for h in a[0].get_legend().legend_handles]
+    assert "not quantified" in legend_labels and "not robust" in legend_labels
     # custom panels and no legend
     p = [sf.TrendPanel("k", "descriptors", "C_hi", "C", yscale="log", transform=lambda v: 2 * v, hlines=(1e-3,))]
-    fig2 = sf.trends_figure(t, desc, None, panels=p, legend=False, letters=False)
-    a2 = fig2.get_axes()[0]
-    assert a2.get_legend() is None and not a2.texts and len(a2.get_lines()) == len(t.samples) + 1
+    fig3 = sf.trends_figure(t, desc, None, panels=p, legend=False, letters=False)
+    a3 = fig3.get_axes()[0]
+    assert a3.get_legend() is None and not a3.texts and len(a3.get_lines()) == len(t.samples) + 1
 
 
 @pytest.mark.skipif(not __import__("saxs.core.edf_sectors", fromlist=["HAVE_FABIO"]).HAVE_FABIO, reason="fabio not installed")

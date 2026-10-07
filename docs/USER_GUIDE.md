@@ -180,21 +180,17 @@ pattern with each accepted phase's reference stick pattern.
 
 ## SAXS/WAXS
 
-Small/wide-angle scattering (ported from the author's own POMME suite).
-Import Xenocs-style 1D ASCII curves; **Reduction** subtracts the empty
-capillary with manual, auto, transmission, or physics-based (xraydb)
-scaling; **Analysis** fits Guinier (Rg), generalized Porod (slope +
-background), and pseudo-Bragg peaks (d-spacing, correlation length) with
-auto region detection; **WAXS** auto-finds and fits pseudo-Voigt peaks
-(d-spacings, crystallinity index). Curves can be sent to the Library.
-SAXS 2.0 adds **Frames** (raw 2D frames: inventory, refined beam centres,
-lobe diagnostics, pairing with the session empties, sector reduction with
-loading classes), **Unified fit** (two-level unified fits with BIC
-selection, a robustness pass, and a visibility gate that offers the second
-level to the selection only where the curve itself shows a Guinier knee: the
-local log-log slope must flatten and steepen again, which a power law with a
-background can never do) and **Series figures** (publication
-figures and tables driven by a series table) — details in the module guide.
+Small/wide-angle scattering (first ported from the author's own POMME suite). Import 1D curves — two/three-column files or named-column tables with q, I,
+sigma and optionally dQ (resolution), a statistical sigma and flags; **Reduction** subtracts an empty capillary
+from a 1D curve (manual, auto, transmission or physics-based scaling); **Analysis** fits Guinier (Rg), generalized
+Porod (slope + background) and pseudo-Bragg peaks with auto region detection; **WAXS** auto-finds and fits
+pseudo-Voigt peaks (d-spacings, crystallinity index); curves can be sent to the Library. **Frames** reduces the raw 2D frames of a beamstopless
+instrument (inventory, refined beam centres, pairing with the empties, sector reduction with loading classes);
+**Fit** is the physical fitting workflow — grain power law + high-q term as the base, a model-free gate
+against a reference curve deciding whether a structure exists, then spheres (absolute with a contrast),
+Teubner-Strey, Debye and unified levels compared by BIC under explicit physical rules; **Series figures** builds
+publication figures and tables from a series table. The same chain runs headless from one JSON project file
+(`scripts/saxs_pipeline.py`) — details in the module guide and docs/SAXS_FITTING.md.
 The XAS workspace also gained a **Sample mass** tab — the Hephaestus
 calculator on oxide compositions (mol%/wt%) or formulas: masses for total
 μt = 1 / 2.5 and edge step Δμt = 1 in a pellet of chosen diameter.

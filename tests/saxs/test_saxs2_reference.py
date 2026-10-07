@@ -1,17 +1,17 @@
-"""Real-data regression of the SAXS 2.0 chain against the author's hand-made reference package.
+"""Real-data regression of the SAXS frame-to-curve chain against the author's hand-made reference package.
 
 Skipped unless two environment variables point at the reference material:
 
-* ``PRISM_SAXS_REFERENCE_DIR``: the folder holding ``phase1_summary.csv``, ``phase2_modelfree.csv``,
-  ``phase3e_beaucage.csv`` and ``phase3e_beaucage_wide.csv`` (which predate the level-2
-  visibility gate, so the fit comparisons run with ``require_bump=False``);
+* ``PRISM_SAXS_REFERENCE_DIR``: the folder holding ``phase1_summary.csv`` and ``phase2_modelfree.csv``
+  (optionally ``phase1_results.npz``, the full-precision arrays of the reference run);
 * ``PRISM_SAXS_REDUCED_V2_DIR``: the folder of the reference reduced curves ``<sample>__v2.dat``.
 
 The raw frames are located from the ``sample_frame`` headers of the reduced curves (override with
 ``PRISM_SAXS_RAW_DIR``). Nothing in this file names a sample: every identity comes from the reference
-tables. Acceptance criteria are the ones of the SAXS 2.0 prompt (pairing identical, curves within
-1e-9 relative, descriptors within 1 %, fits: same model choice for at least 37 of 39 curves, Rg2 of
-the resolved levels within 5 %, RMS within 0.003, robustness flags reproduced).
+tables. Acceptance criteria: pairing identical for every frame, curves within 1e-9 relative of the
+full-precision reference (2e-6 of its 7-digit text), reduction summary within 1e-6, descriptors within
+1 % (1e-9 when computed from the same text curves). The physical fits are covered by the synthetic
+tests of test_fit_workflow.py.
 """
 from __future__ import annotations
 
@@ -60,9 +60,7 @@ def _raw_root(summary: pd.DataFrame) -> str:
 def reference():
     summary = pd.read_csv(os.path.join(REF_DIR, "phase1_summary.csv"))
     return dict(summary=summary, raw_root=_raw_root(summary),
-                modelfree=pd.read_csv(os.path.join(REF_DIR, "phase2_modelfree.csv")).set_index("sample"),
-                fits=pd.read_csv(os.path.join(REF_DIR, "phase3e_beaucage.csv")).set_index("sample"),
-                fits_wide=pd.read_csv(os.path.join(REF_DIR, "phase3e_beaucage_wide.csv")).set_index("sample"))
+                modelfree=pd.read_csv(os.path.join(REF_DIR, "phase2_modelfree.csv")).set_index("sample"))
 
 
 @pytest.fixture(scope="module")
@@ -247,7 +245,9 @@ def test_descriptors_from_the_reference_text_curves_are_exact(reference):
     curves = {r.name: r.usable_curve() for r in sb.load_reduced_folder(RED_DIR, pattern=r".*__v2\.dat$")}
     _results, df = ds.describe_batch([curves[n] for n in mf.index], ds.DescriptorOptions(), rho_e=rho)
     df = df.set_index("sample")
-    cols = [c for c in mf.columns if c not in ("sample", "cls", "rho_e", "Bi2O3_mol", "P2O5_mol", "n_use", "n_low_pts")]
+    # table metadata (identity, loading class, electron density, composition columns *_mol) is not a descriptor
+    meta = ("sample", "cls", "rho_e", "n_use", "n_low_pts")
+    cols = [c for c in mf.columns if c not in meta and not c.endswith("_mol")]
     for name in mf.index:
         for col in cols:
             a, b = float(df.loc[name, col]), float(mf.loc[name, col])
@@ -256,229 +256,3 @@ def test_descriptors_from_the_reference_text_curves_are_exact(reference):
             else:
                 assert a == pytest.approx(b, rel=1e-9, abs=1e-300), (name, col, a, b)
         assert int(df.loc[name, "n_use"]) == int(mf.loc[name, "n_use"]) and int(df.loc[name, "n_low_pts"]) == int(mf.loc[name, "n_low_pts"])
-
-
-
-# ------------------------------------------------------------------------------------ phase 3
-def _fit_all(curves, require_bump=False):
-    """The reference CSVs predate the level-2 visibility gate (2026-09-24), so the comparisons
-    against them run with ``require_bump=False``; the gate itself is checked separately below and
-    in tests/saxs/test_bump_gate.py."""
-    from saxs.core import unified_levels as ul
-    results, df = ul.batch_fit(curves, ul.UnifiedOptions(require_bump=require_bump), robustness=True)
-    return {r.sample: r for r in results}, df.set_index("sample")
-
-
-@pytest.fixture(scope="module")
-def fitted(reference, reduced):
-    """Fits from the in-memory reduction (full precision)."""
-    names = list(reference["fits"].index)                 # the reference already excludes what it excludes
-    curves = [reduced[n].usable_curve() for n in names if n in reduced]
-    assert len(curves) == len(names)
-    return _fit_all(curves)
-
-
-@pytest.fixture(scope="module")
-def fitted_from_text(reference):
-    """Fits from the reference's own written curves (7-digit text), the input the reference fitted:
-    what the pipeline's fit step sees when it reads the reduce step's files."""
-    from saxs.core import sector_batch as sb
-    names = list(reference["fits"].index)
-    by_name = {r.name: r for r in sb.load_reduced_folder(RED_DIR, pattern=r".*__v2\.dat$")}
-    return _fit_all([by_name[n].usable_curve() for n in names])
-
-
-def test_fits_from_the_reference_text_curves_are_identical(reference, fitted_from_text):
-    """Same input, same code path: the model choice, every parameter, the RMS and the resolved
-    flags of phase3e_beaucage.csv / _wide.csv reproduced for all 39 curves."""
-    results, df = fitted_from_text
-    ref, wide = reference["fits"], reference["fits_wide"]
-    for name in ref.index:
-        r, a, w = results[name], ref.loc[name], wide.loc[name]
-        assert r.fitted, (name, r.skip_reason)
-        assert (r.l2, r.tail, r.n_params, r.n_pts) == (bool(a["l2"]), bool(a["tail"]), int(a["n_params"]), int(a["n_pts"])), name
-        assert r.rms_log == pytest.approx(float(a["rms_log"]), abs=1e-6), name
-        assert r.chi2r == pytest.approx(float(a["chi2r"]), rel=1e-6), name
-        assert r.dBIC_vs_base == pytest.approx(float(a["dBIC_vs_base"]), abs=1e-3), name
-        for col, key in (("Rg1_A", "Rg1"), ("d1", "d1"), ("logG1", "logG1"), ("logB1", "logB1"), ("logC", "logC")):
-            assert r.params[key].value == pytest.approx(float(a[col]), rel=1e-6, abs=1e-9), (name, col)
-        assert bool(a["Rg1_at_bound"]) == r.params["Rg1"].at_bound and bool(a["d1_at_bound"]) == r.params["d1"].at_bound, name
-        if r.l2:
-            for col, key in (("Rg2_A", "Rg2"), ("d2", "d2"), ("logG2", "logG2"), ("logpf2", "logpf2")):
-                assert r.params[key].value == pytest.approx(float(a[col]), rel=1e-6, abs=1e-9), (name, col)
-            assert r.derived["D2_eq_nm"] == pytest.approx(float(a["D2_eq_nm"]), rel=1e-6), name
-            assert bool(a["Rg2_at_bound"]) == r.params["Rg2"].at_bound and bool(a["d2_at_bound"]) == r.params["d2"].at_bound, name
-        if r.tail:
-            assert r.params["logT"].value == pytest.approx(float(a["logT"]), rel=1e-6, abs=1e-9), name
-        # robustness: the relaxed variant equals the wide run, the resolved flag follows
-        rel_ = r.relaxed
-        assert rel_ is not None and (rel_.l2, rel_.tail) == (bool(w["l2"]), bool(w["tail"])), name
-        assert rel_.rms_log == pytest.approx(float(w["rms_log"]), abs=1e-6), name
-        if rel_.l2:
-            assert rel_.params["Rg2"].value == pytest.approx(float(w["Rg2_A"]), rel=1e-6), name
-        assert r.resolved == _ref_resolved(ref, wide, name), (name, r.resolved)
-
-
-def _ref_resolved(ref, wide, name, tol=0.20):
-    if name not in ref.index or name not in wide.index:
-        return None
-    a, b = ref.loc[name], wide.loc[name]
-    if not bool(a["l2"]):
-        return None
-    if not bool(b["l2"]):
-        return False
-    return bool(abs(b["Rg2_A"] - a["Rg2_A"]) <= tol * a["Rg2_A"])
-
-
-def test_fits_reproduce_the_reference_model_choices_and_levels(reference, fitted):
-    results, df = fitted
-    ref, wide = reference["fits"], reference["fits_wide"]
-    same_choice, mismatches, rg2_dev, rms_dev, resolved_mismatch = 0, [], [], [], []
-    for name in ref.index:
-        r = results[name]
-        assert r.fitted, (name, r.skip_reason)
-        a = ref.loc[name]
-        choice_ok = (r.l2 == bool(a["l2"])) and (r.tail == bool(a["tail"]))       # Series.tail is a method
-        if choice_ok:
-            same_choice += 1
-        else:
-            mismatches.append((name, r.name, ul_name(bool(a["l2"]), bool(a["tail"]))))
-            continue
-        assert r.n_params == int(a["n_params"]), name
-        assert r.n_pts == int(a["n_pts"]), name
-        rms_dev.append(abs(r.rms_log - float(a["rms_log"])))
-        assert abs(r.rms_log - float(a["rms_log"])) <= 0.003, (name, r.rms_log, a["rms_log"])
-        ref_res = _ref_resolved(ref, wide, name)
-        if r.l2:
-            dev = abs(r.params["Rg2"].value - float(a["Rg2_A"])) / float(a["Rg2_A"])
-            rg2_dev.append((name, dev, ref_res))
-            if ref_res:
-                assert dev <= 0.05, (name, r.params["Rg2"].value, a["Rg2_A"])
-        if r.resolved != ref_res:
-            resolved_mismatch.append((name, r.resolved, ref_res))
-    print(f"same model choice for {same_choice}/{len(ref)}; mismatches: {mismatches}")
-    print("Rg2 deviations (name, rel, ref resolved):", [(n, round(d, 3), x) for n, d, x in rg2_dev])
-    print("resolved mismatches:", resolved_mismatch)
-    assert same_choice >= 37
-    # A resolved flag may differ only for a curve whose retained level itself differs from the
-    # reference by more than 5 % (a weak, degenerate level whose fit follows a different path when
-    # the input differs at 1e-7: the in-memory curve against the 7-digit text the reference fitted).
-    # The text-input test above reproduces those flags exactly; such cases are reported by name.
-    unstable = {n for n, d, _x in rg2_dev if d > 0.05}
-    assert all(n in unstable for n, _a, _b in resolved_mismatch), resolved_mismatch
-    assert len(unstable) <= 2, unstable
-    # at-bound flags and the amplitude floor are reported, never hidden
-    for name in ref.index:
-        r = results[name]
-        if r.l2 and r.params["d2"].at_bound:
-            assert "d2 at a bound" in r.warnings
-        assert not any(c["fake_level"] and k == r.name for k, c in r.candidates.items()), name
-
-
-def ul_name(l2, tail):
-    from saxs.core.unified_levels import candidate_name
-    return candidate_name(l2, tail)
-
-# ------------------------------------------------------------------------------------ the visibility gate
-@pytest.fixture(scope="module")
-def gated(reference, reduced):
-    """The same 39 curves as ``fitted``, but WITH the level-2 visibility gate (the production
-    setting), so the two can be compared sample by sample."""
-    names = [n for n in reference["fits"].index if n in reduced]
-    return _fit_all([reduced[n].usable_curve() for n in names], require_bump=True)
-
-
-PARENTS = ("P0Bi0", "P1Bi0", "P2Bi0", "P5Bi0", "P8Bi0")
-GATED_IN = ("P8Bi2-12", "P5Bi2-12", "P5Bi5-12", "P8Bi5-12", "P0Bi8-12", "P8Bi8-12")
-
-
-def test_the_gate_removes_every_level_from_the_bismuth_free_parents(reference, gated):
-    """The failure the gate exists for: an information criterion alone puts a 10-11 nm 'level' in
-    four of the five bismuth-free parents, on the cleanest curves of the set."""
-    results, _ = gated
-    ref = reference["fits"]
-    had = [p for p in PARENTS if bool(ref.loc[p, "l2"])]
-    assert len(had) >= 4, f"the reference is expected to carry the artefact in most parents: {had}"
-    for p in PARENTS:
-        r = results[p]
-        assert r.fitted and not r.l2, f"{p} must have no level: {r.name}"
-        assert r.l2_gated and not r.bump.present
-        assert r.bump.recovery < 0.3, (p, r.bump.recovery)
-
-
-def test_the_gate_keeps_the_levels_the_data_show_and_does_not_move_them(reference, gated, fitted):
-    """The gate is a veto: what it keeps is bit-for-bit what the ungated fit found."""
-    results, _ = gated
-    free, _ = fitted
-    kept = sorted(n for n, r in results.items() if r.l2)
-    assert kept == sorted(GATED_IN), kept
-    for n in kept:
-        assert results[n].params["Rg2"].value == pytest.approx(free[n].params["Rg2"].value, rel=1e-9), n
-        assert results[n].rms_log == pytest.approx(free[n].rms_log, rel=1e-9), n
-        assert results[n].resolved is True, f"{n} should be resolved"
-
-
-def test_every_gated_level_sits_above_two_mol_percent_bismuth(gated):
-    """Composition is never an input to the gate; that the outcome orders by it is the whole check.
-    The gate sees only (q, I, sigma), yet no level survives below 2 mol% Bi2O3 and the recovery it
-    measures ranks with the bismuth content."""
-    path = os.path.join(REF_DIR, "pbi_samples_table.csv")
-    if not os.path.exists(path):
-        pytest.skip("pbi_samples_table.csv is not in the reference folder")
-    bi = pd.read_csv(path).set_index("sample")["Bi2O3_mol"]
-    results, _ = gated
-    kept = [n for n, r in results.items() if r.l2 and n in bi.index]
-    assert kept, "no level survived the gate"
-    assert min(bi[n] for n in kept) >= 2.0, {n: round(bi[n], 2) for n in kept}
-    below = [n for n, r in results.items() if r.fitted and n in bi.index and bi[n] < 2.0]
-    assert not any(results[n].l2 for n in below), [n for n in below if results[n].l2]
-    from scipy.stats import spearmanr
-    common = [n for n, r in results.items() if r.fitted and n in bi.index]
-    rho = spearmanr([bi[n] for n in common], [results[n].bump.recovery for n in common]).statistic
-    assert rho > 0.3, f"the visibility of a level should rank with the bismuth content, got {rho:.2f}"
-
-def test_the_gate_decision_does_not_depend_on_the_rebinning_density(reduced):
-    """The one failure mode a visibility criterion can hide: a verdict that follows the analysis
-    grid rather than the data. Every curve that carries a level at the production 40 points per
-    decade must still show a visible bump at 20 and at 60."""
-    from saxs.core import unified_levels as ul
-
-    curves = {r.name: r.usable_curve() for r in reduced.values()}
-    eligible = {}
-    for per_decade in (20, 60):
-        o = ul.UnifiedOptions(per_decade=per_decade)
-        ok = set()
-        for name, c in curves.items():
-            q, I, sig, reason = ul.prepare_curve(c, o)
-            if reason is not None:
-                continue
-            fits = {t: ul.fit_candidate(q, I, sig, False, t, o) for t in (False, True)}
-            fits = {t: r for t, r in fits.items() if r is not None}
-            if not fits:
-                continue
-            tail = min(fits, key=lambda t: fits[t].bic)
-            if ul.bump_evidence(q, I, ul._values(fits[tail].params), tail, o).present:
-                ok.add(name)
-        eligible[per_decade] = ok
-    for name in GATED_IN:
-        assert name in eligible[20], f"{name} is not eligible at 20 points/decade"
-        assert name in eligible[60], f"{name} is not eligible at 60 points/decade"
-    # and no parent becomes eligible at any grid
-    for per_decade, ok in eligible.items():
-        assert not (set(PARENTS) & ok), (per_decade, sorted(set(PARENTS) & ok))
-
-
-def test_the_thin_test_loading_shows_the_same_level(reduced):
-    """A loading outside the project's own selection, and the only bismuth-rich one thin enough to
-    be quantitative (0.5 mm capillary, transmission 0.48 against 1e-3 to 1e-6 for its 1 mm
-    siblings): the gate keeps a level there too, at a radius squarely on the trend the six retained
-    ones trace. Nothing in the criterion knows that, so it is a real corroboration."""
-    from saxs.core import unified_levels as ul
-
-    name = "P5Bi8-12_0p5mm"
-    if name not in reduced:
-        pytest.skip(f"{name} is not in the reference reduction")
-    r = ul.fit_with_robustness(reduced[name].usable_curve())
-    assert r.fitted and r.bump.present and r.l2, r.bump.category
-    assert r.params["Rg2"].value / 10 == pytest.approx(14.4, abs=1.5)
-    assert r.resolved is True

@@ -248,6 +248,8 @@ Q_NAMES = ("q", "q_a", "q_inva", "q_nm", "q_invnm", "q_1/a", "q(1/a)")
 I_NAMES = ("i", "i_cm", "intensity", "i_abs", "dsigma_domega", "corrected")
 SIGMA_NAMES = ("sigma", "sigma_total_cm", "sigma_cm", "di", "err", "error", "sigma_corrected", "idev")
 DQ_NAMES = ("dq", "dq_a", "dq_inva", "sigma_q", "qdev")
+Q_PER_NM = ("q_nm", "q_invnm")                     # q in 1/nm: converted to 1/Å on load
+DQ_PER_A = ("dq_a", "dq_inva")                     # resolution columns that state 1/Å (never converted)
 
 
 def _pick(columns: List[str], wanted: Optional[str], candidates: Tuple[str, ...]) -> Optional[str]:
@@ -276,7 +278,9 @@ def load_tabular_curve(
     name (or given explicitly); every other column is kept, row-aligned with q, in ``curve.metadata["columns"]``
     (numeric columns as float arrays, text columns as lists), and the resolution column, if any, in
     ``curve.metadata["dq"]``. Rows with non-finite q or I, or with q <= 0, are dropped and COUNTED in
-    ``curve.metadata["n_dropped"]`` (never silently).
+    ``curve.metadata["n_dropped"]`` (never silently). q (and dQ) are returned in 1/Å: a q column named in 1/nm
+    (``q_nm``, ``q_invnm``) is divided by 10, and so is the resolution column unless its name says 1/Å; the
+    conversion is recorded in ``curve.metadata["q_unit_converted"]`` (the kept columns stay as read).
     """
     header_lines: List[str] = []
     with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
@@ -299,7 +303,8 @@ def load_tabular_curve(
         raise ValueError(f"cannot identify q / I columns among {cols}; pass q_col= and i_col=")
     sc = _pick(cols, sigma_col, SIGMA_NAMES)
     dc = _pick(cols, dq_col, DQ_NAMES)
-    q = pd.to_numeric(df[qc], errors="coerce").to_numpy(float)
+    q_scale = 0.1 if qc.lower() in Q_PER_NM else 1.0
+    q = pd.to_numeric(df[qc], errors="coerce").to_numpy(float) * q_scale
     intensity = pd.to_numeric(df[ic], errors="coerce").to_numpy(float)
     keep = np.isfinite(q) & np.isfinite(intensity) & (q > 0)
     n_dropped = int((~keep).sum())
@@ -313,12 +318,15 @@ def load_tabular_curve(
             extra[c] = [str(v) for v in np.asarray(df[c].astype(str))[keep][order]]
     sigma = None if sc is None else np.asarray(extra[sc], dtype=float)
     metadata = extract_metadata_from_header(header_lines)
+    dq_scale = q_scale if (dc is not None and dc.lower() not in DQ_PER_A) else 1.0
     metadata.update({"columns": extra, "q_col": qc, "i_col": ic, "sigma_col": sc, "dq_col": dc, "n_dropped": n_dropped,
-                     "dq": None if dc is None else np.asarray(extra[dc], dtype=float)})
+                     "dq": None if dc is None else np.asarray(extra[dc], dtype=float) * dq_scale,
+                     "q_unit_converted": "1/nm -> 1/A" if q_scale != 1.0 else None})
     curve = Curve(q=q[keep][order], intensity=intensity[keep][order], sigma=sigma, name=Path(path).stem,
                   path=str(Path(path).resolve()), header_lines=header_lines, metadata=metadata,
                   transmission=metadata.get("transmission"), thickness_mm=metadata.get("thickness_mm"), file_role=file_role)
-    curve.record("load_tabular", path=str(path), columns={"q": qc, "I": ic, "sigma": sc, "dq": dc}, n_dropped=n_dropped)
+    curve.record("load_tabular", path=str(path), columns={"q": qc, "I": ic, "sigma": sc, "dq": dc}, n_dropped=n_dropped,
+                 q_scale=q_scale)
     return curve
 
 
