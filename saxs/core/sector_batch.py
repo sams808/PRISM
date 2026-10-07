@@ -57,6 +57,7 @@ class ReductionOptions:
     r_footprint_px: float = 30.0
     nsigma: float = 3.0
     min_run: int = 8
+    flatfield_method: str = "single_photon"     # Poisson sigma: one photon = the single-photon value ("legacy": pre-2026-10)
     plateau_bands_px: Tuple[Tuple[int, int], ...] = ((6, 12), (12, 20))
     per_mm_probes: Tuple[Tuple[float, float, float], ...] = ((0.02, 0.019, 0.021), (0.05, 0.048, 0.052), (0.15, 0.14, 0.16))
     dat_suffix: str = "__sectors"
@@ -373,7 +374,7 @@ def reduce_arrays_with_options(sample: np.ndarray, gs: es.FrameGeometry, empty: 
                            vertical_half_deg=o.vertical_half_deg, name=name, sample_path=sample_path, empty_path=empty_path,
                            refine_centre=o.refine_centre, max_shift_px=o.max_shift_px, bright_fraction=o.bright_fraction,
                            min_ratio=o.min_ratio, min_ratio_footprint=o.min_ratio_footprint, r_footprint_px=o.r_footprint_px,
-                           nsigma=o.nsigma, min_run=int(o.min_run))
+                           nsigma=o.nsigma, min_run=int(o.min_run), flatfield_method=o.flatfield_method)
     return _from_reduction(red, name, o, mu_mm, session, sample_path, empty_path)
 
 

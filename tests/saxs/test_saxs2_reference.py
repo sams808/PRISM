@@ -10,8 +10,9 @@ The raw frames are located from the ``sample_frame`` headers of the reduced curv
 ``PRISM_SAXS_RAW_DIR``). Nothing in this file names a sample: every identity comes from the reference
 tables. Acceptance criteria: pairing identical for every frame, curves within 1e-9 relative of the
 full-precision reference (2e-6 of its 7-digit text), reduction summary within 1e-6, descriptors within
-1 % (1e-9 when computed from the same text curves). The physical fits are covered by the synthetic
-tests of test_fit_workflow.py.
+1 % (1e-9 when computed from the same text curves). The reference predates the October 2026 correction of the
+Poisson sigma (one photon = 1.00), so the chain runs with ``flatfield_method="legacy"`` here. The physical fits are
+covered by the synthetic tests of test_fit_workflow.py.
 """
 from __future__ import annotations
 
@@ -99,7 +100,7 @@ def reduced(reference, pairing):
     wanted = {_norm(r["sample_frame"]): r["sample"] for _, r in summary.iterrows()}
     pairs = [p for p in res.pairs if _norm(p.sample.rel) in wanted]
     mu = sb.MuSource.from_table({r["sample"]: r["mu_mm"] for _, r in summary.iterrows()})
-    results = sb.reduce_pairs(pairs, sb.ReductionOptions(), mu)
+    results = sb.reduce_pairs(pairs, sb.ReductionOptions(flatfield_method="legacy"), mu)     # as the reference was made
     return {r.name: r for r in results}
 
 

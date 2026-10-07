@@ -180,3 +180,40 @@ def test_read_frame_geometry_from_synthetic_edf(tmp_path):
     fabio.edfimage.EdfImage(data=data, header=header).write(str(p))
     arr, h, g = es.read_frame(str(p))
     assert arr.shape == SHAPE and abs(g.wavelength_A - 1.541891) < 1e-9 and g.exposure_s == 100.0
+
+
+def test_flatfield_factor_is_the_single_photon_value_that_makes_sigma_poisson():
+    """A flat-field corrected frame = photon counts x per-pixel constants (0.97-1.03, plus 3 % low-gain pixels at
+    0.6-0.9, as on the EIGER2 frames). Under uniform illumination var(value) / mean(value) is the factor that makes the
+    Poisson sigma right; it equals the single-photon value (~1), which the legacy window (0.3-0.95) misses."""
+    rng = np.random.default_rng(3)
+    gain = rng.uniform(0.97, 1.03, SHAPE)
+    low = rng.random(SHAPE) < 0.03
+    gain[low] = rng.uniform(0.6, 0.9, int(low.sum()))
+    counts = rng.poisson(0.4, SHAPE)
+    data = counts * gain
+    f = es.flatfield_factor(data)
+    assert f == pytest.approx(1.0, abs=0.01)
+    assert np.var(data) / np.mean(data) == pytest.approx(f, rel=0.03)
+    assert es.flatfield_factor(data, "legacy") < 0.92
+    assert es.flatfield_factor(counts.astype(float)) == 1.0                  # integer counts
+    assert es.flatfield_factor(np.zeros(SHAPE)) == 1.0                       # no single photon at all
+    with pytest.raises(ValueError):
+        es.flatfield_factor(data, "nope")
+
+
+def test_reduce_arrays_records_the_flatfield_method_and_scales_sigma_by_its_root():
+    rng = np.random.default_rng(4)
+    gain = rng.uniform(0.97, 1.03, SHAPE)
+    low = rng.random(SHAPE) < 0.03
+    gain[low] = rng.uniform(0.6, 0.9, int(low.sum()))
+    empty = rng.poisson(0.4 + _beam(), SHAPE) * gain
+    sample = rng.poisson(0.4 + 0.5 * _beam() + _ring(), SHAPE) * gain
+    new = es.reduce_arrays(sample, GEOM, empty, GEOM, refine_centre=False)
+    old = es.reduce_arrays(sample, GEOM, empty, GEOM, refine_centre=False, flatfield_method="legacy")
+    assert new.curve.metadata["flatfield_method"] == "single_photon" and old.curve.metadata["flatfield_method"] == "legacy"
+    assert np.allclose(new.curve.intensity, old.curve.intensity)              # the intensities do not depend on it
+    f_new, f_old = new.curve.metadata["flatfield_factor_sample"], old.curve.metadata["flatfield_factor_sample"]
+    assert f_new == pytest.approx(1.0, abs=0.01) and f_old < 0.92
+    ratio = np.nanmedian(new.curve.sigma / old.curve.sigma)
+    assert ratio == pytest.approx(np.sqrt(f_new / f_old), rel=0.02)

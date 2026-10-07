@@ -149,12 +149,25 @@ def hot_pixel_mask(data: np.ndarray, valid: Optional[np.ndarray] = None, factor:
     return valid & (data > factor * med + sqrt_factor * np.sqrt(np.maximum(med, 0)) + floor)
 
 
-def flatfield_factor(data: np.ndarray, lo: float = 0.3, hi: float = 0.95) -> float:
-    """Frames that were flat-field corrected are floats; the cluster of single-count pixels sits at
-    the mean flat-field factor. var(value) = factor x value. Returns 1.0 when no such cluster exists
-    (integer counts)."""
-    pos = data[(data > lo) & (data < hi)]
-    return float(np.mean(pos)) if pos.size > 100 else 1.0
+FLATFIELD_METHODS = ("single_photon", "legacy")
+
+
+def flatfield_factor(data: np.ndarray, method: str = "single_photon", lo: float = 0.3, hi: float = 0.95) -> float:
+    """Value of one detected photon in a flat-field corrected frame, so that var(value) = factor x value.
+
+    ``"single_photon"`` (default): the median of the values in 0.5-1.5, where single photons sit. A flat-field corrected
+    value is the photon count times a per-pixel constant (0.97-1.03 on the Xeuss EIGER2 frames), so the factor is ~1.00;
+    integer counts give exactly 1. ``"legacy"``: the mean of the values in (``lo``, ``hi``), the estimator used before
+    October 2026. That window excludes most single photons and averages low-gain pixels: it returned 0.83 on the same
+    frames, i.e. a Poisson sigma 9 % too small. Kept only to reproduce reductions made with it. Both return 1.0 when
+    100 pixels or fewer qualify."""
+    if method == "legacy":
+        pos = data[(data > lo) & (data < hi)]
+        return float(np.mean(pos)) if pos.size > 100 else 1.0
+    if method != "single_photon":
+        raise ValueError(f"unknown flat-field method {method!r}; known: {FLATFIELD_METHODS}")
+    one = data[(data > 0.5) & (data < 1.5)]
+    return float(np.median(one)) if one.size > 100 else 1.0
 
 
 def diagonal_sector_mask(shape: Tuple[int, int], cx: float, cy: float, axis_exclusion_deg: float = 20.0,
@@ -413,7 +426,7 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
                   name: str = "sample", sample_path: str = "", empty_path: str = "",
                   refine_centre: bool = True, max_shift_px: float = 4.0, bright_fraction: float = 0.01,
                   min_ratio: float = 1.25, min_ratio_footprint: float = 5.0, r_footprint_px: float = 30.0,
-                  nsigma: float = 3.0, min_run: int = 8) -> SectorReduction:
+                  nsigma: float = 3.0, min_run: int = 8, flatfield_method: str = "single_photon") -> SectorReduction:
     """Sector-integrated, transmission-scaled empty subtraction of two frames already in memory.
     With ``refine_centre`` (default) the beam centres come from the recorded direct beam
     (:func:`refine_centres`); the header centres are kept in the metadata."""
@@ -425,7 +438,7 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
     hot_s, hot_e = hot_pixel_mask(sample), hot_pixel_mask(empty)
     valid_s = valid_pixel_mask(sample) & ~hot_s
     valid_e = valid_pixel_mask(empty) & ~hot_e
-    ff_s, ff_e = flatfield_factor(sample), flatfield_factor(empty)
+    ff_s, ff_e = flatfield_factor(sample, flatfield_method), flatfield_factor(empty, flatfield_method)
     ms = diagonal_sector_mask(sample.shape, gs.cx, gs.cy, axis_exclusion_deg, bar_rect_px, rmax_px, valid_s)
     me = diagonal_sector_mask(empty.shape, ge.cx, ge.cy, axis_exclusion_deg, bar_rect_px, rmax_px, valid_e)
     ps = radial_profile(sample, gs, ms, rmax_px, ff_s)
@@ -451,7 +464,7 @@ def reduce_arrays(sample: np.ndarray, gs: FrameGeometry, empty: np.ndarray, ge: 
         n_hot_sample=int(hot_s.sum()), n_hot_empty=int(hot_e.sum()),
         sector=f"diagonal wedges, > {axis_exclusion_deg} deg from both axes, bar zone |dx|<={bar_rect_px[0]} |dy|<={bar_rect_px[1]} px excluded",
         transmission_T=T, transmission_dT=tr.dT, transmission_T_disc4=tr.T_disc4, transmission_T_disc8=tr.T_disc8,
-        heterogeneity_T4_over_T=tr.heterogeneity, flatfield_factor_sample=ff_s, flatfield_factor_empty=ff_e,
+        heterogeneity_T4_over_T=tr.heterogeneity, flatfield_factor_sample=ff_s, flatfield_factor_empty=ff_e, flatfield_method=flatfield_method,
         mu_mm=mu_mm, t_eff_mm=t_eff, mu_t_eff=(-np.log(T) if T > 0 else None),
         q_min_use=(float(ps.q[i0]) if i0 is not None else None), q_max_use=(float(ps.q[i1]) if i1 is not None else None),
         units="counts/s/pixel, empty-transmission units: (S/t_s - T E/t_e)/T",

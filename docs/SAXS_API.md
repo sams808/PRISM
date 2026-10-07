@@ -33,8 +33,11 @@ Conventions shared by all modules:
 
 - `FrameGeometry.from_header(h, default_wavelength_A=None)`, `read_frame(path, default_wavelength_A=None)`.
 - `reduce_arrays(..., refine_centre, max_shift_px, bright_fraction, min_ratio, min_ratio_footprint,
-  r_footprint_px, nsigma, min_run)`. The metadata includes `n_hot_sample`, `n_hot_empty` and
-  `empty_centre_offset_from_header_px`.
+  r_footprint_px, nsigma, min_run, flatfield_method)`. The metadata includes `n_hot_sample`, `n_hot_empty`,
+  `empty_centre_offset_from_header_px` and the flat-field factors.
+- `flatfield_factor(data, method="single_photon")`: the value of one detected photon, so that var(value) = factor ×
+  value. It is ~1.00 on flat-field corrected EIGER2 frames and exactly 1 for integer counts. `"legacy"` reproduces the
+  pre-October-2026 estimator, which gave 0.83.
 - `sector_anisotropy(data, geom, valid=None, half_deg=25, rmax_px=220, q_window=(2e-3, 1.5e-2), prominence=0.05,
   streak_band_px=(30, 60), lobe_min_ratio=2.0) -> SectorAnisotropy`:
   - horizontal / vertical / diagonal / full profiles;
@@ -66,8 +69,8 @@ Conventions shared by all modules:
 
 ## sector_batch.py
 
-- `ReductionOptions`: sector, footprint, centre refinement, class thresholds, usable-range rule, plateau bands,
-  per-mm probes, dat suffix.
+- `ReductionOptions`: sector, footprint, centre refinement, class thresholds, usable-range rule, flat-field method,
+  plateau bands, per-mm probes, dat suffix.
 - `MuSource.from_table({name: mu_mm}, key_regex)` / `.from_samples_table(csv|df, key_regex, energy_ev, ...)`, with
   `mu_for(name, energy_ev)` and `rho_e_for(name)`.
 - `classify_loading(mu_t, heterogeneity, options)` checks in order:

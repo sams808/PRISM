@@ -62,6 +62,10 @@ Three new tabs in the SAXS/WAXS workspace, a single physical fitting engine and 
 
 ## Fixes and internals
 
+- **Poisson σ of flat-field corrected frames.** On the Xeuss EIGER2 frames one detected photon reads 1.00: the value is the photon count times a per-pixel constant of 0.97–1.03. The earlier estimator averaged the values between 0.3 and 0.95, which leaves out most single photons; it returned 0.83, so the σ of frame reductions was 9 % too small.
+  - `ReductionOptions.flatfield_method` is now `"single_photon"` by default.
+  - `"legacy"` reproduces reductions made before the correction.
+
 - `core/qt_worker.run_in_thread` accepts `on_progress`: the job receives a `progress(i, n, message)` callable whose calls reach the UI thread.
 - The 1D loader recognises `I_corr` / `sigma_I` columns. `edf_sectors` gains `sector_anisotropy`, exposes the usable-range and centre options, and tolerates frames without a wavelength header (virtual-detector exports) when a default is given.
 - The command line prints progress and flushes its log, so a long run redirected to a file shows where it is.
