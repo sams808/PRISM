@@ -16,7 +16,7 @@ from saxs.core.models import Dab
 
 def test_composition_parsing():
     assert as_composition("50(SiO2)25(Na2O)") == {"SiO2": 50.0, "Na2O": 25.0}
-    assert as_composition("Na3BiP2O8") == {"Na3BiP2O8": 1.0}
+    assert as_composition("Ca3P2O8") == {"Ca3P2O8": 1.0}
     assert as_composition({"SiO2": 1, "B2O3": 0}) == {"SiO2": 1.0}
 
 

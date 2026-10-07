@@ -165,9 +165,9 @@ def test_parse_comment_and_capillary_token():
     assert fr.parse_comment("", 0.37) == ("", "", "prod", "MAXS")
     assert fr.parse_comment("", 1.234) == ("", "", "prod", "D1.23")
     assert fr.capillary_token("Empty_cap_0p5mm") == 0.5 and fr.capillary_token("E_1.5 mm") == 1.5
-    assert fr.capillary_token("P5Bi8-12") is None and fr.capillary_token("", "x_1mm_SAXS") == 1.0
+    assert fr.capillary_token("S5X8-12") is None and fr.capillary_token("", "x_1mm_SAXS") == 1.0
     assert fr.classify_role("Test1_0_00017", "T1_Empty", r"(?i)empty", r"(?i)agbeh") == "empty"
-    assert fr.classify_role("PBi_0_00000", "Cu_SAXS_AgBeh", r"(?i)empty", r"(?i)agbeh") == "calibrant"
+    assert fr.classify_role("Series_0_00000", "Cu_SAXS_AgBeh", r"(?i)empty", r"(?i)agbeh") == "calibrant"
     assert fr.parse_date("2026-01-09T18:46:36") is not None and fr.parse_date("") is None
 
 

@@ -116,7 +116,7 @@ AGBEH_Q1_A_INV = 2.0 * np.pi / AGBEH_D_SPACING_A
 # plausibly from HDR/attenuation handling specific to this beamstopless
 # design that isn't documented in what's available here (see the module
 # docstring's KNOWN LIMITATION). r=28px was the smallest radius, checked
-# against 4 real samples (P0Bi0, P0Bi8-13, P5Bi8-12, P1Bi1-13), that
+# against 4 real samples of a glass series, that
 # eliminated negative post-subtraction points entirely. Scattering below the
 # resulting q_min (~0.0095 A^-1 at this geometry) is not currently usable
 # through this module.
