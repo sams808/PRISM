@@ -826,7 +826,8 @@ def clock_to_minutes(values, col_name: Any) -> Tuple["np.ndarray", float, str]:
 # Internals: threshold, state machine, run surgery
 # ---------------------------------------------------------------------------
 def _resolve_threshold(rate: np.ndarray, cfg: SegmentationConfig,
-                       program: Optional[MethodProgram]) -> float:
+                       program: Optional[MethodProgram],
+                       temp_C: Optional[np.ndarray] = None) -> float:
     """Enter-threshold on |dT/dt|, in C/min.
 
     Preference order: an explicit config value, then a quarter of the SLOWEST
@@ -849,6 +850,18 @@ def _resolve_threshold(rate: np.ndarray, cfg: SegmentationConfig,
     the exact domain the Lasocka feature exists for (MERGED_DECISIONS M0.1).
     The programmed path keeps only a positivity guard, so a method claiming a
     zero or negative rate still falls back to something usable.
+
+    With NO program the floor still has a job, but it must not do it blindly.
+    Its reason is "p95 of a long hold is noise", and noise is recognisable: it
+    goes nowhere. A record whose temperature moves at least `min_ramp_span_C`
+    end to end demonstrably DID go somewhere, so a floor meant to reject noise
+    has nothing to say about it and is skipped. That is what lets a bare export
+    with no method -- a 0.1 C/min enthalpy-relaxation scan, say -- still read
+    as a ramp, while a genuine isothermal soak (total excursion a fraction of
+    a degree) keeps the floor that stops its noise fragmenting into ramps.
+    `min_ramp_span_C` is reused deliberately: a run that moved less than the
+    span a single ramp must cover cannot contain one, so the two tests cannot
+    disagree about what counts as movement.
     """
     if cfg.rate_threshold_C_min is not None:
         try:
@@ -870,7 +883,16 @@ def _resolve_threshold(rate: np.ndarray, cfg: SegmentationConfig,
         return derived if derived > 0.0 else float(cfg.rate_threshold_floor_C_min)
     a = np.abs(rate[np.isfinite(rate)])
     scale = float(np.percentile(a, 95)) if a.size else 0.0
-    return float(max(cfg.rate_threshold_floor_C_min, cfg.rate_threshold_frac * scale))
+    derived = float(cfg.rate_threshold_frac) * scale
+    if temp_C is not None:
+        tt = np.asarray(temp_C, dtype=float)
+        tt = tt[np.isfinite(tt)]
+        if tt.size and float(tt.max() - tt.min()) >= float(cfg.min_ramp_span_C):
+            # The record went somewhere; the noise floor does not apply. Still
+            # guard positivity, or a perfectly flat stretch would give r_on = 0
+            # and every point would read as ramping.
+            return derived if derived > 0.0 else float(cfg.rate_threshold_floor_C_min)
+    return float(max(cfg.rate_threshold_floor_C_min, derived))
 
 
 def _hysteretic_state(rate: np.ndarray, r_on: float, r_off: float) -> np.ndarray:
@@ -1325,7 +1347,7 @@ def segment_temperature_program(time_min, temp_C, *,
 
     rate = estimate_rate(t, T, window_min=cfg.rate_window_min,
                          min_points=cfg.rate_min_points)
-    r_on = _resolve_threshold(rate, cfg, program)
+    r_on = _resolve_threshold(rate, cfg, program, T)
     r_off = cfg.hysteresis_frac * r_on
     runs = _dissolve(_runs(_hysteretic_state(rate, r_on, r_off)), t, T, cfg)
     if not runs:

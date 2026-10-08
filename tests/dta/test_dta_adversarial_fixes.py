@@ -954,3 +954,89 @@ def test_estimate_rate_meets_the_bound_its_docstring_states():
         rate = ds.estimate_rate(t, 20.0 * t, window_min=max(0.5, 20.0 * dt))
         worst = max(worst, float(np.nanmax(np.abs(rate - 20.0))))
     assert worst <= bound, f"worst {worst:.3e} exceeds the documented {bound:.0e}"
+# ===========================================================================
+# ROBUST-L6 (deferred, now fixed) — the cross-package helper must not vanish
+#                                   in silence
+# ===========================================================================
+def test_the_filename_rate_helper_this_module_borrows_still_exists():
+    """`rate_from_filename` delegates to `xrd.htxrd_science`, inside a bare
+    `except Exception: return None`.
+
+    Delegating is right -- that function already handles the Windows-basename
+    rule, case insensitivity and the comma decimal separator, and a second copy
+    is a second place for them to drift. Swallowing the ImportError is also
+    right, because this module must import without the XRD package. Together
+    they mean that renaming or moving the upstream function turns the feature
+    off with no error anywhere: `rate_from_filename` simply answers None for
+    every input, which is indistinguishable from "this name does not match the
+    template".
+
+    So the contract gets a test instead of a silence. If the XRD package
+    renames `ramp_value_from_template`, this fails and names the dependency,
+    rather than a user noticing months later that filename rates stopped
+    being read.
+    """
+    from xrd.htxrd_science import ramp_value_from_template
+
+    # The upstream behaviour this module relies on, not merely its existence.
+    assert ramp_value_from_template("sample_010.txt", "sample_???.txt") == 10.0
+    assert ramp_value_from_template("SAMPLE_010.TXT", "sample_???.txt") == 10.0
+    assert ramp_value_from_template(r"C:\\data\\sample_010.txt",
+                                    "sample_???.txt") == 10.0
+    assert ramp_value_from_template("sample_010.txt", "other_???.txt") is None
+
+    # ... and that the delegation actually carries it through.
+    assert drs.rate_from_filename("glass_020.txt", "glass_???.txt") == 20.0
+    assert drs.rate_from_filename("glass_020.txt", "nope_???.txt") is None
+    assert drs.rate_from_filename("", "glass_???.txt") is None
+    assert drs.rate_from_filename("glass_020.txt", "") is None
+
+
+# ===========================================================================
+# ROBUST-H2 residue (deferred, now fixed) — a slow ramp with NO method file
+# ===========================================================================
+def test_a_slow_ramp_with_no_method_file_is_still_a_ramp():
+    """The 0.20 C/min noise floor used to veto a genuine slow ramp.
+
+    The floor exists because p95(|dT/dt|) on a file that is one long hold is
+    noise, and a fraction of noise is still noise. The programmed path stopped
+    consulting it when H2 was fixed, but a file with NO method still hit it: a
+    0.1 C/min scan -- the standard range for enthalpy-relaxation and
+    fictive-temperature work, which is exactly what the rate feature is for --
+    came back as a single `isothermal` with no rate, no temperature abscissa
+    and no Tg.
+
+    Noise is recognisable because it goes nowhere, so the floor is now skipped
+    when the record's own temperature moves at least `min_ramp_span_C` end to
+    end. Both halves are pinned here: the slow ramp reads as a ramp, and a real
+    soak does NOT fragment.
+    """
+    t = np.arange(0.0, 5000.0, 1.0)
+    T = 25.0 + 0.1 * t                       # 25 -> 525 C, 500 C of excursion
+    run = ds.segment_run(t, T)
+    assert len(run.segments) == 1
+    assert run.segments[0].kind == ds.KIND_HEAT
+    assert run.segments[0].rate_mode == pytest.approx(0.1, abs=5e-3)
+
+    # The control: a genuine soak, whose total excursion is a third of a degree.
+    rng = np.random.default_rng(7)
+    t_hold = np.arange(0.0, 600.0, 0.2)
+    T_hold = 800.0 + rng.normal(0.0, 0.05, t_hold.size)
+    assert float(T_hold.max() - T_hold.min()) < ds.SegmentationConfig().min_ramp_span_C
+    hold = ds.segment_run(t_hold, T_hold)
+    assert len(hold.segments) == 1
+    assert hold.segments[0].kind == ds.KIND_ISOTHERMAL
+
+
+def test_a_hold_after_a_big_ramp_is_still_a_hold():
+    """The span test is about the WHOLE record, so a 1000 C ramp turns the
+    floor off for the soak that follows it too. The flat-core test is what
+    keeps that soak a hold, and this pins that the two rules together still
+    give heat-then-hold rather than one long ramp."""
+    rng = np.random.default_rng(7)
+    t = np.concatenate([np.arange(0.0, 100.0, 0.1),
+                        100.0 + np.arange(0.0, 60.0, 0.1)])
+    T = np.concatenate([25.0 + 10.0 * np.arange(0.0, 100.0, 0.1),
+                        1025.0 + rng.normal(0.0, 0.05, 600)])
+    run = ds.segment_run(t, T)
+    assert [s.kind for s in run.segments] == [ds.KIND_HEAT, ds.KIND_ISOTHERMAL]
