@@ -7,7 +7,13 @@ Tabs:
                   (line/scatter/symbols/sticks/area/bars/steps), color,
                   offset, multi-panel assignment; style presets
                   (Publication/Presentation/Poster), log axes, legend,
-                  export at exact size in cm and dpi.
+                  export at exact size in cm and dpi. Reference phases can
+                  be added from CIF files as stick rows under the data
+                  (the Rietveld reflection-marker layout), with positions
+                  and intensities CALCULATED from each structure
+                  (xrd.cif_patterns) rather than listed from the cell — so
+                  a centred lattice contributes no extinct reflections and
+                  a bar's height means something.
   Point fitting — Origin's classic curve models (linear, polynomials,
                   exponentials, power, log, Boltzmann, Gaussian,
                   Lorentzian, Arrhenius) fit to any spectrum with ±1σ and
@@ -38,6 +44,13 @@ from core.qt_widgets import PlotWidget, to_float as _to_float
 
 LAYER_COLORS = ["black", "crimson", "royalblue", "seagreen", "darkorange", "purple", "teal", "brown"]
 
+CIF_OVERLAY_COLUMNS = ["Phase", "Style", "Color", "Panel", "Height %"]
+CIF_OVERLAY_COLORS = ["crimson", "royalblue", "seagreen", "darkorange", "purple", "teal",
+                      "saddlebrown", "magenta"]
+CIF_OVERLAY_STYLES = ("bars", "ticks", "overlay")
+CIF_OVERLAY_FOLDER_LIMIT = 12   # more stick rows than this is an unreadable figure
+CIF_HKL_LABEL_COUNT = 5         # strongest reflections labelled when hkl labels are on
+
 
 class FiguresWorkspace(QWidget):
     def __init__(self, parent: Optional[QWidget] = None, library: Optional[SpectrumLibrary] = None,
@@ -46,6 +59,9 @@ class FiguresWorkspace(QWidget):
         self.library = library if library is not None else SpectrumLibrary()
         self.xrd_db_path = xrd_db_path  # None -> xrd_id_science default
         self.layers: List[Dict[str, Any]] = []
+        # Calculated stick patterns overlaid on the XY builder's panels —
+        # the reference-phase markers a diffraction figure needs.
+        self.cif_overlays: List[Dict[str, Any]] = []
         self._ternary_df = None
         self._build_ui()
 
@@ -92,6 +108,8 @@ class FiguresWorkspace(QWidget):
         rm_btn = QPushButton("Remove selected layer")
         rm_btn.clicked.connect(self._remove_layer)
         ll.addWidget(rm_btn)
+
+        self._build_cif_overlay_panel(ll)
 
         grid_row = QHBoxLayout()
         grid_row.addWidget(QLabel("Panels rows×cols"))
@@ -170,6 +188,228 @@ class FiguresWorkspace(QWidget):
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
         self.tabs.addTab(tab, "XY builder")
+
+    # ------------------------------------------------------------------
+    # CIF stick overlays
+    # ------------------------------------------------------------------
+    def _build_cif_overlay_panel(self, parent_layout: QVBoxLayout) -> None:
+        """Reference phases from structure files, drawn as the row of short
+        bars under a diffraction pattern that every Rietveld plot uses.
+
+        Lines and their RELATIVE HEIGHTS are calculated from each
+        structure (xrd.cif_patterns), not from the cell alone, so a
+        centred lattice does not contribute the reflections it
+        extinguishes and a bar's height means something."""
+        parent_layout.addWidget(QLabel("CIF stick overlays (reference phases)"))
+
+        btn_row = QHBoxLayout()
+        add_cif_btn = QPushButton("Add CIF(s)…")
+        add_cif_btn.clicked.connect(self.add_cif_overlays)
+        btn_row.addWidget(add_cif_btn)
+        add_folder_btn = QPushButton("Add folder…")
+        add_folder_btn.setToolTip("Add every .cif in a folder (and its subfolders).")
+        add_folder_btn.clicked.connect(self.add_cif_overlay_folder)
+        btn_row.addWidget(add_folder_btn)
+        rm_cif_btn = QPushButton("Remove")
+        rm_cif_btn.clicked.connect(self._remove_cif_overlay)
+        btn_row.addWidget(rm_cif_btn)
+        parent_layout.addLayout(btn_row)
+
+        opt_row = QHBoxLayout()
+        opt_row.addWidget(QLabel("λ (Å)"))
+        self.cif_wavelength_edit = QLineEdit("1.5406")
+        self.cif_wavelength_edit.setMaximumWidth(55)
+        self.cif_wavelength_edit.setToolTip(
+            "Wavelength the stick positions are computed at — set it to the one "
+            "the plotted pattern was measured with, or the bars will not line up.")
+        opt_row.addWidget(self.cif_wavelength_edit)
+        opt_row.addWidget(QLabel("2θ max"))
+        self.cif_ttmax_edit = QLineEdit("90")
+        self.cif_ttmax_edit.setMaximumWidth(40)
+        opt_row.addWidget(self.cif_ttmax_edit)
+        self.cif_hkl_check = QCheckBox("hkl labels")
+        self.cif_hkl_check.setToolTip("Label the strongest few reflections of each phase with their hkl.")
+        opt_row.addWidget(self.cif_hkl_check)
+        parent_layout.addLayout(opt_row)
+
+        self.cif_table = QTableWidget(0, len(CIF_OVERLAY_COLUMNS))
+        self.cif_table.setHorizontalHeaderLabels(CIF_OVERLAY_COLUMNS)
+        self.cif_table.setMaximumHeight(130)
+        self.cif_table.cellChanged.connect(lambda *_: self._sync_cif_overlays_from_table())
+        self.cif_table.setToolTip(
+            "Style: 'bars' = intensity-scaled sticks in a row under the data (the "
+            "default), 'ticks' = equal-height reflection markers, 'overlay' = "
+            "intensity-scaled sticks drawn up from the baseline over the data.\n"
+            "Height %: the row's height as a percentage of the panel's data range.")
+        parent_layout.addWidget(self.cif_table)
+
+        self.cif_status_label = QLabel("")
+        self.cif_status_label.setWordWrap(True)
+        parent_layout.addWidget(self.cif_status_label)
+
+    def _cif_calc_kwargs(self) -> Dict[str, Any]:
+        # A figure is not a reflection list: a low-symmetry cell contributes
+        # several hundred lines above the search engine's 0.05% floor, which
+        # prints as a solid bar of ink. Half a percent keeps everything a
+        # reader can actually resolve on the page.
+        return {
+            "wavelength": _to_float(self.cif_wavelength_edit.text(), 1.5406) or 1.5406,
+            "two_theta_max": _to_float(self.cif_ttmax_edit.text(), 90.0) or 90.0,
+            "min_intensity": 0.5, "max_lines": 200,
+        }
+
+    def _load_cif_overlay(self, path: str) -> Optional[str]:
+        """Add one structure file. Returns an error message, or None on
+        success (already-loaded files are silently skipped)."""
+        from xrd import cif_patterns as cifp
+
+        ap = os.path.abspath(path)
+        if any(os.path.abspath(o["path"]) == ap for o in self.cif_overlays):
+            return None
+        try:
+            pattern = cifp.powder_pattern_from_cif(ap, **self._cif_calc_kwargs())
+        except Exception as exc:
+            return f"{os.path.basename(path)}: {exc}"
+        self.cif_overlays.append({
+            "path": ap,
+            "label": pattern.name or os.path.splitext(os.path.basename(ap))[0],
+            "pattern": pattern, "style": "bars",
+            "color": CIF_OVERLAY_COLORS[len(self.cif_overlays) % len(CIF_OVERLAY_COLORS)],
+            "panel": 1, "height": 8.0,
+        })
+        return None
+
+    def add_cif_overlays(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Add structure files", "", "CIF files (*.cif);;All files (*.*)")
+        if paths:
+            self._add_cif_paths(paths)
+
+    def add_cif_overlay_folder(self) -> None:
+        from xrd import cif_patterns as cifp
+
+        folder = QFileDialog.getExistingDirectory(self, "Add every CIF in a folder")
+        if not folder:
+            return
+        paths = cifp.list_cif_files(folder, recursive=True)
+        if not paths:
+            QMessageBox.information(self, "CIF overlays", f"No .cif files found under {folder}.")
+            return
+        truncated = ""
+        if len(paths) > CIF_OVERLAY_FOLDER_LIMIT:
+            truncated = (f" Only the first {CIF_OVERLAY_FOLDER_LIMIT} of {len(paths)} files were "
+                         f"added — a figure with more stick rows than that is unreadable; "
+                         f"add the rest individually if you really need them.")
+            paths = paths[:CIF_OVERLAY_FOLDER_LIMIT]
+        self._add_cif_paths(paths, extra_note=truncated)
+
+    def _add_cif_paths(self, paths: List[str], extra_note: str = "") -> None:
+        before = len(self.cif_overlays)
+        errors = [msg for msg in (self._load_cif_overlay(p) for p in paths) if msg]
+        added = len(self.cif_overlays) - before
+        self._rebuild_cif_table()
+        note = f"{added} phase(s) added." + extra_note
+        if errors:
+            note += f" {len(errors)} file(s) could not be read: " + "; ".join(errors[:3])
+            if len(errors) > 3:
+                note += f"; … and {len(errors) - 3} more"
+        cellonly = [o["label"] for o in self.cif_overlays
+                    if not o["pattern"].calculated_intensities]
+        if cellonly:
+            note += (f" Cell-only (no atom sites, so equal-height lines and no "
+                     f"systematic absences): {', '.join(cellonly[:3])}.")
+        self.cif_status_label.setText(note)
+        if added:
+            self.xy_plot.request_redraw(self.render_xy)
+
+    def _remove_cif_overlay(self) -> None:
+        rows = sorted({i.row() for i in self.cif_table.selectedIndexes()}, reverse=True)
+        if not rows:
+            QMessageBox.information(self, "CIF overlays", "Select a phase in the table first.")
+            return
+        for r in rows:
+            if 0 <= r < len(self.cif_overlays):
+                self.cif_overlays.pop(r)
+        self._rebuild_cif_table()
+        self.cif_status_label.setText("")
+        self.xy_plot.request_redraw(self.render_xy)
+
+    def _rebuild_cif_table(self) -> None:
+        self.cif_table.blockSignals(True)
+        self.cif_table.setRowCount(len(self.cif_overlays))
+        for row, o in enumerate(self.cif_overlays):
+            values = [o["label"], o["style"], o["color"], str(o["panel"]), f"{o['height']:g}"]
+            for col, val in enumerate(values):
+                item = QTableWidgetItem(val)
+                if col == 0:
+                    pat = o["pattern"]
+                    item.setToolTip(f"{o['path']}\n{pat.formula}  {pat.spacegroup}\n"
+                                    f"{len(pat.d)} reflections to {pat.two_theta.max():.1f}°2θ "
+                                    f"at λ={pat.wavelength} Å")
+                self.cif_table.setItem(row, col, item)
+        self.cif_table.blockSignals(False)
+        self.cif_table.resizeColumnsToContents()
+
+    def _sync_cif_overlays_from_table(self) -> None:
+        for row, o in enumerate(self.cif_overlays):
+            label = self.cif_table.item(row, 0)
+            style = self.cif_table.item(row, 1)
+            color = self.cif_table.item(row, 2)
+            panel = self.cif_table.item(row, 3)
+            height = self.cif_table.item(row, 4)
+            if label is not None and label.text().strip():
+                o["label"] = label.text().strip()
+            if style is not None and style.text().strip().lower() in CIF_OVERLAY_STYLES:
+                o["style"] = style.text().strip().lower()
+            if color is not None and color.text().strip():
+                o["color"] = color.text().strip()
+            if panel is not None:
+                try:
+                    o["panel"] = max(1, int(float(panel.text())))
+                except (TypeError, ValueError):
+                    pass
+            if height is not None:
+                o["height"] = max(0.5, _to_float(height.text(), 8.0) or 8.0)
+        self.xy_plot.request_redraw(self.render_xy)
+
+    def _draw_cif_overlays(self, ax, panel: int) -> None:
+        """Stack this panel's stick rows UNDER the data, one band per
+        phase, and extend the y-limits to make room — the layout a
+        Rietveld plot uses, so several phases never overprint each other.
+        'overlay' style instead draws inside the data area, for the
+        single-phase figure where that reads better."""
+        overlays = [o for o in self.cif_overlays if int(o.get("panel", 1)) == panel]
+        if not overlays:
+            return
+        ymin, ymax = ax.get_ylim()
+        span = (ymax - ymin) or 1.0
+        cursor = ymin
+        n_label = CIF_HKL_LABEL_COUNT if self.cif_hkl_check.isChecked() else 0
+        for o in overlays:
+            pat = o["pattern"]
+            tt = np.asarray(pat.two_theta, float)
+            inten = np.asarray(pat.intensity, float)
+            row_h = span * float(o["height"]) / 100.0
+            style = o["style"]
+            if style == "overlay":
+                bottom = ymin
+                tops = bottom + row_h * inten / 100.0
+            else:
+                gap = row_h * 0.4
+                bottom = cursor - gap - row_h
+                tops = (bottom + row_h if style == "ticks"
+                        else bottom + row_h * inten / 100.0)
+                cursor = bottom
+            ax.vlines(tt, bottom, tops, color=o["color"], lw=0.9, label=o["label"])
+            if n_label:
+                top_arr = np.full(len(tt), tops) if np.isscalar(tops) else np.asarray(tops, float)
+                for k in np.argsort(-inten)[:n_label]:
+                    ax.annotate(" ".join(str(v) for v in pat.hkl[k]),
+                                (tt[k], top_arr[k]), textcoords="offset points",
+                                xytext=(0, 2), ha="center", fontsize=5, color=o["color"],
+                                rotation=90, annotation_clip=True)
+        if cursor < ymin:
+            ax.set_ylim(cursor - span * 0.02, ymax)
 
     def set_spectra(self, spectrum_ids: List[str]) -> None:
         self.spectra_list.clear()
@@ -288,6 +528,11 @@ class FiguresWorkspace(QWidget):
                         ax.plot(x, y, lw=None, color=color, label=label)
                 except (ValueError, TypeError) as exc:  # e.g. bad color name
                     ax.plot(x, y, label=f"{label} ({exc})")
+            # CIF sticks go on AFTER the data: their rows are laid out
+            # against the panel's finished y-range, and an empty panel
+            # still gets its phases (a stick-only reference figure).
+            for panel_index, ax in enumerate(flat, start=1):
+                self._draw_cif_overlays(ax, panel_index)
             for ax in flat:
                 if self.logx_check.isChecked():
                     ax.set_xscale("log")

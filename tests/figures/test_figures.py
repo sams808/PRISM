@@ -300,3 +300,164 @@ def test_table_plots_from_csv(qtbot, tmp_path):
     widget.render_table_plot()
     qtbot.wait(20)
     assert len(widget.table_plot.figure.get_axes()) >= 1
+
+
+# --------------------------------------------------------------------------
+# CIF stick overlays on the XY builder
+# --------------------------------------------------------------------------
+
+def _nacl_cif(path, a=5.64, name="Halite"):
+    path.write_text("\n".join([
+        "data_x", f"_chemical_name_mineral '{name}'",
+        "_chemical_formula_sum 'Na Cl'",
+        "_symmetry_space_group_name_H-M 'F m -3 m'",
+        f"_cell_length_a {a}", f"_cell_length_b {a}", f"_cell_length_c {a}",
+        "_cell_angle_alpha 90", "_cell_angle_beta 90", "_cell_angle_gamma 90",
+        "loop_", "_symmetry_equiv_pos_as_xyz",
+        "x,y,z", "-x,-y,z", "-x,y,-z", "x,-y,-z",
+        "x,y+1/2,z+1/2", "-x,-y+1/2,z+1/2", "-x,y+1/2,-z+1/2", "x,-y+1/2,-z+1/2",
+        "x+1/2,y,z+1/2", "-x+1/2,-y,z+1/2", "-x+1/2,y,-z+1/2", "x+1/2,-y,-z+1/2",
+        "x+1/2,y+1/2,z", "-x+1/2,-y+1/2,z", "-x+1/2,y+1/2,-z", "x+1/2,-y+1/2,-z",
+        "loop_", "_atom_site_label", "_atom_site_type_symbol",
+        "_atom_site_fract_x", "_atom_site_fract_y", "_atom_site_fract_z",
+        "Na1 Na 0 0 0", "Cl1 Cl 0.5 0.5 0.5",
+    ]) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def _xrd_workspace(qtbot):
+    library = SpectrumLibrary()
+    x = np.linspace(10, 80, 500)
+    library.add(Spectrum(id=Spectrum.new_id(), title="pattern", path="", kind="xrd_xy",
+                         x=x, y=np.full_like(x, 100.0)))
+    widget = FiguresWorkspace(library=library)
+    qtbot.addWidget(widget)
+    widget.set_spectra([s.id for s in library.all()])
+    widget.spectra_list.selectAll()
+    widget._add_layers()
+    return widget
+
+
+def test_cif_overlay_draws_sticks_below_the_data(qtbot, tmp_path):
+    widget = _xrd_workspace(qtbot)
+    widget._add_cif_paths([_nacl_cif(tmp_path / "halite.cif")])
+    assert len(widget.cif_overlays) == 1
+    assert widget.cif_overlays[0]["label"] == "Halite"
+    assert widget.cif_table.rowCount() == 1
+
+    widget.render_xy()
+    qtbot.wait(20)
+    ax = widget.xy_plot.figure.get_axes()[0]
+    assert len(ax.collections) == 1                      # the stick row
+    ymin, _ymax = ax.get_ylim()
+    assert ymin < 100.0                                  # room was made below the data
+    segs = ax.collections[0].get_segments()
+    assert segs and all(s[0][1] < 100.0 and s[1][1] <= 100.0 for s in segs)
+    # the bars sit where the reflections are
+    pattern = widget.cif_overlays[0]["pattern"]
+    drawn = sorted(s[0][0] for s in segs)
+    assert np.allclose(drawn, sorted(pattern.two_theta))
+
+
+def test_bar_heights_follow_the_calculated_intensities(qtbot, tmp_path):
+    widget = _xrd_workspace(qtbot)
+    widget._add_cif_paths([_nacl_cif(tmp_path / "halite.cif")])
+    widget.render_xy()
+    qtbot.wait(20)
+    segs = widget.xy_plot.figure.get_axes()[0].collections[0].get_segments()
+    pattern = widget.cif_overlays[0]["pattern"]
+    heights = {round(s[0][0], 4): abs(s[1][1] - s[0][1]) for s in segs}
+    order_drawn = [heights[round(tt, 4)] for tt in pattern.two_theta]
+    # the strongest reflection gets the tallest bar, and the ordering of
+    # bar heights reproduces the ordering of the calculated intensities
+    assert np.argmax(order_drawn) == int(np.argmax(pattern.intensity))
+    assert np.allclose(np.argsort(order_drawn), np.argsort(pattern.intensity))
+
+    # 'ticks' draws them all the same height instead - the reflection-marker
+    # row a Rietveld plot uses
+    widget.cif_overlays[0]["style"] = "ticks"
+    widget.render_xy()
+    qtbot.wait(20)
+    segs = widget.xy_plot.figure.get_axes()[0].collections[0].get_segments()
+    tick_heights = [abs(s[1][1] - s[0][1]) for s in segs]
+    assert np.allclose(tick_heights, tick_heights[0])
+
+
+def test_two_phases_stack_in_separate_rows(qtbot, tmp_path):
+    widget = _xrd_workspace(qtbot)
+    widget._add_cif_paths([_nacl_cif(tmp_path / "halite.cif"),
+                           _nacl_cif(tmp_path / "periclase.cif", a=4.21, name="Periclase")])
+    assert [o["label"] for o in widget.cif_overlays] == ["Halite", "Periclase"]
+    assert widget.cif_overlays[0]["color"] != widget.cif_overlays[1]["color"]
+
+    widget.render_xy()
+    qtbot.wait(20)
+    ax = widget.xy_plot.figure.get_axes()[0]
+    assert len(ax.collections) == 2
+    tops = [max(max(s[0][1], s[1][1]) for s in c.get_segments()) for c in ax.collections]
+    bottoms = [min(min(s[0][1], s[1][1]) for s in c.get_segments()) for c in ax.collections]
+    # the second row sits entirely below the first - no overprinting
+    assert tops[1] < bottoms[0]
+
+
+def test_cif_overlay_honours_its_panel_assignment(qtbot, tmp_path):
+    widget = _xrd_workspace(qtbot)
+    widget._add_cif_paths([_nacl_cif(tmp_path / "halite.cif")])
+    widget.cif_overlays[0]["panel"] = 2
+    widget.cols_edit.setText("2")
+    widget.render_xy()
+    qtbot.wait(20)
+    axes = widget.xy_plot.figure.get_axes()
+    assert len(axes[0].collections) == 0
+    assert len(axes[1].collections) == 1
+
+
+def test_cif_overlay_table_edits_reach_the_plot(qtbot, tmp_path):
+    widget = _xrd_workspace(qtbot)
+    widget._add_cif_paths([_nacl_cif(tmp_path / "halite.cif")])
+    widget.cif_table.item(0, 1).setText("ticks")
+    widget.cif_table.item(0, 2).setText("navy")
+    widget.cif_table.item(0, 4).setText("15")
+    assert widget.cif_overlays[0]["style"] == "ticks"
+    assert widget.cif_overlays[0]["color"] == "navy"
+    assert widget.cif_overlays[0]["height"] == 15.0
+    # a style the renderer does not know is ignored rather than drawn wrong
+    widget.cif_table.item(0, 1).setText("wobble")
+    assert widget.cif_overlays[0]["style"] == "ticks"
+    qtbot.wait(20)
+
+
+def test_removing_a_cif_overlay_clears_its_sticks(qtbot, tmp_path):
+    widget = _xrd_workspace(qtbot)
+    widget._add_cif_paths([_nacl_cif(tmp_path / "halite.cif")])
+    widget.cif_table.selectRow(0)
+    widget._remove_cif_overlay()
+    assert widget.cif_overlays == []
+    assert widget.cif_table.rowCount() == 0
+    widget.render_xy()
+    qtbot.wait(20)
+    assert len(widget.xy_plot.figure.get_axes()[0].collections) == 0
+
+
+def test_unreadable_cif_is_reported_not_swallowed(qtbot, tmp_path):
+    widget = _xrd_workspace(qtbot)
+    bad = tmp_path / "bad.cif"
+    bad.write_text("data_x\nnot a structure\n", encoding="utf-8")
+    widget._add_cif_paths([str(bad)])
+    assert widget.cif_overlays == []
+    assert "could not be read" in widget.cif_status_label.text()
+    assert "bad.cif" in widget.cif_status_label.text()
+
+
+def test_wavelength_field_moves_the_sticks(qtbot, tmp_path):
+    """The bars must be computed at the wavelength the pattern was
+    measured at, or they line up with nothing."""
+    widget = _xrd_workspace(qtbot)
+    path = _nacl_cif(tmp_path / "halite.cif")
+    widget._add_cif_paths([path])
+    cu = widget.cif_overlays[0]["pattern"].two_theta.copy()
+    widget.cif_overlays.clear()
+    widget.cif_wavelength_edit.setText("1.7890")  # Co Kalpha
+    widget._add_cif_paths([path])
+    co = widget.cif_overlays[0]["pattern"].two_theta
+    assert co[0] > cu[0]  # the same plane diffracts further out at longer lambda

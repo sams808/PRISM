@@ -77,6 +77,71 @@ Pick X/Y/dY channels, compute Tg three ways (double tangent, parallel
 tangent, |dY| max) — the result panel says whether the methods agree.
 "Calculs" integrates or finds extrema over a range; Batch processes a folder.
 
+### Cyclic and multi-step programs
+
+A run that heats, holds and cools several times is split into **segments**
+— one per ramp or hold — and every analysis is scoped to the segment chosen in
+the selector next to the file name. This matters because temperature is not a
+usable x-axis across a whole cyclic run: sorting by it interleaves the ramps,
+and a Tg computed from the result is meaningless. Aggregate views ("All data
+vs time", "All heating segments") plot but do not compute, and say so.
+
+The **Program** tab shows the method the instrument actually ran, read
+from the `OrgMethod` lines in the file's own header, beside what the
+furnace did. A TA `.mth` method file can be loaded to cross-check it;
+the data file's header stays authoritative, and a method that does not match the
+data is reported rather than applied. Two diagnostics are worth reading before
+quoting a rate: *target gap* is how far a ramp finished from its setpoint
+(measured after the soak that follows it, which is where a ramp completes its
+approach), and *control lost below* is the temperature under which the
+furnace stopped holding the programmed rate — below that point a nominal
+"20 °C/min" cool is not what the specimen experienced. A programmed hold the
+furnace never settled into is reported as *absorbed* into the adjacent
+ramp, which is not the same claim as never executed.
+
+Export writes one row per segment, carrying the segment's rate, span, cycle
+and matched program step alongside the Tg columns. Batch runs either the whole
+file, every segment, or only segments matching the current one.
+
+### Rate series (Lasocka and Arrhenius)
+
+The **Rate series** tab builds a multi-rate series and fits it. Rows come
+from the heating segments of the cyclic run on screen, from separate files (one
+specimen per rate — the usual design), from records already imported, or typed
+by hand for a literature value. A file's heating rate is read from its own
+program, so a set of runs at 5/10/15/20/30 °C/min needs no typing.
+
+Values are blank until **Compute all values**, which measures every row
+with one shared window and method; a row that cannot be measured keeps its place
+and shows why, rather than dropping silently out of the fit. Available fits are
+Lasocka (Tg = A + B·ln q), Moynihan and Kissinger-form activation energies on
+Tg, and Kissinger, Flynn–Wall–Ozawa and Augis–Bennett on a peak temperature.
+Absolute temperature is used where the model requires it, independently of the
+°C/K display switch.
+
+Nothing here refuses to fit. Objections — too few distinct rates, a
+duplicated rate, a short rate span, a non-monotonic trend, mixed thermal
+history, mass loss along the series, a cooling-segment rate, a negative
+activation energy, the same segment added twice, a temperature column too
+coarsely rounded to resolve the transition — appear as warnings above the table,
+in the figure annotation, and in the exported CSV, and the fit is still
+produced. Read them before quoting a slope: successive cycles of one specimen
+confound heating rate with thermal history, and on a glass that crystallizes
+during its first heat the later cycles are not the same material.
+
+### Reading the clock and the rate
+
+The acquisition clock's unit is taken from its own column name, so an export
+whose first column is `Time (sec)` or `Time [h]` yields
+the same rates as one in minutes; the series notes which unit it read. Windows
+and segment durations are always shown in minutes whatever the file used.
+
+Where a method is present in the file, a programmed rate is believed even
+when it is very slow. Where no method is present, segment detection falls back
+to the trace's own noise level, and a genuine ramp slower than about
+0.2 °C/min is reported as a hold — if a run that slow matters, state the
+programmed rate by loading its method file.
+
 ## Raman ID (RRUFF)
 
 Auto-find (or type) your spectrum's peak positions, then **Find matches**:
@@ -152,13 +217,31 @@ once locally; a PRISM-format .sq (e.g. shared by a colleague) is used in
 place. Check any number of registered databases to probe them all in one
 search — every card keeps its source and code, and results say which
 database each hit came from.
+A folder of your own CIFs can be registered as a database too
+(**Add CIF folder…**): each structure's powder pattern — positions AND
+intensities, so a centred lattice contributes none of the reflections it
+extinguishes — is calculated once and indexed like a card.
+**Auto-find peaks** removes the background first and reads its detection
+limit in σ of the LOCAL noise — counting noise scales as √counts, so it is
+several times larger on an amorphous halo than at high angle, and a single
+global threshold turns that halo into dozens of false "reflections". The
+default is 4σ (measured: 3σ left ~9 spurious peaks per pattern, 4σ left 1.4,
+for 0.1% of the real ones). **Peak search options…** exposes the rest —
+noise window, SNIP background width, smoothing, minimum peak separation, the
+Kα2 test, a 2θ search range, an edge margin and the peak cap — applied live
+against the plot and remembered between sessions; **show threshold** draws
+the background and the detection limit so a found or missed peak can be
+explained by looking.
 Auto-find (or type) the pattern's 2θ peaks, set λ and the match tolerance,
 optionally restrict by chemistry (must-contain / must-exclude elements) or
 source, then **Search match**: candidates ranked by figure of merit
-(intensity-weighted coverage both ways), previewed as stick patterns under
-the query (shift/ctrl-click to compare several). **Accept** is iterative
-for mixtures, exactly like Raman ID: the phase is recorded, its peaks
-leave the query, the rest is re-searched; Ctrl+Z undoes.
+(intensity-weighted coverage both ways, weighted by how closely each line
+lands), previewed as stick patterns under the query (shift/ctrl-click to
+compare several). **Accept** is iterative for mixtures, exactly like
+Raman ID: the phase is recorded, its peaks leave the query, the rest is
+re-searched; Ctrl+Z undoes. The **Accepted phases** tab is the ledger —
+withdraw any phase (its peaks return to the search) and export the
+accepted structures as CIFs for a Rietveld refinement.
 **Check Raman-identified phases here** overlays the XRD reference lines
 of every phase accepted in Raman ID — the Raman→XRD cross-check in one
 click. The Card browser tab looks up any card by name/mineral/formula.
@@ -170,6 +253,14 @@ stack library spectra as layers — per-layer plot type (line, scatter,
 line+symbols, sticks, filled area, bars, steps), color, vertical offset, and
 multi-panel assignment — with Publication/Presentation/Poster style presets,
 log axes, and export at exact centimeter size and dpi (PNG/SVG/PDF/TIFF).
+**CIF stick overlays** add reference phases from structure files as the
+row of short bars under the data that a Rietveld plot uses: each phase gets
+its own band so several never overprint, as *bars* (intensity-scaled),
+*ticks* (equal-height reflection markers) or *overlay* (over the
+data), with editable color, panel and row height and optional hkl labels on
+the strongest reflections. Positions and heights are calculated from each
+structure at the λ you set, so extinct reflections are absent and a
+bar's height means something.
 **Point fitting**: Origin's classic models (linear, polynomials,
 exponential decay/growth, power law, logarithmic, Boltzmann sigmoid,
 Gaussian, Lorentzian, Arrhenius) with parameters ±1σ and R².
