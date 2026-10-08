@@ -362,6 +362,7 @@ class PrismMainWindow(QMainWindow):
                 htxrd_patterns=self.htxrd_page.series,
                 cif_overlays=cif_overlays,
                 baseline_settings=baseline_settings,
+                dta_rate_series=self.dta_page.rate_series_records(),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Save project error", str(exc))
@@ -408,6 +409,11 @@ class PrismMainWindow(QMainWindow):
         for sid, val in project.baseline_settings.items():
             self.baseline_page.settings.set(sid, val)
 
+        # Always called, including with an empty list, so opening a project
+        # CLEARS a rate series left over from the previous one instead of
+        # silently carrying its rows into the newly opened work.
+        self.dta_page.restore_rate_series(getattr(project, "dta_rate_series", []) or [])
+
         self.library_page._refresh_table()
         # Re-sync whichever workspace is currently visible.
         self._on_nav_changed(self.nav.currentRow())
@@ -417,9 +423,22 @@ class PrismMainWindow(QMainWindow):
         )
 
     def _dta_records_from_library(self):
+        """Record dicts for the DTA workspace, one per DTA-kind library item.
+
+        Each record carries the library's stable `Spectrum.id`. The DTA
+        workspace caches per-file state (detected segmentation, the selected
+        segment) and must key that cache off an identity two different files
+        can never share: display titles DO collide — `set_records` already
+        has to de-duplicate them with a " (2)" suffix — and list position
+        changes on every reorder, so keying off either would silently apply
+        one file's segment index to another file's data. Records built
+        outside the shell (tests construct them by hand) may omit the key, so
+        consumers must treat a missing "id" as "not cacheable".
+        """
         records = []
         for spectrum in self.library.by_kind(DTA_KINDS):
             records.append({
+                "id": spectrum.id,
                 "title": spectrum.title,
                 "path": spectrum.path,
                 "df": spectrum.df,

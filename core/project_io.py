@@ -41,7 +41,7 @@ from core.qt_models import Spectrum
 
 PROJECT_FORMAT = "prism-project"
 LEGACY_FORMATS = {"dataapp-project"}  # pre-rename projects still load
-PROJECT_VERSION = 3  # v3 added cif_overlays.json + baseline_settings.json
+PROJECT_VERSION = 4  # v4 added dta_rate_series.json
 
 
 @dataclass
@@ -52,6 +52,12 @@ class ProjectData:
     htxrd_patterns: list = field(default_factory=list)   # htxrd_science.HtxrdPattern
     cif_overlays: list = field(default_factory=list)     # Simple Plot CIF series (paths + display fields; peaks recomputed on load)
     baseline_settings: Dict[str, dict] = field(default_factory=dict)  # per-spectrum Baseline workspace settings
+    # DTA multi-rate series (dta_rate_series.RateSeries.to_dict()). A series
+    # holds MEASUREMENTS -- each row's Tg or Tp as it was determined, with the
+    # window and method that produced it -- so it is saved rather than re-derived
+    # on load: re-measuring with whatever settings happen to be current would
+    # silently change published numbers.
+    dta_rate_series: list = field(default_factory=list)
 
 
 def _json_safe(obj: Any) -> Any:
@@ -74,6 +80,7 @@ def save_project(
     path: str, spectra: List[Spectrum], fit_params: Dict[str, list],
     *, xas_spectra: Optional[list] = None, htxrd_patterns: Optional[list] = None,
     cif_overlays: Optional[list] = None, baseline_settings: Optional[Dict[str, dict]] = None,
+    dta_rate_series: Optional[list] = None,
 ) -> None:
     records = []
     arrays: Dict[str, np.ndarray] = {}
@@ -150,6 +157,8 @@ def save_project(
             zf.writestr("cif_overlays.json", json.dumps(_json_safe(cif_overlays), indent=2))
         if baseline_settings:
             zf.writestr("baseline_settings.json", json.dumps(_json_safe(baseline_settings), indent=2))
+        if dta_rate_series:
+            zf.writestr("dta_rate_series.json", json.dumps(_json_safe(dta_rate_series), indent=2))
         for sid, df in dfs.items():
             zf.writestr(f"df/{sid}.csv", df.to_csv(index=False))
 
@@ -237,7 +246,13 @@ def load_project(path: str) -> ProjectData:
         baseline_settings = {}
         if "baseline_settings.json" in names:
             baseline_settings = json.loads(zf.read("baseline_settings.json").decode("utf-8"))
+        # Absent in every v1-v3 project, which must still open: the section
+        # simply stays empty rather than the load failing on a missing member.
+        dta_rate_series = []
+        if "dta_rate_series.json" in names:
+            dta_rate_series = json.loads(zf.read("dta_rate_series.json").decode("utf-8"))
 
     return ProjectData(spectra=spectra, fit_params=fit_params,
                        xas_spectra=xas_spectra, htxrd_patterns=htxrd_patterns,
-                       cif_overlays=cif_overlays, baseline_settings=baseline_settings)
+                       cif_overlays=cif_overlays, baseline_settings=baseline_settings,
+                       dta_rate_series=dta_rate_series)

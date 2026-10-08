@@ -112,6 +112,38 @@ def build_stylesheet(palette: dict = PALETTE) -> str:
         font-size: 12px;
         color: {p['muted']};
     }}
+    /* Warning banners. Three objectNames rather than three stylesheets set
+       from code: the severity of a banner is a state of the widget, and a
+       widget that paints itself cannot be restyled by a theme switch. The
+       clean state is deliberately quiet (no fill, muted text) so that a
+       series with nothing wrong does not look like an alarm that was
+       dismissed -- "no alarms on unknown facts". */
+    QLabel#WarningBanner {{
+        background: {p['critical_bg']};
+        border: 1px solid {p['warn']};
+        border-left: 3px solid {p['warn']};
+        border-radius: 3px;
+        padding: 7px 9px;
+        font-size: 12px;
+        color: {p['ink']};
+    }}
+    QLabel#WarningBannerCritical {{
+        background: {p['critical_bg']};
+        border: 1px solid {p['critical']};
+        border-left: 3px solid {p['critical']};
+        border-radius: 3px;
+        padding: 7px 9px;
+        font-size: 12px;
+        color: {p['ink']};
+    }}
+    QLabel#WarningBannerOk {{
+        background: transparent;
+        border: none;
+        border-left: 3px solid {p['border']};
+        padding: 7px 9px;
+        font-size: 12px;
+        color: {p['muted']};
+    }}
     QPushButton {{
         background: {p['card']};
         border: 1px solid {p['border']};

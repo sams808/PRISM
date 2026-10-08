@@ -156,6 +156,69 @@ def _read_text_autodetect(path: Path) -> str:
     """
     return _decode_text_autodetect(path.read_bytes())[0]
 
+class TAHeader(dict):
+    """First-wins mapping of TA header values that also keeps every header
+    line in file order.
+
+    WHY this exists: `parse_ta_sdt_txt` used to fold the header with
+    `dict.setdefault`, so a repeated key kept only its FIRST value. A TA
+    method writes one `OrgMethod` line per program step, so on a cyclic run
+    (8 ramps + 8 isotherms, 19 lines) that discarded 18 of the 19 lines and
+    the temperature program was destroyed before any analysis could read it.
+    The same fold lost 2 of 3 `Xcomment` / `InstCalDate` / `InstCalFile`
+    lines on every TA export, cyclic or not.
+
+    WHY lookup is unchanged: `header[key]` and `header.get(key)` still answer
+    with the FIRST value seen, because callers across PRISM read
+    single-valued keys (`Sample`, `Size`, `Operator`) that way and a silent
+    change there would be both invisible and wrong. Being a `dict` subclass
+    also keeps `TAHeader() == {}` true for a headerless file, which
+    `tests/core/test_io_universal.py` asserts. The repeated values are purely
+    additive, reached through `all()` and `lines`.
+
+    `lines` is a record of the FILE, not a mirror of the mapping: assigning
+    into the mapping afterwards deliberately does not append to it.
+    """
+
+    __slots__ = ("lines",)
+
+    def __init__(self, pairs: _t.Iterable[tuple[str, str]] = ()) -> None:
+        """Build from (key, value) pairs in file order.
+
+        Accepts another `TAHeader` (its `lines` are carried over, so a copy
+        keeps its repeats), any mapping, or any iterable of 2-item pairs.
+        Items that are not 2-item pairs are skipped instead of raising: this
+        runs on the file-parsing path, where a malformed export must degrade
+        to a thinner header, never to an import failure.
+        """
+        super().__init__()
+        source = getattr(pairs, "lines", None)
+        if source is None:
+            source = pairs.items() if hasattr(pairs, "items") else pairs
+        recorded: list[tuple[str, str]] = []
+        for item in source:
+            try:
+                key, val = item
+            except (TypeError, ValueError):
+                continue
+            recorded.append((key, val))
+            if key not in self:
+                dict.__setitem__(self, key, val)
+        self.lines = tuple(recorded)
+
+    def all(self, key: str) -> list[str]:
+        """Every value recorded for `key`, in file order ([] when absent).
+
+        Falls back to the single stored value when `lines` is empty, so a
+        header rebuilt from a plain mapping (a project round-trip, a hand-made
+        test stub) never reports "no values" for a key that `get` answers.
+        """
+        found = [v for k, v in getattr(self, "lines", ()) if k == key]
+        if not found and dict.__contains__(self, key):
+            found = [dict.__getitem__(self, key)]
+        return found
+
+
 def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFrame]:
     """
     Parse TA Instruments SDT/Q600-style text export:
@@ -198,7 +261,12 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
         header_lines = lines[:start_idx]
         data_lines = lines[start_idx:]
 
-    header: dict[str, str] = {}
+    # Collect EVERY key/value line, in file order. `setdefault` used to be
+    # called here, which kept only the first value of a repeated key and so
+    # destroyed 18 of the 19 `OrgMethod` program lines of a cyclic run (see
+    # TAHeader). TAHeader preserves the first-wins lookup every caller relies
+    # on and exposes the rest through `.all()` / `.lines`.
+    header_pairs: list[tuple[str, str]] = []
     for line in header_lines:
         if not line.strip():
             continue
@@ -206,7 +274,8 @@ def parse_ta_sdt_txt(path: Path) -> tuple[dict[str, str], list[str], pd.DataFram
         if len(parts) >= 2:
             key = parts[0].strip()
             val = "\t".join(parts[1:]).strip()
-            header.setdefault(key, val)
+            header_pairs.append((key, val))
+    header = TAHeader(header_pairs)
 
     sig_map: dict[int, str] = {}
     sig_re = re.compile(r"^Sig(\d+)\s+(.*)$")
@@ -394,6 +463,11 @@ def parse_ta_sdt(path: str) -> tuple[pd.DataFrame, dict]:
         "signals": signals,
         "canonical_map": canonical,
         "raw_header": header,
+        # Repeated header keys, in file order. Needed in ADDITION to
+        # `raw_header` because `core.project_io._json_safe` flattens the
+        # TAHeader subclass to a plain dict on .prism save, so `header.lines`
+        # does not survive a project round-trip but this plain list does.
+        "header_lines": [[k, v] for k, v in getattr(header, "lines", ())],
         "path": os.path.abspath(path),
     }
     return df, meta
@@ -917,6 +991,9 @@ def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
         "canonical_map": canonical,
         "path": os.path.abspath(path),
         "raw_header": header,
+        # See parse_ta_sdt: `.lines` is lost when _json_safe flattens the
+        # TAHeader subclass into a plain dict on .prism save; this survives.
+        "header_lines": [[k, v] for k, v in getattr(header, "lines", ())],
         "signals": signals,
     }
     return df, meta

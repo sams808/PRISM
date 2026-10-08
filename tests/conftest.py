@@ -255,3 +255,88 @@ def _prevent_blocking_qt_dialogs(monkeypatch):
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+
+
+# --------------------------------------------------------------------------
+# Cyclic / multi-step DTA fixtures
+#
+# Two of these are committed files and are ALWAYS present; only the
+# full-resolution source folder can be missing, which is why the skip marker
+# is named for the folder (`requires_dta_bm`) and not for the fixture.
+# --------------------------------------------------------------------------
+
+
+def _find_dta_bm_dir() -> Path:
+    """The real BM DTA folder (BM-0-cycles.txt, BM-0.txt, cycles.mth) is 5 MB
+    of raw instrument export and is not part of the repo.
+    PRISM_DTA_BM_DIR overrides the default location for other machines/CI;
+    full-file DTA tests skip when neither is present. Same contract as
+    _find_saxs_physic_based_dir above, and the same default-path arithmetic
+    as tools/make_dta_cycles_example.py — the generator and the tests that
+    check the fixture against reality must never disagree about the source."""
+    import os
+    override = os.environ.get("PRISM_DTA_BM_DIR")
+    if override:
+        return Path(override)
+    return PRISM_ROOT.parents[2] / "DTA" / "BM"
+
+
+DTA_BM_DIR = _find_dta_bm_dir()
+
+requires_dta_bm = pytest.mark.skipif(
+    not DTA_BM_DIR.is_dir(),
+    reason=f"real DTA/BM folder not present ({DTA_BM_DIR}); set PRISM_DTA_BM_DIR",
+)
+
+
+@pytest.fixture(scope="session")
+def dta_cycles_path() -> Path:
+    """Committed cyclic-DTA fixture: every 4th row of the real 18996-row
+    BM-0-cycles run (4749 rows, 890 min, 4 heat/cool cycles), header verbatim
+    including all 19 OrgMethod lines. Always present — regenerate with
+    tools/make_dta_cycles_example.py. (SPEC_cycles §4.2 called this
+    `dta_cycles_example_path`; MERGED_DECISIONS M8 renamed it.)"""
+    return EXAMPLES_DIR / "DTA_cycles_example.txt"
+
+
+@pytest.fixture(scope="session")
+def dta_cycles_mth_path() -> Path:
+    """Committed byte-verbatim copy of the TA binary method file cycles.mth
+    (6776 bytes) that produced the cyclic run. Always present. (SPEC_cycles
+    §4.2 called this `dta_cycles_method_path`; MERGED_DECISIONS M8 renamed
+    it.)"""
+    return EXAMPLES_DIR / "DTA_cycles_example.mth"
+
+
+@pytest.fixture(scope="session")
+def dta_bm_dir() -> Path:
+    """Folder holding the full-resolution real DTA runs. Guard every test that
+    uses it with @requires_dta_bm — the folder is absent on any machine but
+    the one the data was collected on, unless PRISM_DTA_BM_DIR points at a
+    copy."""
+    return DTA_BM_DIR
+
+
+@pytest.fixture
+def dta_synthetic_cycles():
+    """(t, T) arrays for a clean 2-cycle temperature program, with NO file
+    dependency: heat 25→600 °C at 20 °C/min, hold 5 min, cool to 25 at 20,
+    then the same cycle at 10 °C/min. dt = 0.05 min, ±0.02 °C uniform noise,
+    fixed seed. Expected segmentation: 6 segments, heat/iso/cool ×2, 2 cycles.
+
+    Exists so segmentation can be tested where the right answer is known by
+    construction rather than by measurement of a real run: the real file's
+    cooling ramps lose control below ~240–470 °C and its low-temperature
+    holds never happen at all, so a failure there is ambiguous between "the
+    segmenter is wrong" and "the furnace did something else". Here it is not.
+    The noise is deliberately tiny and uniform (not Gaussian): it only breaks
+    exact-tie degeneracies in duplicate-temperature handling, and must never
+    be large enough to change a segment boundary."""
+    import numpy as np
+    # ideal program knots: (time in min, setpoint in °C), piecewise linear
+    knots_t = [0.0, 28.75, 33.75, 62.5, 120.0, 125.0, 182.5]
+    knots_T = [25.0, 600.0, 600.0, 25.0, 600.0, 600.0, 25.0]
+    t = np.arange(0.0, knots_t[-1] + 1e-9, 0.05)
+    T = np.interp(t, knots_t, knots_T)
+    rng = np.random.default_rng(20250926)
+    return t, T + rng.uniform(-0.02, 0.02, size=t.size)

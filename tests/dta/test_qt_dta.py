@@ -220,3 +220,40 @@ def test_shell_dta_page_picks_up_library_records(qtbot, dta_example_path):
 
     assert window.dta_page.record_combo.count() == 1
     assert window.dta_page.df is not None
+
+
+def test_shell_dta_records_carry_spectrum_id(qtbot, dta_example_path):
+    """The shell's record dicts must carry the library's stable Spectrum.id.
+
+    DtaWorkspace caches per-file state (a detected SegmentedRun, the selected
+    segment) and needs an identity two files can never share. Display titles
+    can collide — importing the same file twice gives two spectra with the
+    same title, which set_records only tells apart with a cosmetic " (2)"
+    suffix — so a title-keyed cache would hand one file's segment index to
+    another file's data. This test pins the id through, and pins that the
+    four pre-existing keys are unchanged by the addition.
+    """
+    window = PrismMainWindow()
+    qtbot.addWidget(window)
+
+    first = _load_spectrum_from_path(str(dta_example_path))
+    second = _load_spectrum_from_path(str(dta_example_path))
+    window.library.add(first)
+    window.library.add(second)
+
+    records = window._dta_records_from_library()
+    assert [rec["id"] for rec in records] == [first.id, second.id]
+    # Same file imported twice: identical titles, distinct ids. This is the
+    # exact case that makes the id necessary rather than convenient.
+    assert records[0]["title"] == records[1]["title"]
+    assert first.id != second.id
+
+    for rec, spectrum in zip(records, (first, second)):
+        assert rec["title"] == spectrum.title
+        assert rec["path"] == spectrum.path
+        assert rec["df"] is spectrum.df
+        assert rec["meta"] is spectrum.meta
+
+    # Additive only: the workspace still consumes the records unchanged.
+    window.dta_page.set_records(records)
+    assert window.dta_page.record_combo.count() == 2
