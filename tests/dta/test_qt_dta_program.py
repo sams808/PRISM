@@ -32,7 +32,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
 from dta.qt_dta import (

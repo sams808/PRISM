@@ -91,6 +91,62 @@ def _cli_build_amcsd_cache(argv, log=None) -> int:
         return 1
 
 
+def _cli_distcheck(argv, log=None) -> int:
+    """`--distcheck`: build the whole application off-screen, visit every
+    workspace, open the bundled demo project if it is present, and exit 0.
+    The installer's and the portable zip's self-test — a frozen build that
+    misses a module or a data file dies here, in a log next to the exe,
+    instead of on a colleague's desk. Returns 1 on any failure."""
+    import time
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    log = log or _cli_log(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "prism_distcheck.log"))
+    t0 = time.time()
+    try:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication(sys.argv)
+        from core.qt_help import APP_VERSION, HELP_HTML, MODULE_GUIDES
+        from core.qt_shell import NAV_ITEMS, PrismMainWindow
+        from core.qt_theme import apply_theme
+        apply_theme(app)
+        log(f"PRISM {APP_VERSION} distcheck: python {sys.version.split()[0]}, frozen={hasattr(sys, '_MEIPASS')}")
+        window = PrismMainWindow()
+        window.show()
+        app.processEvents()
+        for mod in list(window.module_checks):
+            window.set_module_enabled(mod, True)
+        for row, name in enumerate(NAV_ITEMS):
+            window.nav.setCurrentRow(row)
+            app.processEvents()
+            if window.stack.currentWidget() is not window._pages_by_nav[name]:
+                raise RuntimeError(f"nav row {row} did not open {name}")
+        log(f"  {len(NAV_ITEMS)} workspaces opened; {len(MODULE_GUIDES)} module guides, help {len(HELP_HTML)} chars")
+        import numpy, scipy, matplotlib, lmfit, pandas, rampy, xraydb  # noqa: F401 - the frozen science stack
+        log(f"  numpy {numpy.__version__}, scipy {scipy.__version__}, matplotlib {matplotlib.__version__}, "
+            f"lmfit {lmfit.__version__}, pandas {pandas.__version__}, xraydb {xraydb.__version__}")
+        # a CIF powder pattern needs xraydb's data file to have been bundled
+        import raman.raman_tools as rt
+        rows = rt.peak_table([1, 2, 3, 4, 5, 6, 7], [0, 0, 1, 5, 1, 0, 0])
+        if len(rows) != 1:
+            raise RuntimeError("peak_table self-test failed")
+        import core.io_universal as iou
+        base = sys._MEIPASS if hasattr(sys, "_MEIPASS") else os.path.dirname(os.path.abspath(__file__))
+        demo = os.path.join(base, "EXAMPLES", "Raman_example.txt")
+        if os.path.isfile(demo):
+            df = iou.load_any(demo)
+            log(f"  EXAMPLES/Raman_example.txt: {len(df)} rows")
+        deadline = time.time() + 0.5
+        while time.time() < deadline:
+            app.processEvents()
+        window.close()
+        app.processEvents()
+        log(f"OK: distcheck passed in {time.time() - t0:.1f} s")
+        return 0
+    except Exception:
+        import traceback
+        log("FAILED:\n" + traceback.format_exc())
+        return 1
+
+
 def main() -> int:
     _configure_headless_stdio()
 
@@ -99,6 +155,8 @@ def main() -> int:
         return _cli_build_rruff_cache(argv)
     if "--build-amcsd-cache" in argv:
         return _cli_build_amcsd_cache(argv)
+    if "--distcheck" in argv:
+        return _cli_distcheck(argv)
 
     from PySide6.QtWidgets import QApplication
 

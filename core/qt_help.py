@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 
 # Single source of the app version: shown in the window title and About,
 # and matched by the git tag at release time.
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.8.0"
 APP_NAME = "PRISM"
 APP_TAGLINE = "Platform for Research In Spectroscopy & Materials"
 
@@ -55,6 +55,21 @@ workspace for your technique in the left rail. Everything you derive
 spectrum. <b>File &rsaquo; Save project</b> keeps the whole session in one
 <code>.prism</code> file (older project files still load).</p>
 
+<h2>Home</h2>
+<p>The first page. <b>Modules</b>: every technique is a card with an
+<i>Enabled</i> switch &mdash; a fresh install starts with everything off, so
+switch on what this computer is for (the <b>Raman station</b> preset enables
+Raman, Fitting, Processing and Figures; <b>All modules</b> and <b>None</b> do
+what they say). Disabled modules disappear from the rail until you switch them
+back on here; the choice is remembered per user. <b>Reference databases</b>
+lists what is installed on this computer (RRUFF, AMCSD, XRD card databases,
+CIF folders, your Raman reference library) and packs them with
+<b>Export databases&hellip;</b> into one folder that another PRISM installs with
+<b>Import a database pack&hellip;</b> &mdash; only for people who hold the same
+rights to those databases. Data files dropped anywhere on the window are
+imported into the Library; <b>File &rsaquo; Paste data from clipboard</b>
+imports a table copied from Excel, Origin or a text editor.</p>
+
 <h2>Library</h2>
 <p><b>Import files…</b> auto-detects the format (plain XY, TA SDT thermal exports,
 SAXS EDF, Rigaku <code>.rasx</code>, JCAMP-DX). If it guesses wrong, use
@@ -78,7 +93,14 @@ the ISG pressure series: λ=1e7 beat a hand-drawn baseline.)</p>
 <p>Multi-select spectra to overlay them: separate panels or stacked with an
 offset. Load CIF files to overlay predicted Bragg positions (managed per-CIF:
 color, label, visibility). Difference mode shows A−B for exactly two selected
-spectra. Toggle <b>Annotate on click</b> to pin peak-position labels.</p>
+spectra. Toggle <b>Annotate on click</b> to pin peak-position labels.
+<b>Peak labels</b> marks every peak above the threshold (% of the intensity
+range) with its position, and <b>Peak table…</b> lists position, height, FWHM
+(full width at half prominence) and area for the selected spectra, to copy or
+save as CSV. <b>Cursor readout</b> shows the value of every plotted spectrum at
+the mouse position. Line width, lines/points and legend placement are in the
+style row; <b>Copy plot</b> and <b>Copy data</b> put the figure (image) or the
+selected spectra (tab-separated text) on the clipboard.</p>
 
 <h2>Peak Fitting</h2>
 <p>Set up components three ways: in the <b>Fit param.</b> table, with
@@ -170,6 +192,16 @@ to the trace's own noise level, and a genuine ramp slower than about
 programmed rate by loading its method file.</p>
 
 <h2>Raman ID (RRUFF)</h2>
+<p><b>Match by</b> chooses the search: <i>peak positions</i> (below) or
+<i>spectrum similarity</i>, the Pearson correlation (or a normalised Euclidean
+distance) of the whole query against each reference on a common grid — raw,
+smoothed, or as first/second derivatives (derivatives remove a fluorescence
+slope), optionally inside an x range. The sources are RRUFF's measured spectra
+(after the database filters) and <b>your own reference library</b>: <b>Add
+query to my library…</b> stores a spectrum you measured (name, laser λ,
+source, notes), <b>Manage library…</b> renames, removes, exports and imports
+it, and the library travels with a database pack (Home). A score of 1 means an
+identical shape; hits from the library are marked "my library".</p>
 <p>Auto-find (or type) your spectrum's peak positions, then <b>Find matches</b>:
 candidates are ranked by peak overlap, each showing its <b>laser wavelength</b> —
 relative intensities vary between wavelengths, so judge the overlay yourself.
@@ -222,7 +254,14 @@ multiply, divide, average, weighted sum, and <b>modulated addition</b>
 spectrum: scale/offset, normalizations (max, area, min-max), log/ln/exp/√/
 power/reciprocal/|y|, x-shift and x-scale calibration, crop, resample,
 smoothing (Savitzky-Golay, moving average, median), cosmic-ray despiking,
-Savitzky-Golay derivatives, cumulative integral. Analysis:
+Savitzky-Golay derivatives (1st to 4th), cumulative integral. Raman tools:
+<b>normalize to a value</b> at x₀, <b>subtract a range mean</b> (offset
+baseline), <b>remove a peak</b> (interpolate across it), <b>SNV</b> and
+<b>MSC</b> (scatter corrections), <b>median of spectra</b>, x-axis
+<b>unit conversion</b> between wavelength, wavenumber, Raman shift (give the
+laser λ) and photon energy, with an optional Jacobian, and <b>x-axis
+calibration</b> against reference lines ("measured -&gt; reference" pairs,
+polynomial order chosen by you, residuals reported). Analysis:
 <b>linear-combination fitting</b> (target ≈ Σ cᵢ·refᵢ, free or non-negative
 coefficients, with R² and percentages) and summary statistics.
 <i>Selection order matters</i>: the first-selected spectrum is A (or the LCF
@@ -379,6 +418,22 @@ for mixtures; every accept is Ctrl+Z-undoable and excluded from re-searches.</li
 or the table. G/GL/V/EMG shapes; widths are HWHM (double for true FWHM).
 Classic = one-shot Levenberg-Marquardt; Origin-like = visible step-by-step
 iterations. Save models to reuse in Multi-Fit batches.</li></ol>
+<h2>What replaced Spectragryph</h2>
+<p>Peak list with FWHM and areas (<b>Peak table…</b>) and automated peak
+labels; the multi-spectrum cursor readout; line/point styles, legend
+placement, copy plot / copy data to the clipboard and paste from it (File
+menu); drag-and-drop import; simple and advanced baselines (Baseline and
+Calculations); normalisations to peak, area or a value; smoothing,
+despiking, peak removal, cut-off (crop); SNV / MSC; arithmetic, scaled
+subtraction, averaging and median of spectra; Raman-shift ⇄ wavelength
+conversion and x-axis calibration against reference lines; derivatives to
+the 4th order; identification by full-spectrum similarity against RRUFF and
+your own reference library, with hit lists; mixture analysis (LCF) and
+Gaussian deconvolution (Peak Fitting, with Voigt and EMG shapes too). Not
+ported: Spectragryph's own .sgd/.spc file formats, the spectroscope view,
+concentration from Lambert-Beer, film thickness, hardware acquisition, and
+scripted processing sequences (use Multi-Fit, batch Baseline and the
+Calculations' multi-selection instead).</p>
 <h2>Pitfalls</h2><ul><li>Compare intensities only within one laser wavelength
 &mdash; resonance changes relative heights between 532 and 785 nm.</li>
 <li>Cosmic-ray spikes bias fits: despike first (Calculations).</li>
@@ -538,8 +593,11 @@ bands), ALS, polynomial/spline/rubberband through picked regions. Settings
 are remembered per spectrum; batch Apply creates _bl spectra.</p>
 <p><b>Calculations</b> is the everything-else toolbox: arithmetic between
 spectra (selection ORDER defines A), modulated addition (blend a reference
-in over a chosen range via ramp/gaussian envelopes), normalizations,
-log/exp/power transforms, x-calibration (shift/scale), crop, resample,
+in over a chosen range via ramp/gaussian envelopes), normalizations (max,
+area, min-max, to a value at x&#8320;), log/exp/power transforms,
+x-calibration (shift/scale, or a polynomial against reference lines),
+x-unit conversion (nm / cm&#8315;&sup1; / Raman shift / eV), subtract a range
+mean, remove a peak, SNV, MSC, median of spectra, crop, resample,
 smoothing (SG keeps peak shapes; median kills spikes), despiking,
 derivatives, integrals, linear-combination fitting (non-negative for
 physical mixtures), statistics, and cluster analysis of spectral series

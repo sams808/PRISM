@@ -4,10 +4,8 @@ structure with its true parameters, recorded reasons, robustness, tables, JSON r
 from __future__ import annotations
 
 import json
-import os
 
 import numpy as np
-import pandas as pd
 import pytest
 
 import fit_synthetic as fs  # noqa: E402  (tests/saxs is on sys.path under pytest)

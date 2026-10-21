@@ -18,5 +18,3 @@ PRISM 2.5.0 — the databases-are-yours release: startup in seconds, an XRD data
 - **Fixed: duplicated Help menus** — every module toggle used to add another Help menu to the menu bar.
 - **Every workspace now shows a plot on arrival** (query pattern / spectrum / selected inputs) instead of an empty axes, with auto-selection of the first spectrum where nothing was selected; Update plot buttons added on the ID pages.
 - Checkable list entries (e.g. the database list) now render their checkmarks correctly in dark mode.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

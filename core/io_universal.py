@@ -86,8 +86,31 @@ def _normalize_num_token(tok: str) -> str | None:
         s = "0" + s
     return s
 
+_DEC_COMMA_TOKEN = re.compile(r"^[+-]?\d+,\d+(?:[eEdD][+-]?\d+)?$")
+
+
+def _decimalize_commas(line: str) -> str:
+    """Read ',' as the decimal mark when a line is clearly a European
+    export: no '.', another separator present (tab, semicolon or space),
+    and every token between those separators is a number written
+    'digits,digits'. A plain comma CSV (no other separator) keeps ',' as
+    its separator. Before this, `_MULTI_SEP` split '100,0000 1000,0000'
+    into four integer tokens, so a decimal-comma file imported as
+    x = 100, y = 0 (measured 2026-10-21); the `_DEC_COMMA` normaliser
+    below never saw an intact token."""
+    if "," not in line or "." in line:
+        return line
+    s = line.strip()
+    if not re.search(r"[\t; ]", s):
+        return line
+    parts = [p for p in re.split(r"[\t; ]+", s) if p]
+    if len(parts) >= 2 and all(_DEC_COMMA_TOKEN.match(p) or _NUM_LIKE.match(p) for p in parts):
+        return s.replace(",", ".")
+    return line
+
+
 def _split_numeric_line(line: str) -> list[str] | None:
-    parts = _MULTI_SEP.split(line.strip())
+    parts = _MULTI_SEP.split(_decimalize_commas(line).strip())
     if len(parts) < 2:
         return None
     t0 = _normalize_num_token(parts[0])
@@ -562,7 +585,8 @@ def parse_generic_xy(path: str) -> tuple[pd.DataFrame, dict]:
             continue
         toks = _split_numeric_line(st)
         if toks is not None:
-            data_candidates.append(("data", st, toks))
+            # keep the decimal-normalised text: the rows are re-split below
+            data_candidates.append(("data", _decimalize_commas(st), toks))
         else:
             data_candidates.append(("text", st, None))
 
@@ -633,13 +657,26 @@ def _read_table_flexible(path: str) -> tuple[pd.DataFrame, str, str | None]:
 
     # Decide header=None vs header=0 BEFORE reading, so headerless numeric
     # files never lose their first data row to a phantom pandas header.
-    first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+    # '#' comment lines (instrument banners such as "# acquired at 25 °C")
+    # are not the header row and not data: skip them here and let pandas
+    # drop them too, or the banner becomes the column names and every
+    # data row lands in one column.
+    first_line = next((ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")), "")
     first_is_numeric = _split_numeric_line(first_line) is not None
 
-    for sep in [";", "\t", ",", " ", None]:
+    # pandas must decode the file the way the sniffer did: with its utf-8
+    # default, a Latin-1 or UTF-16 Raman/XRD export (a '°C' or 'µm' in the
+    # header is enough) failed on every separator and the import died
+    # with "Could not read table with flexible settings." (measured
+    # 2026-10-21 on synthetic files; the generic parser never had the
+    # problem because it works on the decoded text).
+    read_kwargs = {"encoding": "utf-8", "encoding_errors": "ignore"} if enc.startswith("binary") \
+        else {"encoding": enc}
+    for sep in [";", "\t", ",", r"\s+", " ", None]:
         try:
-            df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python",
-                              header=None if first_is_numeric else 0)
+            df = pd.read_csv(path, sep=sep, decimal=decimal, engine="python", comment="#",
+                              skip_blank_lines=True,
+                              header=None if first_is_numeric else 0, **read_kwargs)
             if df.shape[1] >= 2:
                 return df, enc, sep
         except Exception:

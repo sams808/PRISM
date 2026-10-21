@@ -230,6 +230,12 @@ class LibraryPage(QWidget):
         )
         if not paths:
             return
+        self.import_paths(paths)
+
+    def import_paths(self, paths) -> tuple:
+        """Import files into the library (the Import button, drag-and-drop
+        and the Home page all come here). Returns (n_added, error_lines);
+        the errors are also shown in one dialog."""
         added = 0
         errors = []
         for path in paths:
@@ -244,6 +250,39 @@ class LibraryPage(QWidget):
             self._refresh_table()
         if errors:
             QMessageBox.warning(self, "Import", "Some files could not be imported:\n" + "\n".join(errors))
+        return added, errors
+
+    def paste_from_clipboard(self) -> None:
+        """Import spectra from text on the clipboard (Excel / Origin / a
+        text editor): at least two numeric columns, an optional header row.
+        The text goes through the same parsers as a file."""
+        import tempfile
+        from PySide6.QtWidgets import QApplication
+        text = QApplication.clipboard().text()
+        if not text or not text.strip():
+            QMessageBox.information(self, "Paste data", "The clipboard holds no text.")
+            return
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", prefix="clipboard_", delete=False, encoding="utf-8")
+        try:
+            tmp.write(text)
+            tmp.close()
+            try:
+                spectrum = _load_spectrum_from_path(tmp.name)
+            except Exception as exc:
+                QMessageBox.warning(self, "Paste data", f"The clipboard text is not a spectrum table:\n{exc}")
+                return
+            n = sum(1 for s in self.library.all() if s.title.startswith("clipboard"))
+            spectrum.title = f"clipboard{n + 1}"
+            spectrum.path = ""
+            self.library.add(spectrum)
+            self.push_undo(("add", [spectrum.id]))
+            self._refresh_table()
+            self.table.selectRow(self.table.rowCount() - 1)
+        finally:
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
 
     def _refresh_table(self) -> None:
         items = self.library.all()

@@ -49,6 +49,8 @@ def test_main_window_constructs_with_nav_and_library_page(qtbot):
     assert window.nav.count() == len(NAV_ITEMS)
     assert window.stack.count() == len(NAV_ITEMS)
     assert window.nav.currentRow() == 0
+    assert window.stack.currentWidget() is window.home_page
+    window.nav.setCurrentRow(NAV_ITEMS.index("Library"))
     assert window.stack.currentWidget() is window.library_page
 
 
@@ -95,9 +97,9 @@ def test_two_imports_with_same_stem_do_not_collide(qtbot, raman_example_path, tm
 # --------------------------------------------------------------------------
 
 def test_modules_cover_every_non_library_nav_item():
-    from core.qt_shell import MODULES, NAV_ITEMS, NAV_LIBRARY
+    from core.qt_shell import MODULES, NAV_ITEMS, NAV_HOME, NAV_LIBRARY
     in_modules = [p for _color, pages in MODULES.values() for p in pages]
-    assert sorted(in_modules) == sorted(n for n in NAV_ITEMS if n != NAV_LIBRARY)
+    assert sorted(in_modules) == sorted(n for n in NAV_ITEMS if n not in (NAV_LIBRARY, NAV_HOME))
     assert len(in_modules) == len(set(in_modules))  # no page in two modules
 
 
@@ -119,19 +121,55 @@ def test_module_toggle_hides_nav_rows_and_falls_back_to_library(qtbot):
     assert not window.nav.isRowHidden(xas_row)
 
 
-def test_fresh_install_defaults_to_raman_only(qtbot):
-    """User request: a new user starts with only the Raman module on."""
-    from PySide6.QtCore import QSettings
+def test_fresh_install_defaults_to_no_module(qtbot, monkeypatch):
+    """User request (2026-10-21): a new install starts with every module
+    off, on the Home page, with Home and Library the only rail entries."""
+    import PySide6.QtCore as qc
     from core.qt_shell import MODULES, PrismMainWindow, NAV_ITEMS
-    s = QSettings("PRISM", "PRISM")
-    for m in MODULES:  # simulate the fresh-install store (no conftest override)
-        s.setValue(f"modules/{m}", m == "Raman")
+
+    class _EmptySettings(qc.QSettings):  # the conftest fake answers True for modules/*
+        def __init__(self, *a, **k):
+            pass
+
+        def value(self, key, default=None, type=None):  # noqa: A002
+            return default
+
+        def setValue(self, key, value):
+            pass
+
+    monkeypatch.setattr(qc, "QSettings", _EmptySettings)
     window = PrismMainWindow()
     qtbot.addWidget(window)
-    assert window.module_checks["Raman"].isChecked()
+    assert not any(window.module_checks[m].isChecked() for m in MODULES)
+    assert window.stack.currentWidget() is window.home_page
+    visible = [n for i, n in enumerate(NAV_ITEMS) if not window.nav.isRowHidden(i)]
+    assert visible == ["Home", "Library"]
+
+
+def test_home_cards_and_presets_drive_the_modules(qtbot):
+    from core.qt_shell import MODULE_PRESETS, MODULES, PrismMainWindow, NAV_ITEMS
+    window = PrismMainWindow()
+    qtbot.addWidget(window)
+    home = window.home_page
+    # card -> shell
+    home.cards["XAS"].switch.setChecked(False)
     assert not window.module_checks["XAS"].isChecked()
     assert window.nav.isRowHidden(NAV_ITEMS.index("XAS"))
+    # menu -> card
+    window.module_checks["XAS"].setChecked(True)
+    assert home.cards["XAS"].switch.isChecked()
+    # preset
+    window.apply_module_preset("Raman station")
+    on = {m for m in MODULES if window.module_checks[m].isChecked()}
+    assert on == set(MODULE_PRESETS["Raman station"])
+    assert window.nav.isRowHidden(NAV_ITEMS.index("XAS"))
     assert not window.nav.isRowHidden(NAV_ITEMS.index("Raman ID"))
+    window.apply_module_preset("None")
+    assert not any(window.module_checks[m].isChecked() for m in MODULES)
+    # a card's workspace button switches the module on and navigates
+    home.cards["Raman"].open_requested.emit("Raman ID")
+    assert window.module_checks["Raman"].isChecked()
+    assert window.stack.currentWidget() is window.rruff_page
 
 
 def test_module_state_persists_via_qsettings(qtbot):

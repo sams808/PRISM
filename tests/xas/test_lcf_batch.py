@@ -257,7 +257,6 @@ def test_align_e0_recovers_fit_quality_lost_to_misalignment():
     energy = np.linspace(6900.0, 7300.0, 300)
     ref_e0s = {"edgeA": 7112.0, "edgeB": 7118.0}  # 6 eV apart -- a real, if generous, mismatch
     refs = [(name, energy, _synthetic_edge_spectrum(e0, energy)) for name, e0 in ref_e0s.items()]
-    ref_lookup = {name: y for name, _, y in refs}
 
     # A real, single-edge target sitting between the two reference edges
     # -- no reference has the CORRECT edge position, only alignment can

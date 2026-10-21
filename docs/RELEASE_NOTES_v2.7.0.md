@@ -69,5 +69,3 @@ Three new tabs in the SAXS/WAXS workspace, a single physical fitting engine and 
 - `core/qt_worker.run_in_thread` accepts `on_progress`: the job receives a `progress(i, n, message)` callable whose calls reach the UI thread.
 - The 1D loader recognises `I_corr` / `sigma_I` columns. `edf_sectors` gains `sector_anisotropy`, exposes the usable-range and centre options, and tolerates frames without a wavelength header (virtual-detector exports) when a default is given.
 - The command line prints progress and flushes its log, so a long run redirected to a file shows where it is.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

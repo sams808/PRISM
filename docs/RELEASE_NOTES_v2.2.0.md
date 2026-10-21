@@ -19,5 +19,3 @@
 - Raman → XRD cross-check: one button overlays the XRD reference lines of every Raman-identified phase.
 
 397 tests, all green.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

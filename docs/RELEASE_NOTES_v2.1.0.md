@@ -19,5 +19,3 @@ PRISM 2.1.0 (released under the app's former name) — the first hands-on-feedba
 - **Undo (Ctrl+Z) extended beyond deletion**: renames, duplicates, combine results, applied baselines, and accepted mineral identifications are all one undo away.
 
 334 tests, all green. Portable build: download the portable zip, extract, double-click the exe (Larch-based XAS normalization/EXAFS still needs the Python + launcher-.bat route).
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

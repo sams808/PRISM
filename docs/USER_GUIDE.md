@@ -8,6 +8,22 @@ workspace for your technique in the left rail. Everything you derive
 spectrum. **File › Save project** keeps the whole session in one
 `.prism` file (older project files still load).
 
+## Home
+
+The first page. **Modules**: every technique is a card with an
+*Enabled* switch — a fresh install starts with everything off, so
+switch on what this computer is for (the **Raman station** preset enables
+Raman, Fitting, Processing and Figures; **All modules** and **None** do
+what they say). Disabled modules disappear from the rail until you switch them
+back on here; the choice is remembered per user. **Reference databases**
+lists what is installed on this computer (RRUFF, AMCSD, XRD card databases,
+CIF folders, your Raman reference library) and packs them with
+**Export databases…** into one folder that another PRISM installs with
+**Import a database pack…** — only for people who hold the same
+rights to those databases. Data files dropped anywhere on the window are
+imported into the Library; **File › Paste data from clipboard**
+imports a table copied from Excel, Origin or a text editor.
+
 ## Library
 
 **Import files…** auto-detects the format (plain XY, TA SDT thermal exports,
@@ -36,6 +52,13 @@ Multi-select spectra to overlay them: separate panels or stacked with an
 offset. Load CIF files to overlay predicted Bragg positions (managed per-CIF:
 color, label, visibility). Difference mode shows A−B for exactly two selected
 spectra. Toggle **Annotate on click** to pin peak-position labels.
+**Peak labels** marks every peak above the threshold (% of the intensity
+range) with its position, and **Peak table…** lists position, height, FWHM
+(full width at half prominence) and area for the selected spectra, to copy or
+save as CSV. **Cursor readout** shows the value of every plotted spectrum at
+the mouse position. Line width, lines/points and legend placement are in the
+style row; **Copy plot** and **Copy data** put the figure (image) or the
+selected spectra (tab-separated text) on the clipboard.
 
 ## Peak Fitting
 
@@ -144,6 +167,17 @@ programmed rate by loading its method file.
 
 ## Raman ID (RRUFF)
 
+**Match by** chooses the search: *peak positions* (below) or
+*spectrum similarity*, the Pearson correlation (or a normalised Euclidean
+distance) of the whole query against each reference on a common grid — raw,
+smoothed, or as first/second derivatives (derivatives remove a fluorescence
+slope), optionally inside an x range. The sources are RRUFF's measured spectra
+(after the database filters) and **your own reference library**: **Add
+query to my library…** stores a spectrum you measured (name, laser λ,
+source, notes), **Manage library…** renames, removes, exports and imports
+it, and the library travels with a database pack (Home). A score of 1 means an
+identical shape; hits from the library are marked "my library".
+
 Auto-find (or type) your spectrum's peak positions, then **Find matches**:
 candidates are ranked by peak overlap, each showing its **laser wavelength** —
 relative intensities vary between wavelengths, so judge the overlay yourself.
@@ -200,7 +234,14 @@ multiply, divide, average, weighted sum, and **modulated addition**
 spectrum: scale/offset, normalizations (max, area, min-max), log/ln/exp/√/
 power/reciprocal/|y|, x-shift and x-scale calibration, crop, resample,
 smoothing (Savitzky-Golay, moving average, median), cosmic-ray despiking,
-Savitzky-Golay derivatives, cumulative integral. Analysis:
+Savitzky-Golay derivatives (1st to 4th), cumulative integral. Raman tools:
+**normalize to a value** at x₀, **subtract a range mean** (offset
+baseline), **remove a peak** (interpolate across it), **SNV** and
+**MSC** (scatter corrections), **median of spectra**, x-axis
+**unit conversion** between wavelength, wavenumber, Raman shift (give the
+laser λ) and photon energy, with an optional Jacobian, and **x-axis
+calibration** against reference lines ("measured -> reference" pairs,
+polynomial order chosen by you, residuals reported). Analysis:
 **linear-combination fitting** (target ≈ Σ cᵢ·refᵢ, free or non-negative
 coefficients, with R² and percentages) and summary statistics.
 *Selection order matters*: the first-selected spectrum is A (or the LCF
@@ -307,7 +348,7 @@ View menu: dark mode, Python console (the live app objects are in scope).
 
 ---
 
-## PRISM 2.7.0
+## PRISM 2.8.0
 
 *Platform for Research In Spectroscopy & Materials*
 

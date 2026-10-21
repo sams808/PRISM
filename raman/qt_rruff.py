@@ -46,17 +46,19 @@ from raman.rruff_science import (
     rank_rruff_matches,
 )
 
-RESULT_COLUMNS = ["Mineral", "RRUFF ID", "λ (nm)", "Matched", "Match %", "Category"]
+RESULT_COLUMNS = ["Mineral", "RRUFF ID", "λ (nm)", "Matched", "Match %", "Category", "Score"]
 
 
 class RruffMatchWorkspace(QWidget):
     def __init__(
         self, parent: Optional[QWidget] = None, library: Optional[SpectrumLibrary] = None,
         cache_dir: Optional[str] = None, amcsd_cache_dir: Optional[str] = None,
-        on_send_cifs=None, on_accept=None,
+        on_send_cifs=None, on_accept=None, library_path: Optional[str] = None,
     ):
         super().__init__(parent)
         self.library = library if library is not None else SpectrumLibrary()
+        # The user's own Raman reference library file (None -> raman_library's default)
+        self.library_path = library_path
         # Shell-provided callback (spectrum_id, previous_match_or_None) fired
         # when an identification is accepted, so Accept joins the undo stack.
         self.on_accept = on_accept
@@ -160,10 +162,61 @@ class RruffMatchWorkspace(QWidget):
         quality_row.addWidget(self.quality_combo, 1)
         left_layout.addLayout(quality_row)
 
+        # Match mode (Spectragryph parity): the peak-position overlap above,
+        # or a full-spectrum similarity ranking over RRUFF's measured spectra
+        # and the user's own reference library.
+        mode_label = QLabel("Search")
+        mode_label.setObjectName("SectionTitle")
+        left_layout.addWidget(mode_label)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Match by"))
+        self.match_mode_combo = QComboBox()
+        self.match_mode_combo.addItem("Peak positions", "peaks")
+        self.match_mode_combo.addItem("Spectrum similarity (Pearson)", "pearson")
+        self.match_mode_combo.addItem("Spectrum similarity (Euclidean)", "euclid")
+        self.match_mode_combo.currentIndexChanged.connect(self._on_match_mode_changed)
+        mode_row.addWidget(self.match_mode_combo, 1)
+        left_layout.addLayout(mode_row)
+        sim_row = QHBoxLayout()
+        sim_row.addWidget(QLabel("Compare"))
+        self.preprocess_combo = QComboBox()
+        for label, value in (("raw spectra", "raw"), ("smoothed", "smooth"), ("1st derivative", "d1"), ("2nd derivative", "d2")):
+            self.preprocess_combo.addItem(label, value)
+        self.preprocess_combo.setToolTip("Derivatives remove sloping baselines (fluorescence) before the correlation.")
+        sim_row.addWidget(self.preprocess_combo, 1)
+        sim_row.addWidget(QLabel("x range"))
+        self.sim_range_edit = QLineEdit("")
+        self.sim_range_edit.setPlaceholderText("e.g. 200-1200")
+        self.sim_range_edit.setMaximumWidth(90)
+        sim_row.addWidget(self.sim_range_edit)
+        left_layout.addLayout(sim_row)
+        src_row = QHBoxLayout()
+        src_row.addWidget(QLabel("Sources"))
+        self.source_rruff_check = QCheckBox("RRUFF")
+        self.source_rruff_check.setChecked(True)
+        src_row.addWidget(self.source_rruff_check)
+        self.source_library_check = QCheckBox("My reference library")
+        self.source_library_check.setChecked(True)
+        src_row.addWidget(self.source_library_check)
+        src_row.addStretch(1)
+        left_layout.addLayout(src_row)
+        self._sim_widgets = [self.preprocess_combo, self.sim_range_edit, self.source_rruff_check, self.source_library_check]
+        self._on_match_mode_changed()
+
         find_btn = QPushButton("Find matches")
         find_btn.setObjectName("Primary")
         find_btn.clicked.connect(self.find_matches)
         left_layout.addWidget(find_btn)
+
+        lib_row = QHBoxLayout()
+        add_lib_btn = QPushButton("Add query to my library…")
+        add_lib_btn.setToolTip("Store the query spectrum, as measured, in your own Raman reference library (used by the similarity search and shareable through Home > Export databases).")
+        add_lib_btn.clicked.connect(self.add_query_to_library)
+        lib_row.addWidget(add_lib_btn)
+        manage_lib_btn = QPushButton("Manage library…")
+        manage_lib_btn.clicked.connect(self.manage_library)
+        lib_row.addWidget(manage_lib_btn)
+        left_layout.addLayout(lib_row)
 
         self.db_status_label = QLabel("RRUFF database not loaded yet.")
         self.db_status_label.setWordWrap(True)
@@ -398,7 +451,119 @@ class RruffMatchWorkspace(QWidget):
                 out.append(v)
         return out
 
+    # ------------------------------------------------------------------
+    # Similarity search + the user's reference library
+    # ------------------------------------------------------------------
+    def _on_match_mode_changed(self, *_) -> None:
+        sim = self.match_mode_combo.currentData() != "peaks"
+        for w in self._sim_widgets:
+            w.setEnabled(sim)
+
+    def _library_path(self) -> Optional[str]:
+        return getattr(self, "library_path", None)  # tests point this at a temp file
+
+    def _sim_x_range(self):
+        text = (self.sim_range_edit.text() or "").strip()
+        if not text:
+            return None
+        import re
+        nums = re.findall(r"[-+]?\d+\.?\d*", text)
+        if len(nums) != 2:
+            raise ValueError("x range: give 'min-max' (e.g. 200-1200) or leave it empty.")
+        return (float(nums[0]), float(nums[1]))
+
+    def find_by_similarity(self) -> None:
+        import raman.raman_library as rl
+        spectrum = self._current_spectrum()
+        if spectrum is None:
+            QMessageBox.warning(self, "Find matches", "Select a query spectrum first.")
+            return
+        try:
+            x_range = self._sim_x_range()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Find matches", str(exc))
+            return
+        method = self.match_mode_combo.currentData()
+        how = self.preprocess_combo.currentData()
+        use_rruff = self.source_rruff_check.isChecked()
+        use_lib = self.source_library_check.isChecked()
+        if not (use_rruff or use_lib):
+            QMessageBox.warning(self, "Find matches", "Tick at least one source (RRUFF or your library).")
+            return
+        records = []
+        if use_rruff:
+            if self._ensure_index_loaded():
+                records = filter_rruff_index(
+                    self._index,
+                    wavelength_nm=self.wavelength_combo.currentData(),
+                    oriented=self.orientation_combo.currentData(),
+                    scan_type=self.scan_type_combo.currentData(),
+                    quality=self.quality_combo.currentData(),
+                )
+                accepted_ids = {m.get("rruff_id") for m in spectrum.meta.get("rruff_matches", [])}
+                records = [r for r in records if r.get("rruff_id") not in accepted_ids]
+        entries = rl.load_library(self._library_path()) if use_lib else []
+        if not records and not entries:
+            QMessageBox.information(self, "Find matches", "Nothing to search: no RRUFF spectra pass the filters and the reference library is empty.")
+            return
+        qx, qy = np.asarray(spectrum.x, float), np.asarray(spectrum.y, float)
+        self._query_peaks = self._parse_peaks()
+        self.db_status_label.setText(f"Similarity search over {len(records)} RRUFF + {len(entries)} library spectra…")
+
+        def job(progress=None):
+            hits = []
+            if entries:
+                for r in rl.rank_library(qx, qy, entries, method=method, how=how, x_range=x_range, top_n=50, progress=progress):
+                    e = r["entry"]
+                    hits.append({"mineral": e.name, "rruff_id": "library", "wavelength_nm": e.meta.get("laser_nm"),
+                                 "category": "my library", "peaks": [], "entry": e, "score": r["score"],
+                                 "library_id": e.id, "source": e.meta.get("source", "")})
+            if records:
+                hits.extend(rl.rank_rruff_by_similarity(qx, qy, records, method=method, how=how, x_range=x_range,
+                                                        top_n=50, progress=progress))
+            hits.sort(key=lambda h: h["score"], reverse=True)
+            return hits[:25]
+
+        from core.qt_worker import run_in_thread
+        run_in_thread(job, self._on_similarity_done, self._on_similarity_error,
+                      on_progress=lambda i, n, what: self.db_status_label.setText(f"Similarity search: {what} {i}/{n}…"))
+
+    def _on_similarity_done(self, hits) -> None:
+        self._results = list(hits)
+        self._populate_results_table()
+        self.db_status_label.setText(f"{len(hits)} hit(s) by {self.match_mode_combo.currentText().lower()}; score 1 = identical shape.")
+        self._render_preview([self._results[0]] if self._results else [])
+
+    def _on_similarity_error(self, traceback_text: str) -> None:
+        QMessageBox.critical(self, "Similarity search failed", traceback_text)
+
+    def add_query_to_library(self) -> None:
+        import raman.raman_library as rl
+        from raman.qt_raman_dialogs import AddToLibraryDialog
+        spectrum = self._current_spectrum()
+        if spectrum is None:
+            QMessageBox.warning(self, "Reference library", "Select a query spectrum first.")
+            return
+        dlg = AddToLibraryDialog(self, [spectrum.title])
+        if not dlg.exec():
+            return
+        v = dlg.values()
+        path = self._library_path()
+        entries = rl.load_library(path)
+        entries.append(rl.entry_from_spectrum(v["name"] or spectrum.title, spectrum.x, spectrum.y,
+                                              laser_nm=v["laser_nm"], source=v["source"], notes=v["notes"],
+                                              extra={"origin_path": spectrum.path}))
+        rl.save_library(entries, path)
+        self.db_status_label.setText(f"Added '{v['name'] or spectrum.title}' to the reference library ({len(entries)} entries).")
+
+    def manage_library(self) -> None:
+        from raman.qt_raman_dialogs import LibraryManagerDialog
+        LibraryManagerDialog(self, library_path=self._library_path()).exec()
+
     def find_matches(self) -> None:
+        if self.match_mode_combo.currentData() != "peaks":
+            self.find_by_similarity()
+            return
         if not self._ensure_index_loaded():
             return
         peaks = self._parse_peaks()
@@ -438,12 +603,17 @@ class RruffMatchWorkspace(QWidget):
     def _populate_results_table(self) -> None:
         self.results_table.setRowCount(len(self._results))
         for row, rec in enumerate(self._results):
+            wl = rec.get("wavelength_nm")
+            try:
+                wl_text = f"{float(wl):.0f}" if wl not in (None, "") else ""
+            except (TypeError, ValueError):
+                wl_text = str(wl)
             values = [
-                rec.get("mineral", ""), rec.get("rruff_id", ""),
-                f"{rec.get('wavelength_nm', ''):.0f}" if rec.get("wavelength_nm") else "",
-                str(rec.get("matched_peaks", "")),
-                f"{rec.get('match_fraction', 0.0) * 100:.0f}%",
+                rec.get("mineral", ""), rec.get("rruff_id", ""), wl_text,
+                str(rec.get("matched_peaks", "")) if "matched_peaks" in rec else "",
+                f"{rec.get('match_fraction', 0.0) * 100:.0f}%" if "match_fraction" in rec else "",
                 rec.get("category", ""),
+                f"{rec['score']:.3f}" if "score" in rec else "",
             ]
             for col, val in enumerate(values):
                 self.results_table.setItem(row, col, QTableWidgetItem(str(val)))
@@ -501,7 +671,13 @@ class RruffMatchWorkspace(QWidget):
             color = self.CANDIDATE_COLORS[k % len(self.CANDIDATE_COLORS)]
             label = f"{candidate.get('mineral', '?')} ({candidate.get('rruff_id', '?')}, {candidate.get('wavelength_nm', '?')} nm)"
             drew_curve = False
-            if self.overlay_raw_check.isChecked() and candidate.get("raw_path") and os.path.isfile(candidate["raw_path"]):
+            if candidate.get("entry") is not None:  # a hit from the user's reference library
+                ex, ey = candidate["entry"].arrays()
+                if ey.size and np.nanmax(np.abs(ey)) > 0:
+                    ax.plot(ex, ey / np.nanmax(np.abs(ey)), color=color, lw=1.0, alpha=0.8,
+                            label=f"{candidate.get('mineral', '?')} (my library, score {candidate.get('score', float('nan')):.3f})")
+                    drew_curve = True
+            elif self.overlay_raw_check.isChecked() and candidate.get("raw_path") and os.path.isfile(candidate["raw_path"]):
                 try:
                     with open(candidate["raw_path"], "r", encoding="utf-8", errors="replace") as f:
                         text = f.read()
@@ -594,6 +770,8 @@ class RruffMatchWorkspace(QWidget):
             "wavelength_nm": candidate.get("wavelength_nm"),
             "matched_peaks": candidate.get("matched_peaks"),
             "match_fraction": candidate.get("match_fraction"),
+            "score": candidate.get("score"),
+            "library_id": candidate.get("library_id"),
             "accepted_at": time.time(),
         }
         spectrum.meta["rruff_match"] = match_record  # latest accept (back-compat: reports/projects read this)

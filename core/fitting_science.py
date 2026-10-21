@@ -43,14 +43,21 @@ def voigt_peak(x: np.ndarray, amplitude: float, center: float, hwhm: float, eta:
     peak height — the same conventions as rampy's gaussian/pseudovoigt used
     by the G/GL shapes (width = HWHM, see module note above). `eta` (0..1)
     splits the width between the two components: eta=0 is a pure Gaussian
-    of HWHM=hwhm and eta=1 a pure Lorentzian of HWHM=hwhm. (For
-    intermediate eta the total width is close to, not exactly, `hwhm` —
-    the same interpretation the pseudo-Voigt already carries.)"""
+    of HWHM=hwhm and eta=1 a pure Lorentzian of HWHM=hwhm, and at every
+    intermediate eta the profile's actual half-width is `hwhm` as well
+    (component widths solved from the Olivero-Longbothum relation)."""
     from scipy.special import voigt_profile
     fwhm_total = 2.0 * max(float(hwhm), 1e-12)
     eta = min(max(float(eta), 0.0), 1.0)
-    f_l = eta * fwhm_total
-    f_g = (1.0 - eta) * fwhm_total
+    # Component widths chosen so the TRUE Voigt FWHM is 2·hwhm at every
+    # eta, through the Olivero-Longbothum (1977) approximation
+    # f_V = 0.5346 f_L + sqrt(0.2166 f_L^2 + f_G^2) (0.02 % accurate).
+    # Splitting fwhm_total linearly between the two components, as before,
+    # held only at eta = 0 and eta = 1: at eta = 0.5 the measured HWHM was
+    # 8.15 for a field value of 10 (18 % narrower than reported, 2026-10-21).
+    w = fwhm_total / (0.5346 * eta + np.sqrt(0.2166 * eta * eta + (1.0 - eta) ** 2))
+    f_l = eta * w
+    f_g = (1.0 - eta) * w
     sigma = f_g / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     gamma = f_l / 2.0
     if sigma < 1e-12 and gamma < 1e-12:

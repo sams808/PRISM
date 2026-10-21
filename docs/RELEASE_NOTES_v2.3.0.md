@@ -12,5 +12,3 @@ sasmodels/bumps model fitting stays in the standalone pomme repo (optional heavy
 Enter a single formula **or an oxide composition table in mol% or wt%** (the lab's spreadsheet workflow), pick the element/edge and pellet diameter: PRISM reports μ/ρ above the edge, the edge step Δ(μ/ρ), the absorber mass fraction, and the pellet masses for total μt = 1 / 2.5 and edge step Δμt = 1 — with a fluorescence-mode warning for dilute samples.
 
 408 tests, all green.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

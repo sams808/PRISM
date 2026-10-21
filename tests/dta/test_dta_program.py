@@ -658,7 +658,7 @@ def test_program_fingerprint_ignores_gas_flow_and_formatting():
     full = parse_org_method_lines(REAL_ORGMETHOD_LINES)
     trimmed = parse_org_method_lines(thermal_only)
     assert program_fingerprint(full) == program_fingerprint(trimmed)
-    assert program_fingerprint(full).startswith(f"R20.00>1300.0|I20.00|")
+    assert program_fingerprint(full).startswith("R20.00>1300.0|I20.00|")
     # A different furnace program gives a different signature.
     other = parse_org_method_lines([f"1: Ramp 10.00 {DEG}C/min to 1300.00 {DEG}C"])
     assert program_fingerprint(other) != program_fingerprint(full)

@@ -148,6 +148,23 @@ def _hermetic_xrd_registry(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_reference_caches(tmp_path, monkeypatch):
+    """The Home page's database inventory, the pack export/import and the
+    Raman reference library read and write the real per-user caches
+    (~/.raman_cache/rruff, amcsd, raman_library) — point every default at
+    a temp location so no test can touch, pack or merge the developer's
+    real databases. Functions resolve these module attributes at call
+    time."""
+    import raman.rruff_science as rs
+    import raman.raman_library as rl
+    monkeypatch.setattr(rs, "RRUFF_CACHE_DIR", str(tmp_path / "rruff_cache"))
+    monkeypatch.setattr(rs, "AMCSD_CACHE_DIR", str(tmp_path / "amcsd_cache"))
+    monkeypatch.setattr(rl, "LIBRARY_DIR", str(tmp_path / "raman_library"))
+    monkeypatch.setattr(rl, "LIBRARY_PATH", str(tmp_path / "raman_library" / "library.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_cif_cache(tmp_path, monkeypatch):
     """cif_tools.bragg_peaks_from_cif_generic() caches to the real per-user
     ~/.raman_cache/cif by default (use_cache=True) — point _cache_dir() at a

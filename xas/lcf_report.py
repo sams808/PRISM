@@ -184,7 +184,7 @@ def build_batch_report(results_by_target: Dict[str, List[LCFCombinationResult]],
 
     md_lines = None
     if save_md:
-        md_lines = [f"# Batch LCF report", "",
+        md_lines = ["# Batch LCF report", "",
                    f"{len(results_by_target)} sample(s), sorted by **{_METRIC_LABELS.get(sort_by, sort_by)}**.", ""]
 
     pdf = PdfPages(pdf_path) if save_pdf else None
@@ -232,7 +232,7 @@ def build_batch_report(results_by_target: Dict[str, List[LCFCombinationResult]],
                     md_lines.append("")
                     md_lines.append(f"![{target_name} stats]({fig_dir.name}/{paths2[embed_fmt].name})")
                     md_lines.append("")
-                md_lines.append(f"| rank | combination (name:weight) | R² | RMS | reduced χ² |")
+                md_lines.append("| rank | combination (name:weight) | R² | RMS | reduced χ² |")
                 md_lines.append("|---|---|---|---|---|")
                 for i, r in enumerate(ranked_results[:top_n], start=1):
                     composition = ", ".join(f"{n}:{w:.3f}" for n, w in zip(r.ref_names, r.weights))

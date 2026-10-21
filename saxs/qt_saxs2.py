@@ -14,20 +14,17 @@ knows a sample.
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-    QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from core.qt_widgets import PlotWidget, to_float as _to_float
-from saxs.core.curve import Curve
 
 SERIES_COLUMNS = ["sample", "panel_row", "panel_col", "stack_index", "label", "colour", "marker", "linestyle", "x_value",
                   "family_label", "col_title", "quantified", "note_symbol", "group", "extra_panels", "fit_order"]

@@ -13,5 +13,3 @@ PRISM 2.0.0 (released under the app's former name) — the completed PySide6/Qt 
 
 ## Data citations
 Mineral identification uses the RRUFF database — Lafuente, Downs, Yang & Stone (2015), "The power of databases: the RRUFF project" — and AMCSD structures — Downs & Hall-Wallace (2003), *American Mineralogist* 88, 247–250. Please cite when these contribute to published work.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

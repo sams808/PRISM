@@ -17,7 +17,6 @@ covered by the synthetic tests of test_fit_workflow.py.
 from __future__ import annotations
 
 import os
-import re
 
 import numpy as np
 import pandas as pd

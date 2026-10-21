@@ -59,7 +59,11 @@ NAV_SAXS = "SAXS/WAXS"
 NAV_GLASS = "Glass"
 # Ordered PER TECHNIQUE (user request): Raman block, then XRD, XAS,
 # Thermal, SAXS, cross-technique processing, Figures.
-NAV_ITEMS = [NAV_LIBRARY, NAV_RAMAN, NAV_RRUFF, NAV_FITTING, NAV_MULTIFIT,
+NAV_HOME = "Home"
+# Home first (2026-10-21): the page where modules are switched on and off
+# and the reference databases are managed; the rail below it is still
+# ordered per technique.
+NAV_ITEMS = [NAV_HOME, NAV_LIBRARY, NAV_RAMAN, NAV_RRUFF, NAV_FITTING, NAV_MULTIFIT,
              NAV_BASELINE, NAV_XRD_ID, NAV_HTXRD, NAV_XAS, NAV_DTA,
              NAV_SAXS, NAV_GLASS, NAV_CALC, NAV_FIGURES]
 
@@ -78,7 +82,29 @@ MODULES = {
     "SAXS/WAXS":  ("#b08f26", [NAV_SAXS]),
     "Glass":      ("#5b8dd6", [NAV_GLASS]),
 }
-CORE_COLOR = "#8a97b5"  # Library
+CORE_COLOR = "#8a97b5"  # Library, Home
+
+# One-line descriptions for the Home page cards.
+MODULE_INFO = {
+    "Raman":      "Plot, compare and annotate Raman spectra; identify minerals against RRUFF or your own reference library.",
+    "Fitting":    "Peak fitting (Gaussian, pseudo-Voigt, Voigt, EMG) with saved models, and batch fitting of many spectra.",
+    "XRD":        "Phase identification over registered card databases and CIF folders; high-temperature XRD series.",
+    "XAS":        "XANES / EXAFS: import, μ(E), Larch normalisation and Fourier transform, linear-combination fitting.",
+    "Thermal":    "DTA / DSC / TGA: glass transition by three methods, cyclic programs, multi-rate kinetics.",
+    "Processing": "Baseline subtraction and the Calculations toolbox: arithmetic, normalisation, smoothing, derivatives, unit conversion, calibration.",
+    "Figures":    "Publication figures: multi-layer XY plots, maps, table plots, ternaries, point fitting, style presets.",
+    "SAXS/WAXS":  "Small-angle scattering: raw-frame reduction, model-free descriptors, physical fits, series figures.",
+    "Glass":      "Composition-based glass properties: optical basicity and GlassNet predictions.",
+}
+
+# Presets applied from the Home page or the Modules menu. "Raman station"
+# is the configuration for the spectrometer's computer: everything a Raman
+# user needs and nothing else.
+MODULE_PRESETS = {
+    "Raman station": ["Raman", "Fitting", "Processing", "Figures"],
+    "All modules": list(MODULES),
+    "None": [],
+}
 
 
 def _nav_color(name: str) -> str:
@@ -179,6 +205,8 @@ class PrismMainWindow(QMainWindow):
 
         # Nav row -> page by NAME (the rail is ordered per technique, the
         # stack in construction order — never map the two positionally).
+        # The Home page joins below, once the module actions it reflects
+        # exist.
         self._pages_by_nav = {
             NAV_LIBRARY: self.library_page, NAV_RAMAN: self.raman_page,
             NAV_XAS: self.xas_page, NAV_DTA: self.dta_page,
@@ -193,6 +221,7 @@ class PrismMainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction("Import files…", self.library_page._on_import_clicked, "Ctrl+O")
         file_menu.addAction("Custom import…", self.library_page._on_custom_import_clicked, "Ctrl+I")
+        file_menu.addAction("Paste data from clipboard", self.library_page.paste_from_clipboard, "Ctrl+Shift+V")
         file_menu.addAction("Export selected as text…", self.library_page._export_selected_txt, "Ctrl+E")
         file_menu.addSeparator()
         file_menu.addAction("Open project…", self.open_project, "Ctrl+Shift+O")
@@ -215,8 +244,8 @@ class PrismMainWindow(QMainWindow):
         self._console_dock = None  # created lazily on first open
 
         # --- Modules menu (between View and Help): checkable per-module
-        # entries; default = everything off except Raman, so a new user
-        # starts with the simplest app.
+        # entries; default = everything OFF (2026-10-21), so a new install
+        # starts on the Home page and switches on what this computer needs.
         from PySide6.QtCore import QSettings
         settings = QSettings("PRISM", "PRISM")
         modules_menu = self.menuBar().addMenu("&Modules")
@@ -228,10 +257,22 @@ class PrismMainWindow(QMainWindow):
             square = QPixmap(10, 10)
             square.fill(QColor(color))
             act.setIcon(QIcon(square))
-            act.setChecked(settings.value(f"modules/{mod_name}", mod_name == "Raman", type=bool))
+            act.setChecked(settings.value(f"modules/{mod_name}", False, type=bool))
             act.toggled.connect(lambda on, m=mod_name: self._on_module_toggled(m, on))
             self.module_checks[mod_name] = act
             modules_menu.addAction(act)
+        modules_menu.addSeparator()
+        presets_menu = modules_menu.addMenu("Presets")
+        for preset in MODULE_PRESETS:
+            presets_menu.addAction(preset, lambda p=preset: self.apply_module_preset(p))
+        modules_menu.addAction("Home page", lambda: self.navigate_to(NAV_HOME))
+
+        from core.qt_home import HomePage
+        self.home_page = HomePage(self)
+        self.stack.addWidget(self.home_page)
+        self._pages_by_nav[NAV_HOME] = self.home_page
+        self._on_nav_changed(self.nav.currentRow())  # row 0 (Home) was selected before the page existed
+
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Quick-start guide", self.show_help, "F1")
         from core.qt_help import MODULE_GUIDES
@@ -242,6 +283,7 @@ class PrismMainWindow(QMainWindow):
         help_menu.addAction("Credits", self.show_credits)
 
         self._apply_module_visibility()
+        self.setAcceptDrops(True)  # drop data files anywhere on the window to import them
 
         self.statusBar().showMessage("Ready.")
 
@@ -263,6 +305,64 @@ class PrismMainWindow(QMainWindow):
         from PySide6.QtCore import QSettings
         QSettings("PRISM", "PRISM").setValue(f"modules/{module}", bool(enabled))
         self._apply_module_visibility()
+        home = getattr(self, "home_page", None)
+        if home is not None:
+            home.refresh_modules()
+
+    # ---- the interface the Home page uses -------------------------------
+    def module_catalog(self) -> list:
+        """[(name, colour, description, pages), …] in menu order."""
+        return [(name, color, MODULE_INFO.get(name, ""), list(pages))
+                for name, (color, pages) in MODULES.items()]
+
+    def module_presets(self) -> list:
+        return list(MODULE_PRESETS)
+
+    def is_module_enabled(self, module: str) -> bool:
+        return bool(self.module_checks[module].isChecked())
+
+    def set_module_enabled(self, module: str, enabled: bool) -> None:
+        """Switch a module on or off: the menu action is the single source
+        of truth, its toggled signal persists the choice and updates the
+        rail and the Home page."""
+        self.module_checks[module].setChecked(bool(enabled))
+
+    def apply_module_preset(self, preset: str) -> None:
+        wanted = set(MODULE_PRESETS[preset])
+        for name in MODULES:
+            self.set_module_enabled(name, name in wanted)
+        self.statusBar().showMessage(f"Modules preset applied: {preset}.")
+
+    def navigate_to(self, nav_name: str) -> None:
+        """Show a workspace by its rail name, switching its module on if needed."""
+        if nav_name not in NAV_ITEMS:
+            return
+        for mod_name, (_color, pages) in MODULES.items():
+            if nav_name in pages and not self.is_module_enabled(mod_name):
+                self.set_module_enabled(mod_name, True)
+        row = NAV_ITEMS.index(nav_name)
+        if self.nav.currentRow() == row:
+            self._on_nav_changed(row)
+        else:
+            self.nav.setCurrentRow(row)
+
+    # ---- drag and drop import --------------------------------------------
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt name
+        if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt name
+        import os
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        paths = [p for p in paths if os.path.isfile(p)]
+        if not paths:
+            return
+        added, errors = self.library_page.import_paths(paths)
+        self.statusBar().showMessage(f"Dropped files: {added} imported" + (f", {len(errors)} failed" if errors else "") + ".")
+        if self.stack.currentWidget() is self.home_page and added:
+            self.navigate_to(NAV_LIBRARY)
+        else:
+            self._on_nav_changed(self.nav.currentRow())
 
     def _apply_module_visibility(self) -> None:
         """Hide the nav rows of every disabled module; the Library is
@@ -389,6 +489,11 @@ class PrismMainWindow(QMainWindow):
 
         self.library.clear()
         self.fit_param_memory.clear()
+        # The undo stack describes the library that was just replaced:
+        # replaying a "delete" from it would resurrect spectra of the
+        # previous project inside the new one.
+        self.library_page._undo_stack.clear()
+        self.library_page.undo_btn.setEnabled(False)
         for sp in project.spectra:
             self.library.add(sp)
         for sid, params in project.fit_params.items():
@@ -400,11 +505,11 @@ class PrismMainWindow(QMainWindow):
         self.xas_page.selected_sid = None
         self.xas_page._refresh_all()
 
-        if project.htxrd_patterns:
-            self.htxrd_page.set_series(project.htxrd_patterns)
+        # Always, even with an empty list: a project without an HT-XRD
+        # series must not keep showing the series of the previous one.
+        self.htxrd_page.set_series(list(project.htxrd_patterns))
 
-        if project.cif_overlays:
-            self.raman_page.restore_cif_overlays(project.cif_overlays)
+        self.raman_page.restore_cif_overlays(project.cif_overlays or [])
         self.baseline_page.settings.clear()
         for sid, val in project.baseline_settings.items():
             self.baseline_page.settings.set(sid, val)
@@ -451,9 +556,13 @@ class PrismMainWindow(QMainWindow):
             return
         # Resolve by NAME: the rail is ordered per technique while the stack
         # keeps construction order — never map the two positionally.
-        page = self._pages_by_nav[NAV_ITEMS[row]]
+        page = self._pages_by_nav.get(NAV_ITEMS[row])
+        if page is None:  # Home selected before the page exists (construction)
+            return
         self.stack.setCurrentWidget(page)
-        if page is self.dta_page:
+        if page is getattr(self, "home_page", None):
+            page.refresh_modules()
+        elif page is self.dta_page:
             self.dta_page.set_records(self._dta_records_from_library())
         elif page is self.multifit_page:
             self.multifit_page.set_spectra([s.id for s in self.library.all()])

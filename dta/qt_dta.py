@@ -40,7 +40,7 @@ from dta.dta_program import (
 )
 from dta.dta_segments import (
     clean_time_temperature, clock_scale_to_min,
-    KIND_COOL, KIND_HEAT, ROLE_COOL, ROLE_HEAT, SEGMENT_TABLE_COLUMNS, X_TEMPERATURE, X_TIME,
+    KIND_COOL, KIND_HEAT, ROLE_HEAT, SEGMENT_TABLE_COLUMNS, X_TEMPERATURE, X_TIME,
     PreparedXY, Segment, SegmentationConfig, SegmentedRun, SegmentScopeError,
     describe_segment, prepare_segment_xy, segment_label, segment_run, segment_table,
 )

@@ -7,17 +7,20 @@ SAXS/WAXS, glass property prediction, and publication figure building.
 
 The app is PySide6/Qt-based: one main window with a left navigation rail of
 technique workspaces, color-coded by module. Each module (Raman, Fitting,
-XRD, XAS, Thermal, Processing, Figures, SAXS/WAXS, Glass) can be switched
-on/off in the **Modules** menu — a fresh install starts with only Raman
-enabled, so a single-technique user sees a simple app.
+XRD, XAS, Thermal, Processing, Figures, SAXS/WAXS, Glass) is switched on or
+off from the **Home** page (or the Modules menu) — a fresh install starts
+with every module off, so a single-technique computer shows exactly the
+workspaces it needs; the choice is remembered per user, and presets apply a
+whole configuration (*Raman station*: Raman, Fitting, Processing, Figures).
 
 ## Workspaces
 
 | Workspace | What it does |
 |---|---|
+| **Home** | Module cards with Enabled switches and presets; the reference databases installed on this computer, with **Export databases…** / **Import a database pack…** to move them to another PRISM as one folder; quick actions. |
 | **Library** | Import data files (auto-detected parser, or Custom Import with parser/column override), browse, preview, rename/duplicate/reorder, delete with Undo, Combine/scale (sum, average, weighted subtraction), export as text. Feeds the other workspaces. |
-| **Raman** | Simple Plot: multi-spectrum plotting (separate or stacked), smoothing, color schemes, axis controls, CIF Bragg-peak overlays with a per-CIF manager, difference mode, click-to-annotate, PNG/SVG/PDF export. |
-| **Raman ID** | RRUFF database match-assist: ranks mineral candidates by Raman peak overlap, with database filters (laser wavelength, oriented/unoriented, high-res vs broad-scan, quality) applied before ranking; shows each candidate's laser excitation wavelength and overlays the reference spectrum — identification is always the user's explicit decision, never automatic. Requires a local RRUFF cache (see below). |
+| **Raman** | Simple Plot: multi-spectrum plotting (separate or stacked), smoothing, color schemes, line/point styles and legend placement, axis controls, CIF Bragg-peak overlays with a per-CIF manager, difference mode, click-to-annotate, automated peak labels and a peak table (position, height, FWHM, area; copy/CSV), multi-spectrum cursor readout, copy plot / copy data to the clipboard, PNG/SVG/PDF export. |
+| **Raman ID** | Identification against RRUFF and **your own reference library**: by peak overlap, or by full-spectrum similarity (Pearson correlation or normalised Euclidean distance; raw, smoothed or derivative spectra; optional x range), with database filters (laser wavelength, oriented/unoriented, high-res vs broad-scan, quality) applied before ranking; shows each candidate's laser excitation wavelength and overlays the reference spectrum — identification is always the user's explicit decision, never automatic. Build the library from spectra you measured (Add query to my library…). RRUFF requires a local cache (see below). |
 | **Peak Fitting** | Single-spectrum peak fitting (Gaussian, pseudo-Voigt, true Voigt, EMG via lmfit): classic one-shot LM or Origin-style stepwise LM, auto peak finding with an adjustable detection limit, click-to-pick peaks, parameter linking, residual subplot, F-test confidence intervals, per-component CSV export, fit reports with R², ±1σ errors and centroids, save/load parameter models. |
 | **Multi-Fit** | Batch fitting: apply a saved parameter model ("recipe" — the same JSON files Peak Fitting saves) to many spectra at once; results table + CSV export. |
 | **Baseline** | Baseline subtraction (arPLS, ALS, polynomial, spline, rubberband) with live preview, drag-to-pick fit regions, per-spectrum settings memory, and batch apply producing `_bl` spectra. |
@@ -27,7 +30,7 @@ enabled, so a single-technique user sees a simple app.
 | **DTA / Thermal** | Tg determination by three methods (double tangent, parallel tangent, \|dY\| max) with agreement scoring, integration/extrema "Calculs", batch processing with CSV export. |
 | **SAXS/WAXS** | Curve loading and reduction (background subtraction, corrections), Guinier/Porod/correlation-peak analysis, WAXS crystallinity fitting. Raw 2D frames of a beamstopless instrument: inventory and pairing with refined beam centres and lobe/streak diagnostics, sector-aware batch reduction with loading classes and per-mm normalisation, model-free descriptors. Physical fitting of absolute curves with one engine: grain law + high-q base, a model-free gate against a reference curve, then spheres (absolute with a contrast), Teubner-Strey, Debye and unified levels selected by BIC under explicit physical rules, with a robustness pass. Publication figures and xlsx/csv/md tables from a series table, and a headless JSON pipeline (`scripts/saxs_pipeline.py`). See [docs/SAXS_FITTING.md](docs/SAXS_FITTING.md). |
 | **Glass** | Composition-based property calculation: optical basicity Λ (recommended per-oxide values, oxygen-weighted Duffy mixing) and GlassNet machine-learning predictions (~80 properties) from pasted or CSV composition tables. |
-| **Calculations** | 30+ spectrum operations: arithmetic, normalization, interpolation, derivatives, smoothing, despiking (with click-picked spike positions), area/moments, correlation, clustering (KMeans/hierarchical with PCA), and more. |
+| **Calculations** | 40+ spectrum operations: arithmetic, scaled subtraction, average/median, normalization (max, area, min-max, to a value), interpolation, derivatives (1st–4th), smoothing, despiking (with click-picked spike positions), peak removal, range-mean (simple) baseline, SNV/MSC, x-axis unit conversion (wavelength ⇄ wavenumber ⇄ Raman shift ⇄ eV) and x-axis calibration against reference lines, area/moments, correlation, clustering (KMeans/hierarchical with PCA), and more. |
 | **Figures** | Publication figure building: multi-layer XY builder with per-layer plot types and dual axes, difference plots, 2D/series views (heatmap, contours, 3D waterfall), table plots (histogram, box, violin, correlation matrix), point fitting with a model library, ternary diagrams, Raman+XRD combination figures; Publication/Presentation/Poster style presets. |
 
 Cross-cutting: `.prism` project files (everything survives closing the app;
@@ -60,9 +63,26 @@ latest code and refreshes dependencies later.
 python qt_main.py
 ```
 
-Or double-click `PRISM.bat`. A standalone `PRISM.exe` (no Python needed) can
-be built with `build_exe.bat`; the built `dist/PRISM/` folder is portable
-(~350 MB; the Larch-dependent XAS steps require the Python route).
+Or double-click `PRISM.bat`.
+
+**Windows installer / portable build (no Python needed):** `build_exe.bat`
+produces `dist/PRISM-<version>-setup.exe` (Inno Setup: per-user install, no
+administrator rights, Start-menu entry, optional desktop icon, uninstaller,
+updates in place) and `dist/PRISM-<version>-win64.zip` (the portable
+`dist/PRISM/` folder, ~350 MB). The build runs `PRISM.exe --distcheck` — an
+off-screen self-test that opens every workspace — before packaging; run it
+yourself on any installation if PRISM does not start (it writes
+`prism_distcheck.log` next to the exe). The frozen build excludes xraylarch
+and glasspy: the Larch-dependent XAS steps and GlassNet predictions need the
+Python route. Building needs PyInstaller and Inno Setup 6
+(`winget install --id JRSoftware.InnoSetup -e --scope user`).
+
+**Moving the reference databases to another computer** (e.g. the Raman
+spectrometer's PC): Home › **Export databases…** writes the installed
+databases (RRUFF, AMCSD, XRD card databases, CIF folders, your Raman library)
+into one folder; Home › **Import a database pack…** on the other PRISM installs
+them where the app expects them. Share packs only with people who hold the
+same rights to every database in them.
 
 Note on startup time: the very first launch after installing or pulling
 compiles bytecode and lets the antivirus scan the scientific stack — allow
@@ -108,7 +128,8 @@ database (https://rruff.net — please cite: Lafuente, Downs, Yang & Stone (2015
    `--categories excellent_oriented fair_oriented ...` to fetch only some
    quality tiers), or in Python directly:
    ```python
-   import rruff_science as rs
+   # from the repository root
+   from raman import rruff_science as rs
    rs.download_and_build_rruff_cache()   # downloads + indexes in one call
    ```
 

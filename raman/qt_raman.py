@@ -137,8 +137,11 @@ class RamanWorkspace(QWidget):
         self._cif_manager: Optional[CifManagerDialog] = None
         self.annotations: List[Dict[str, float]] = []  # persists across re-renders
 
+        self._peak_table_dialog = None
+        self._cursor_artists: List[Any] = []
         self._build_ui()
         self.plot.canvas.mpl_connect("button_press_event", self._on_plot_click)
+        self.plot.canvas.mpl_connect("motion_notify_event", self._on_cursor_move)
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -186,6 +189,60 @@ class RamanWorkspace(QWidget):
         self.smooth_combo.currentTextChanged.connect(lambda: self.plot.request_redraw(self.render))
         smooth_row.addWidget(self.smooth_combo)
         left_layout.addLayout(smooth_row)
+
+        # Peak labels + table (Spectragryph's "Peaks & FWHM" / automated labels)
+        peaks_row = QHBoxLayout()
+        self.peak_labels_check = QCheckBox("Peak labels")
+        self.peak_labels_check.setToolTip("Label every peak above the threshold with its position (raman.raman_tools.peak_table).")
+        self.peak_labels_check.toggled.connect(lambda: self.plot.request_redraw(self.render))
+        peaks_row.addWidget(self.peak_labels_check)
+        peaks_row.addWidget(QLabel("threshold %"))
+        self.peak_threshold_edit = QLineEdit("5")
+        self.peak_threshold_edit.setMaximumWidth(40)
+        self.peak_threshold_edit.setToolTip("A peak must rise above min + threshold % of (max − min).")
+        self.peak_threshold_edit.textChanged.connect(lambda: self.plot.request_redraw(self.render))
+        peaks_row.addWidget(self.peak_threshold_edit)
+        peak_table_btn = QPushButton("Peak table…")
+        peak_table_btn.clicked.connect(self.open_peak_table)
+        peaks_row.addWidget(peak_table_btn)
+        left_layout.addLayout(peaks_row)
+
+        # Multi-spectrum cursor readout (Spectragryph's multicursor)
+        self.cursor_check = QCheckBox("Cursor readout (all spectra at x)")
+        self.cursor_check.toggled.connect(self._on_cursor_toggled)
+        left_layout.addWidget(self.cursor_check)
+        self.cursor_label = QLabel("")
+        self.cursor_label.setObjectName("SectionNote")
+        self.cursor_label.setWordWrap(True)
+        left_layout.addWidget(self.cursor_label)
+
+        style_row = QHBoxLayout()
+        style_row.addWidget(QLabel("Line"))
+        self.linewidth_combo = QComboBox()
+        self.linewidth_combo.addItems(["0.6", "1", "1.5", "2", "3"])
+        self.linewidth_combo.setCurrentText("1")
+        self.linewidth_combo.currentTextChanged.connect(lambda: self.plot.request_redraw(self.render))
+        style_row.addWidget(self.linewidth_combo)
+        self.marker_combo = QComboBox()
+        self.marker_combo.addItems(["Lines", "Lines + points", "Points"])
+        self.marker_combo.currentTextChanged.connect(lambda: self.plot.request_redraw(self.render))
+        style_row.addWidget(self.marker_combo)
+        self.legend_combo = QComboBox()
+        self.legend_combo.addItems(["Legend inside", "Legend outside", "No legend"])
+        self.legend_combo.currentTextChanged.connect(lambda: self.plot.request_redraw(self.render))
+        style_row.addWidget(self.legend_combo)
+        left_layout.addLayout(style_row)
+
+        clip_row = QHBoxLayout()
+        copy_plot_btn = QPushButton("Copy plot")
+        copy_plot_btn.setToolTip("Copy the plot as an image to the clipboard (paste into Word, PowerPoint, …).")
+        copy_plot_btn.clicked.connect(self.copy_plot_to_clipboard)
+        clip_row.addWidget(copy_plot_btn)
+        copy_data_btn = QPushButton("Copy data")
+        copy_data_btn.setToolTip("Copy the selected spectra as tab-separated text (x, y, y, … on a common grid when they share one).")
+        copy_data_btn.clicked.connect(self.copy_data_to_clipboard)
+        clip_row.addWidget(copy_data_btn)
+        left_layout.addLayout(clip_row)
 
         cif_row = QHBoxLayout()
         import_cif_btn = QPushButton("Import CIF…")
@@ -325,16 +382,15 @@ class RamanWorkspace(QWidget):
         method = self.smooth_combo.currentText()
         if method == "None":
             return y
+        from processing.calc_science import moving_average
         if method.startswith("MA"):
-            kernel = np.ones(5, dtype=float) / 5.0
-            return np.convolve(y, kernel, mode="same")
+            return moving_average(y, 5)
         if method == "SG":
             try:
                 from scipy.signal import savgol_filter
                 return savgol_filter(y, window_length=7, polyorder=2, mode="interp")
             except Exception:
-                kernel = np.ones(5, dtype=float) / 5.0
-                return np.convolve(y, kernel, mode="same")
+                return moving_average(y, 5)
         return y
 
     def _color_from_scheme(self, i: int, label: str, total: int):
@@ -371,6 +427,137 @@ class RamanWorkspace(QWidget):
     def _clear_annotations(self) -> None:
         self.annotations.clear()
         self.plot.request_redraw(self.render)
+
+    # ------------------------------------------------------------------
+    # Peak labels / table, cursor readout, style, clipboard
+    # ------------------------------------------------------------------
+    def _peak_threshold(self) -> float:
+        v = _to_float(self.peak_threshold_edit.text(), 5.0)
+        return max(0.0, min(float(v if v is not None else 5.0), 100.0)) / 100.0
+
+    def peak_rows_for(self, x: np.ndarray, y: np.ndarray):
+        from raman.raman_tools import peak_table
+        xr = self._effective_xlim(self.plot.figure.get_axes()[0]) if self.plot.figure.get_axes() else None
+        return peak_table(x, y, threshold_frac=self._peak_threshold(), x_range=xr)
+
+    def _draw_peak_labels(self, placed: list) -> None:
+        """placed: [(ax, x, y_plotted, label)] — the curves as drawn (after
+        normalisation, smoothing and stacking offsets)."""
+        if not self.peak_labels_check.isChecked():
+            return
+        for ax, x, y, _label in placed:
+            try:
+                rows = self.peak_rows_for(x, y)
+            except Exception:
+                continue
+            for r in rows:
+                ax.annotate(f"{r.position:.1f}", xy=(r.position, r.height), xytext=(0, 4),
+                            textcoords="offset points", ha="center", va="bottom", fontsize=7,
+                            rotation=90, color="#333333")
+
+    def open_peak_table(self) -> None:
+        from raman.qt_raman_dialogs import PeakTableDialog
+        spectra = self._selected_spectra()
+        if not spectra:
+            QMessageBox.information(self, "Peak table", "Select at least one spectrum.")
+            return
+        if self._peak_table_dialog is None:
+            self._peak_table_dialog = PeakTableDialog(self)
+        self._peak_table_dialog.set_spectra(spectra, self._peak_threshold())
+        self._peak_table_dialog.show()
+        self._peak_table_dialog.raise_()
+
+    def _on_cursor_toggled(self, on: bool) -> None:
+        if not on:
+            self._remove_cursor_artists()
+            self.cursor_label.setText("")
+            self.plot.canvas.draw_idle()
+
+    def _remove_cursor_artists(self) -> None:
+        for a in self._cursor_artists:
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._cursor_artists = []
+
+    def _on_cursor_move(self, event) -> None:
+        if not self.cursor_check.isChecked() or event.inaxes is None or event.xdata is None:
+            return
+        if self.plot.toolbar.mode:
+            return
+        x0 = float(event.xdata)
+        self._remove_cursor_artists()
+        lines = []
+        for ax in self.plot.figure.get_axes():
+            self._cursor_artists.append(ax.axvline(x0, color="#8a3033", lw=0.8, ls="--", alpha=0.8))
+            for line in ax.get_lines():
+                lab = line.get_label()
+                if not lab or lab.startswith("_"):
+                    continue
+                xd, yd = line.get_xdata(), line.get_ydata()
+                if len(xd) < 2:
+                    continue
+                xd = np.asarray(xd, float); yd = np.asarray(yd, float)
+                if x0 < xd.min() or x0 > xd.max():
+                    continue
+                order = np.argsort(xd)
+                yv = float(np.interp(x0, xd[order], yd[order]))
+                lines.append(f"{lab}: {yv:.4g}")
+                self._cursor_artists.append(ax.plot([x0], [yv], "o", ms=4, color=line.get_color())[0])
+        self.cursor_label.setText(f"x = {x0:.2f}\n" + "\n".join(lines[:12]))
+        self.plot.canvas.draw_idle()
+
+    def _line_kwargs(self) -> dict:
+        lw = _to_float(self.linewidth_combo.currentText(), 1.0) or 1.0
+        mode = self.marker_combo.currentText()
+        kw = {"lw": lw}
+        if mode == "Lines + points":
+            kw.update(marker="o", ms=max(2.0, 2.5 * lw), markevery=None)
+        elif mode == "Points":
+            kw.update(marker="o", ms=max(2.0, 2.5 * lw), ls="none")
+        return kw
+
+    def _place_legend(self, ax) -> None:
+        mode = self.legend_combo.currentText()
+        if mode == "No legend":
+            return
+        if mode == "Legend outside":
+            ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0)
+        else:
+            ax.legend(fontsize=9)
+
+    def copy_plot_to_clipboard(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QImage
+        self.plot.canvas.draw()
+        buf = self.plot.canvas.buffer_rgba()
+        w, h = self.plot.canvas.get_width_height(physical=True)
+        img = QImage(bytes(buf), w, h, QImage.Format_RGBA8888).copy()
+        QApplication.clipboard().setImage(img)
+        self.cursor_label.setText("Plot copied to the clipboard.")
+
+    def copy_data_to_clipboard(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        spectra = self._selected_spectra()
+        if not spectra:
+            return
+        same_grid = all(len(s.x) == len(spectra[0].x) and np.allclose(s.x, spectra[0].x) for s in spectra)
+        lines = []
+        if same_grid:
+            lines.append("\t".join(["x"] + [s.title for s in spectra]))
+            for i in range(len(spectra[0].x)):
+                lines.append("\t".join([f"{spectra[0].x[i]:.6g}"] + [f"{s.y[i]:.6g}" for s in spectra]))
+        else:
+            lines.append("\t".join(f"{s.title}_x\t{s.title}_y" for s in spectra))
+            n = max(len(s.x) for s in spectra)
+            for i in range(n):
+                cells = []
+                for s in spectra:
+                    cells.append(f"{s.x[i]:.6g}\t{s.y[i]:.6g}" if i < len(s.x) else "\t")
+                lines.append("\t".join(cells))
+        QApplication.clipboard().setText("\n".join(lines))
+        self.cursor_label.setText(f"{len(spectra)} spectrum/spectra copied as text.")
 
     def _draw_annotations(self) -> None:
         axes = self.plot.figure.get_axes()
@@ -452,11 +639,14 @@ class RamanWorkspace(QWidget):
             # Wrong selection count: fall through to normal rendering so the
             # user still sees their data (checkbox simply has no effect).
 
+        placed = []  # (ax, x, y_as_plotted, label) for peak labels
+        lkw = self._line_kwargs()
         if mode == "separate":
             axes = np.atleast_1d(fig.subplots(1, len(prepared), sharey=True)).ravel()
             for i, (ax, (x, y, label)) in enumerate(zip(axes, prepared)):
                 color = self._color_from_scheme(i, label, len(prepared))
-                ax.plot(x, y, color=color, lw=1) if color is not None else ax.plot(x, y, lw=1)
+                ax.plot(x, y, color=color, label=label, **lkw) if color is not None else ax.plot(x, y, label=label, **lkw)
+                placed.append((ax, x, y, label))
                 ax.set_xlabel(self.x_title_edit.text())
                 if not self.no_title_check.isChecked():
                     ax.set_title(global_title or label)
@@ -487,9 +677,10 @@ class RamanWorkspace(QWidget):
             for i, (x, y, label) in enumerate(prepared):
                 color = self._color_from_scheme(i, label, len(prepared))
                 y_plot = y + i * delta
-                ax.plot(x, y_plot, color=color, lw=1, label=label) if color is not None else ax.plot(x, y_plot, lw=1, label=label)
+                ax.plot(x, y_plot, color=color, label=label, **lkw) if color is not None else ax.plot(x, y_plot, label=label, **lkw)
+                placed.append((ax, x, y_plot, label))
             if len(prepared) > 1:
-                ax.legend(fontsize=9)
+                self._place_legend(ax)
             ax.set_xlabel(self.x_title_edit.text())
             ax.set_ylabel(self.y_title_edit.text())
             if self.no_yticks_check.isChecked():
@@ -502,7 +693,9 @@ class RamanWorkspace(QWidget):
 
         self._draw_cif_bragg_markers()
         self._apply_axis_limits(skip_redraw=True)
+        self._draw_peak_labels(placed)
         self._draw_annotations()
+        self._cursor_artists = []  # the figure was cleared; stale handles are gone
         fig.tight_layout()
         self.plot.canvas.draw_idle()
 

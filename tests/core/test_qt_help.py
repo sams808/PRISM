@@ -10,6 +10,7 @@ def test_help_covers_every_workspace():
     a help section fails here, keeping onboarding in sync with the app."""
     # Nav labels vs help-section wording differ slightly; map explicitly.
     expected_mentions = {
+        "Home": "Home",
         "Library": "Library",
         "Raman": "Simple Plot",
         "XAS": "XAS",

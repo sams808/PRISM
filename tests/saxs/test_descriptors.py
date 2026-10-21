@@ -3,7 +3,6 @@ with a stated sigma (no Poisson anchoring pitfalls), so significance tests have 
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from saxs.core import descriptors as ds

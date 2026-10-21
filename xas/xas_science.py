@@ -1231,8 +1231,10 @@ def compute_mu(
         k = int(smooth_window)
         if k % 2 == 0:
             k += 1
-        kernel = np.ones(k, dtype=float) / k
-        mu = np.convolve(mu, kernel, mode="same")
+        # normalised by the samples inside the window: a plain "same"
+        # convolution pulls the first and last k//2 points towards zero
+        kernel = np.ones(k, dtype=float)
+        mu = np.convolve(mu, kernel, mode="same") / np.convolve(np.ones(mu.size), kernel, mode="same")
     return mu
 
 

@@ -34,7 +34,11 @@ _SUFFIX = {
     "sqrt": "sqrt", "power": "pow", "reciprocal": "inv", "absolute": "abs",
     "x_shift": "xshift", "x_scale": "xscale", "crop": "crop", "resample": "resamp",
     "savgol": "sg", "moving_average": "ma", "median": "med", "despike": "despiked",
-    "1": "d1", "2": "d2", "cumulative": "integ", "lcf": "lcf",
+    "1": "d1", "2": "d2", "3": "d3", "4": "d4", "cumulative": "integ", "lcf": "lcf",
+    "median_spectra": "median", "msc": "msc",
+    "normalize_value": "normval", "subtract_range_mean": "offset", "remove_peak": "peakrm",
+    "snv": "snv", "x_to_raman_shift": "shift", "x_to_wavelength": "nm", "x_convert": "xconv",
+    "x_calibrate": "xcal",
 }
 
 
@@ -293,11 +297,62 @@ class CalcWorkspace(QWidget):
                                          polyorder=int(_to_float(self._param("polyorder"), 3)))
                 elif group == "integral":
                     x, y = cs.cumulative_integral(s.x, s.y)
+                elif group == "raman":
+                    x, y, note = self._raman_op(s, op)
+                    if note:
+                        report = (report + "\n" if report else "") + note
                 else:
                     raise ValueError(f"Unhandled group {group!r}")
                 results.append((x, y, f"{s.title}_{_SUFFIX[op]}"))
 
         return results, report
+
+    _UNIT_ALIASES = {
+        "nm": "Wavelength (nm)", "wavelength": "Wavelength (nm)",
+        "cm-1": "Wavenumber (cm⁻¹)", "cm⁻¹": "Wavenumber (cm⁻¹)", "wavenumber": "Wavenumber (cm⁻¹)",
+        "raman": "Raman shift (cm⁻¹)", "shift": "Raman shift (cm⁻¹)", "raman shift": "Raman shift (cm⁻¹)",
+        "ev": "Photon energy (eV)", "energy": "Photon energy (eV)",
+    }
+
+    def _raman_op(self, s: Spectrum, op: str):
+        """The raman.raman_tools operations; returns (x, y, report_note)."""
+        import raman.raman_tools as rt
+        if op == "normalize_value":
+            x, y = rt.normalize_to_value(s.x, s.y, x0=_to_float(self._param("x0"), 0.0),
+                                         target=_to_float(self._param("target"), 1.0))
+            return x, y, ""
+        if op == "subtract_range_mean":
+            x, y = rt.subtract_range_mean(s.x, s.y, xmin=_to_float(self._param("xmin"), 0.0),
+                                          xmax=_to_float(self._param("xmax"), 0.0))
+            return x, y, ""
+        if op == "remove_peak":
+            x, y = rt.remove_peak(s.x, s.y, center=_to_float(self._param("center"), 0.0),
+                                  fwhm=_to_float(self._param("fwhm"), 10.0))
+            return x, y, ""
+        if op == "snv":
+            return np.asarray(s.x, float), rt.snv(s.y), ""
+        jac = (self._param("jacobian") or "0").strip() not in ("0", "", "false", "no")
+        laser = _to_float(self._param("laser_nm"))
+        if op == "x_to_raman_shift":
+            x, y = rt.convert_x_axis(s.x, s.y, "Wavelength (nm)", "Raman shift (cm⁻¹)", laser_nm=laser, jacobian=jac)
+            return x, y, ""
+        if op == "x_to_wavelength":
+            x, y = rt.convert_x_axis(s.x, s.y, "Raman shift (cm⁻¹)", "Wavelength (nm)", laser_nm=laser, jacobian=jac)
+            return x, y, ""
+        if op == "x_convert":
+            fu = self._UNIT_ALIASES.get((self._param("from_unit") or "").strip().lower())
+            tu = self._UNIT_ALIASES.get((self._param("to_unit") or "").strip().lower())
+            if fu is None or tu is None:
+                raise ValueError("Units: nm, cm-1, raman or eV.")
+            x, y = rt.convert_x_axis(s.x, s.y, fu, tu, laser_nm=laser, jacobian=jac)
+            return x, y, ""
+        if op == "x_calibrate":
+            measured, reference = rt.parse_pairs(self._param("pairs") or "")
+            cal = rt.calibrate_x_axis(measured, reference, order=int(_to_float(self._param("order"), 1) or 1))
+            note = (f"{s.title}: x' = P(x), order {cal.order}, coefficients {['%.6g' % c for c in cal.coefficients]}, "
+                    f"rms residual {cal.rms:.4g} (residuals {['%.3g' % r for r in cal.residuals]})")
+            return cal.apply(s.x), np.asarray(s.y, float).copy(), note
+        raise ValueError(f"Unhandled Raman operation {op!r}")
 
     # ------------------------------------------------------------------
     def preview(self) -> None:

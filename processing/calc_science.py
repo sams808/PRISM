@@ -62,6 +62,13 @@ def multi_op(spectra_xy: Sequence[XY], op: str, *, weights: Optional[Sequence[fl
         return grid, stacked.sum(axis=0)
     if op == "average":
         return grid, stacked.mean(axis=0)
+    if op == "median_spectra":
+        return grid, np.median(stacked, axis=0)
+    if op == "msc":
+        from raman.raman_tools import msc as _msc
+        if stacked.shape[0] != 2:
+            raise ValueError("MSC needs exactly two spectra: A (to correct), then the reference B.")
+        return grid, _msc(stacked[0], stacked[1])
     if op == "weighted_sum":
         if weights is None:
             raise ValueError("weighted_sum needs weights.")
@@ -171,6 +178,22 @@ def resample(x: np.ndarray, y: np.ndarray, *, n_points: int = 1000,
     return grid, np.interp(grid, x, y)
 
 
+def moving_average(y: np.ndarray, window: int) -> np.ndarray:
+    """Centred moving average normalised by the samples that actually fall
+    in the window. ``np.convolve(y, ones/w, mode="same")`` divides by the
+    full window everywhere, so the first and last (w-1)/2 points are pulled
+    towards zero: a flat 100-count signal came out at 54.5 at both ends,
+    and a decaying curve's first point was halved (measured, 2026-10-21)."""
+    y = np.asarray(y, float)
+    w = max(1, int(window))
+    if w == 1 or y.size == 0:
+        return y.copy()
+    kernel = np.ones(w, float)
+    num = np.convolve(y, kernel, mode="same")
+    den = np.convolve(np.ones(y.size, float), kernel, mode="same")
+    return num / den
+
+
 def smooth(x: np.ndarray, y: np.ndarray, *, method: str = "savgol",
            window: int = 11, polyorder: int = 3) -> XY:
     """savgol | moving_average | median"""
@@ -183,8 +206,7 @@ def smooth(x: np.ndarray, y: np.ndarray, *, method: str = "savgol",
     if method == "savgol":
         return x, savgol_filter(y, window_length=win, polyorder=min(int(polyorder), win - 1), mode="interp")
     if method == "moving_average":
-        kernel = np.ones(win) / win
-        return x, np.convolve(y, kernel, mode="same")
+        return x, moving_average(y, win)
     if method == "median":
         return x, medfilt(y, kernel_size=win)
     raise ValueError(f"Unknown smoothing method: {method!r}")
@@ -331,6 +353,19 @@ CALC_OPERATIONS: Dict[str, Dict] = {
     "Despike (cosmic rays)": {"group": "despike", "op": "despike", "params": [("z", "z threshold", "6.0"), ("window", "window", "7"), ("positions", "spike x (click or type, comma-sep)", "")]},
     "Derivative dy/dx": {"group": "derivative", "op": "1", "params": [("window", "window", "11"), ("polyorder", "poly order", "3")]},
     "Derivative d²y/dx²": {"group": "derivative", "op": "2", "params": [("window", "window", "11"), ("polyorder", "poly order", "3")]},
+    "Derivative d³y/dx³": {"group": "derivative", "op": "3", "params": [("window", "window", "15"), ("polyorder", "poly order", "4")]},
+    "Derivative d⁴y/dx⁴": {"group": "derivative", "op": "4", "params": [("window", "window", "21"), ("polyorder", "poly order", "5")]},
+    # Raman-side tools (Spectragryph parity): see raman.raman_tools
+    "Normalize to a value (y(x₀) = target)": {"group": "raman", "op": "normalize_value", "params": [("x0", "x₀", "520.7"), ("target", "target", "1.0")]},
+    "Subtract range mean (simple baseline)": {"group": "raman", "op": "subtract_range_mean", "params": [("xmin", "x min", "1800"), ("xmax", "x max", "2000")]},
+    "Remove a peak (interpolate across)": {"group": "raman", "op": "remove_peak", "params": [("center", "centre", "0"), ("fwhm", "FWHM", "10")]},
+    "SNV (standard normal variate)": {"group": "raman", "op": "snv", "params": []},
+    "MSC (scatter correction, A against reference B)": {"group": "multi", "op": "msc", "params": []},
+    "Median of spectra": {"group": "multi", "op": "median_spectra", "params": []},
+    "x: wavelength (nm) → Raman shift (cm⁻¹)": {"group": "raman", "op": "x_to_raman_shift", "params": [("laser_nm", "laser λ (nm)", "532.0"), ("jacobian", "Jacobian (1/0)", "0")]},
+    "x: Raman shift (cm⁻¹) → wavelength (nm)": {"group": "raman", "op": "x_to_wavelength", "params": [("laser_nm", "laser λ (nm)", "532.0"), ("jacobian", "Jacobian (1/0)", "0")]},
+    "x: convert units (nm / cm⁻¹ / Raman shift / eV)": {"group": "raman", "op": "x_convert", "params": [("from_unit", "from (nm, cm-1, raman, eV)", "nm"), ("to_unit", "to (nm, cm-1, raman, eV)", "raman"), ("laser_nm", "laser λ (nm)", "532.0"), ("jacobian", "Jacobian (1/0)", "0")]},
+    "x: calibrate against reference lines": {"group": "raman", "op": "x_calibrate", "params": [("pairs", "measured -> reference; …", "520.3 -> 520.7"), ("order", "polynomial order", "1")]},
     "Cumulative integral ∫y dx": {"group": "integral", "op": "cumulative", "params": []},
     # analysis
     "Linear-combination fit (target ≈ Σ cᵢ·refᵢ)": {"group": "lcf", "op": "lcf", "params": [("non_negative", "non-negative (1/0)", "1")]},

@@ -32,5 +32,3 @@ PRISM 2.6.0 — Composite SAXS model fitting, raw EDF ingestion, and a full inte
 - Added a GitHub Actions CI workflow (pytest + lint on every push/PR); pinned all dependency versions; added `glasspy` and `pyFAI`/`fabio` to the requirements files (previously used by real features but silently absent, leaving their tests permanently skipped on a fresh install).
 - Fixed a portable-build size regression (349 MB → 684 MB → back to 349 MB): a transitive PyInstaller hook was silently bundling PyTorch despite an explicit exclude rule; excluding the actual root-cause package fixes it for good.
 - `LICENSE` now contains the exact, unmodified MIT license text (for correct license detection); the institutional funding disclaimer moved to `NOTICE.md`.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

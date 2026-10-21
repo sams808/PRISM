@@ -42,13 +42,12 @@ from dta import qt_dta as module
 from dta.qt_dta import (
     BATCH_SCOPE_EVERY, BATCH_SCOPE_FILE, BATCH_SCOPE_LABELS,
     BATCH_SCOPE_MATCHING, DEGENERATE_SPREAD, LEGACY_RESULT_COLUMNS,
-    MATCH_RATE_TOL_C_MIN, SCOPE_ALL_COOLING, SCOPE_ALL_HEATING, SCOPE_ALL_TIME,
+    MATCH_RATE_TOL_C_MIN, SCOPE_ALL_TIME,
     SEGMENT_RESULT_COLUMNS, DtaSegmentResult, DtaWorkspace,
     degenerate_result_line, finite_spread,
 )
 from dta.dta_science import (
-    compute_tg_derivative, compute_tg_double_tangent,
-    compute_tg_parallel_improved, resolve_baseline_params,
+    resolve_baseline_params,
 )
 from core.qt_shell import _load_spectrum_from_path
 from conftest import requires_dta_bm

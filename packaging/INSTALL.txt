@@ -1,0 +1,41 @@
+PRISM - Platform for Research In Spectroscopy & Materials
+=========================================================
+
+What this installer does
+------------------------
+- Installs PRISM for the current user (no administrator rights needed) under
+  %LOCALAPPDATA%\Programs\PRISM, with a Start-menu entry and an optional
+  desktop icon. Choosing "all users" is offered when the account can elevate.
+- Nothing else is installed: no Python, no services, no file associations.
+- Updating: run the newer setup over the old one; the previous program files
+  are replaced. Your databases, projects and settings are kept.
+
+First start
+-----------
+- The first launch after an install takes longer (Windows scans the new
+  files). Later launches take a few seconds.
+- PRISM opens on its Home page with every module switched off. Switch on the
+  techniques used on this computer (the "Raman station" preset enables Raman,
+  Fitting, Processing and Figures) - the choice is remembered.
+- Reference databases (RRUFF Raman spectra, AMCSD structures) can be
+  downloaded from the Raman ID workspace, or installed from a database pack
+  exported by another PRISM (Home > Import a database pack...). The packs
+  land in %USERPROFILE%\.raman_cache.
+
+Not in the portable build
+-------------------------
+- The XAS normalisation / EXAFS steps (xraylarch) and GlassNet predictions
+  (glasspy) need a Python install of PRISM: see the README on
+  https://github.com/sams808/PRISM.
+
+Checking an installation
+------------------------
+- PRISM.exe --distcheck   builds the whole application off-screen, visits
+  every workspace and exits with code 0; the result is written to
+  prism_distcheck.log next to the exe. Run it from a command prompt in the
+  installation folder if PRISM does not start.
+
+Uninstall
+---------
+- Settings > Apps, or the "Uninstall PRISM" Start-menu entry. Databases,
+  projects and settings are not removed.

@@ -106,7 +106,9 @@ def test_track_peak_recovers_linear_center_shift():
     for (temp, true_center), r in zip(temps_centers, results):
         assert r.ramp_value == temp
         assert r.center == pytest.approx(true_center, abs=0.02)
-        assert r.fwhm == pytest.approx(0.3, abs=0.05)
+        # rp.gaussian's third argument is the HALF-width (0.3), so the
+        # reported full width at half maximum is 0.6
+        assert r.fwhm == pytest.approx(0.6, abs=0.05)
 
 
 def test_track_peak_reports_error_row_for_empty_window():

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import itertools
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 
@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 from core.qt_widgets import PlotWidget, to_float as _to_float
 from xas.lcf_batch import BatchLCFParams, run_batch_lcf
 from xas.lcf_report import build_batch_report
-from xas.xas_science import Spectrum, _interp_to_grid
+from xas.xas_science import _interp_to_grid
 from ._qt_xas_shared import COLORS
 
 _MAX_FITS_WITHOUT_CONFIRM = 5000

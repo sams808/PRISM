@@ -27,7 +27,7 @@ import pandas as pd
 
 from . import edf_sectors as es
 from .curve import Curve
-from .frames import FramePair, FrameRecord
+from .frames import FramePair
 
 Progress = Optional[Callable[[int, int, str], None]]
 CLASSES = ("measurable", "marginal", "opaque", "unreliable")

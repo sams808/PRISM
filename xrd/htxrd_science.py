@@ -201,6 +201,37 @@ def _local_hwhm_estimate(x: np.ndarray, y_net: np.ndarray, idx: int, span: float
     return float(np.clip(est, span * 0.01, span * 0.25))
 
 
+def _climb_to_apex(x: np.ndarray, y_net: np.ndarray, start_x: float, hwhm: float) -> int:
+    """Index of the local maximum reached by walking uphill from start_x.
+
+    The walk runs on a copy smoothed over about one HWHM, so counting-noise
+    bumps on a flank do not stop it early; the returned index is then the
+    raw-data maximum within ±HWHM of where the walk ended."""
+    n = len(y_net)
+    if n == 0:
+        return 0
+    step = float(np.median(np.diff(x))) if n > 1 else 1.0
+    w = int(round(hwhm / step)) if step > 0 else 3
+    w = max(3, w | 1)
+    if w < n:
+        kernel = np.ones(w) / w
+        ys = np.convolve(y_net, kernel, mode="same") / np.convolve(np.ones(n), kernel, mode="same")
+    else:
+        ys = y_net
+    i = int(np.argmin(np.abs(x - float(start_x))))
+    for _ in range(n):
+        left = ys[i - 1] if i > 0 else -np.inf
+        right = ys[i + 1] if i < n - 1 else -np.inf
+        if left > ys[i] and left >= right:
+            i -= 1
+        elif right > ys[i]:
+            i += 1
+        else:
+            break
+    near = np.abs(x - x[i]) <= max(hwhm, step)
+    return int(np.nanargmax(np.where(near, y_net, -np.inf)))
+
+
 def _peak_support(x: np.ndarray, y_net: np.ndarray, idx: int, noise: float,
                   hwhm: float, span: float) -> Tuple[float, float]:
     """Fit-region bounds around the apex at idx: extend each side while the
@@ -290,15 +321,14 @@ def track_peak(
         # ---- seed: previous accepted fit > initial_center anchor > window max
         if seed_from_previous and prev_fit is not None:
             seed_center, hwhm0, amp0 = prev_fit
-            # apex = the data maximum near the previous center (the peak may
-            # have drifted since the last pattern). ±1.5 HWHM: wide enough
-            # for realistic per-step drift, tight enough that a neighboring
-            # peak's flank can't out-shine the tracked apex at the range edge.
-            near = np.abs(x_win - seed_center) <= max(1.5 * hwhm0, span * 0.02)
-            if np.any(near):
-                idx_local = int(np.nanargmax(np.where(near, y_net, -np.inf)))
-            else:
-                idx_local = int(np.nanargmax(y_net))
+            # apex = the local maximum reached by walking uphill from the
+            # previous centre. The earlier "data maximum within ±1.5 HWHM"
+            # lost any peak drifting more than that per step: measured on a
+            # synthetic series, a 0.2° step with HWHM 0.09° was reported
+            # absent after two patterns while it was still the strongest
+            # thing in the window. Climbing follows a drift of any size up
+            # to the valley before a neighbouring peak.
+            idx_local = _climb_to_apex(x_win, y_net, seed_center, hwhm0)
             fwhm_guess = hwhm0
         else:
             if initial_center is not None:
@@ -345,7 +375,11 @@ def track_peak(
             fr = fit_spectrum(x_fit, y_fit_in, [comp], mode="classic")
             params = fr.lmfit_result.params
             center = float(params["f0"].value)
-            fwhm = float(params["l0"].value)
+            # fitting_science's width parameter is a HALF-width (see its
+            # module note); the column, the plot axis and the CSV header
+            # all say FWHM, and until 2026-10-21 they carried half of it.
+            hwhm = float(params["l0"].value)
+            fwhm = 2.0 * hwhm
             amplitude = float(params["a0"].value)
             area = float(trapezoid(fr.peaks[0], x_fit))
 
@@ -359,7 +393,7 @@ def track_peak(
 
             results.append(PeakTrackResult(pat.name, pat.ramp_value, center, fwhm, amplitude, area,
                                            fr.chi2_red, noise=noise, window_label=window_label))
-            prev_fit = (center, fwhm, amplitude)
+            prev_fit = (center, hwhm, amplitude)
         except Exception as exc:
             results.append(PeakTrackResult(pat.name, pat.ramp_value, np.nan, np.nan, np.nan, np.nan, np.nan,
                                            error=str(exc), present=False, noise=noise,
