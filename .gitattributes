@@ -1,0 +1,15 @@
+# Data fixtures are stored and checked out byte for byte: a TA Instruments
+# export is CRLF and its tests pin that, an OMNIC export too; git's
+# line-ending conversion must never touch them (it turned
+# EXAMPLES/DTA_cycles_example.txt into LF on the Linux CI runner).
+EXAMPLES/** -text
+*.spa binary
+*.mapx binary
+*.mth binary
+*.rasx binary
+*.prism binary
+*.edf.gz binary
+*.zip binary
+# Windows batch files run through cmd.exe, which expects CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf

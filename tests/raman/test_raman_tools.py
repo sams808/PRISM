@@ -7,6 +7,7 @@ import math
 import numpy as np
 import pytest
 
+from core.np_compat import trapezoid
 import raman.raman_tools as rt
 
 
@@ -72,9 +73,9 @@ def test_jacobian_preserves_the_integral():
     laser = 532.0
     lam = np.linspace(540.0, 640.0, 2001)
     y = np.exp(-0.5 * ((lam - 580.0) / 5.0) ** 2)
-    area_nm = np.trapezoid(y, lam)
+    area_nm = trapezoid(y, lam)
     x, yj = rt.convert_x_axis(lam, y, "Wavelength (nm)", "Raman shift (cm⁻¹)", laser_nm=laser, jacobian=True)
-    assert np.trapezoid(yj, x) == pytest.approx(area_nm, rel=2e-3)
+    assert trapezoid(yj, x) == pytest.approx(area_nm, rel=2e-3)
 
 
 def test_calibration_shift_linear_and_residuals():
