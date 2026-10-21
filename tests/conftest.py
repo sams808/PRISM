@@ -6,9 +6,16 @@ old pipeline output.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+# Run the Qt tests on the off-screen platform unless the caller chose one:
+# what CI does, and locally it keeps the suite independent of the desktop
+# (no window flashes, an in-process clipboard — a test copying to the real
+# Windows clipboard failed whenever another process held it, 2026-10-21).
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PRISM_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = PRISM_ROOT / "EXAMPLES"

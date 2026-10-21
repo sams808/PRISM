@@ -27,7 +27,12 @@ imports a table copied from Excel, Origin or a text editor.
 ## Library
 
 **Import files…** auto-detects the format (plain XY, TA SDT thermal exports,
-SAXS EDF, Rigaku `.rasx`, JCAMP-DX). If it guesses wrong, use
+SAXS EDF, Rigaku `.rasx`, JCAMP-DX, and the Thermo OMNIC files of the
+group's DXR Raman microscope: `.spa` spectra with their stage
+position, S/N and exposure, and `.mapx` maps — one mean spectrum
+per region plus, up to 2000 spectra, one spectrum per pixel with its stage
+position in micrometres; OMNIC's `.txt` and `.csv` exports
+load as plain tables). Files dropped on the window import the same way. If it guesses wrong, use
 **Custom import…** (Ctrl+I) to pick the parser and the X/Y columns yourself, with a
 preview. Right-click spectra to rename, duplicate, reorder, export as text
 (Ctrl+E), combine (sum / average / weighted subtraction), or delete.

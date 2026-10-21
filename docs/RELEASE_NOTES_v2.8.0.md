@@ -14,6 +14,12 @@ This release also carries everything prepared for the untagged 2.7.0 (SAXS 2.0, 
 - `build_exe.bat` now produces `dist/PRISM-<version>-setup.exe` (Inno Setup; per-user install, Start-menu entry, optional desktop icon, uninstaller, updates in place) and the portable `dist/PRISM-<version>-win64.zip`.
 - `PRISM.exe --distcheck` builds the whole application off-screen, opens every workspace and exits 0, writing `prism_distcheck.log`; the build script runs it before packaging. The frozen build bundles numpy's submodules and xraydb's data table (the two things a PyInstaller build of this stack silently loses).
 
+## The spectrometer's own files (Thermo OMNIC)
+
+- **`.spa`** spectra are read directly (`raman/thermo_omnic.py`): the directory of blocks from offset 304, point count and x range from the spectrum header, float32 intensities stored from high to low wavenumber, plus the stage position, signal-to-noise ratio and exposure time from the text blocks. Checked against OMNIC's own `.txt` export of the same spectrum (agreement within 0.13 %).
+- **`.mapx`** maps (HDF5) are read with h5py (now a requirement): every region's (nx, ny, points) array with its stage box, the wavenumber axis from the file's spectral range (it reproduces the 1.9285 cm⁻¹ step of the text exports), and the acquisition parameters from the XML metadata (laser power, scans, exposure, objective, grating, time). The Library imports a map as one mean spectrum per region plus one spectrum per pixel with its stage position in micrometres, up to 2000 spectra; larger maps import their region means (the per-pixel view is the raster-map viewer still on the roadmap).
+- Two real example files ship in `EXAMPLES/` (`Raman_example_omnic.spa` with its text twin, `Raman_map_example.mapx`), and `--distcheck` loads both in the frozen build. The import dialog lists `*.spa *.mapx`.
+
 ## Raman: what Spectragryph did, now in PRISM
 
 - **Peak labels** and a **Peak table** (position, height, FWHM at half prominence, area, prominence; copy as text or save as CSV) in the Raman workspace; threshold as a percentage of the intensity range.
@@ -23,6 +29,13 @@ This release also carries everything prepared for the untagged 2.7.0 (SAXS 2.0, 
 - **Your Raman reference library**: add the query spectrum with name, laser wavelength, source and notes; rename, remove, export, import; included in database packs.
 - **Calculations** gains: normalise to a value at x₀, subtract a range mean (simple baseline), remove a peak, SNV, MSC, median of spectra, derivatives to the 4th order, x-axis unit conversion (wavelength ⇄ wavenumber ⇄ Raman shift ⇄ photon energy, optional Jacobian) and x-axis calibration against reference lines (polynomial, residuals reported).
 - The Raman module guide lists what was ported and what was not (Spectragryph's own file formats, acquisition, scripted sequences).
+
+## Usability pass on the Raman station
+
+- The main window no longer demands 1956 × 849 px: the stacked workspaces reported the widest page's minimum size even when that module was switched off, which did not fit a 1920 × 1080 lab monitor. The window now follows the visible page only (a Raman-only setup fits a laptop screen).
+- Raman workspace: the left panel is grouped (Display / Analysis / Overlays and export) and the line, points and legend controls sit beside "Colors" above the plot; the Raman ID panel is grouped (Query / Search / Database filters / Results / My reference library / Databases), scrolls, and no button label is truncated; the message when no RRUFF database is installed now says what to do (download, or import a pack from Home).
+- Check boxes have a visible box in both themes (the theme's check-box style was defined but never applied); the Library's title column stretches instead of being cut to "Raman_exam…".
+- The test suite runs on Qt's off-screen platform by default, as CI does.
 
 ## Fixes (2026-10-21 audit)
 

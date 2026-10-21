@@ -100,7 +100,7 @@ def test_find_matches_missing_cache_updates_status(qtbot, tmp_path):
     qtbot.addWidget(widget)
     widget.peaks_edit.setText("464.0, 1085.0")
     widget.find_matches()
-    assert "No RRUFF database found" in widget.db_status_label.text()
+    assert "No RRUFF database on this computer yet" in widget.db_status_label.text()
 
 
 def test_download_database_button_flow(qtbot, tmp_path, monkeypatch):

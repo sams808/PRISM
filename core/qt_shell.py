@@ -115,6 +115,26 @@ def _nav_color(name: str) -> str:
 DTA_KINDS = {"ta_sdt", "dta_table"}
 
 
+class _CurrentPageStack(QStackedWidget):
+    """A stack whose size hints follow the CURRENT page only.
+
+    QStackedWidget reports the maximum over all pages, so the widest
+    workspace (SAXS, XRD ID: 1.6-1.8k px of minimum width) set the main
+    window's minimum size to 1956 x 849 even when those modules were
+    switched off — too wide for a 1920 x 1080 lab monitor (measured
+    2026-10-21). With the hints taken from the visible page, a Raman-only
+    setup fits a laptop screen and a wide page only asks for room when it
+    is shown."""
+
+    def minimumSizeHint(self):  # noqa: N802 - Qt name
+        w = self.currentWidget()
+        return w.minimumSizeHint() if w is not None else super().minimumSizeHint()
+
+    def sizeHint(self):  # noqa: N802 - Qt name
+        w = self.currentWidget()
+        return w.sizeHint() if w is not None else super().sizeHint()
+
+
 class PrismMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -157,7 +177,7 @@ class PrismMainWindow(QMainWindow):
         sidebar_layout.addWidget(self.nav)
         outer.addWidget(sidebar)
 
-        self.stack = QStackedWidget()
+        self.stack = _CurrentPageStack()
         self.library_page = LibraryPage(self.library)
         self.stack.addWidget(self.library_page)
         self.raman_page = RamanWorkspace(library=self.library)
@@ -560,6 +580,7 @@ class PrismMainWindow(QMainWindow):
         if page is None:  # Home selected before the page exists (construction)
             return
         self.stack.setCurrentWidget(page)
+        self.stack.updateGeometry()  # the stack's size hints follow the current page
         if page is getattr(self, "home_page", None):
             page.refresh_modules()
         elif page is self.dta_page:

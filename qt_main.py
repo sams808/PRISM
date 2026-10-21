@@ -134,6 +134,18 @@ def _cli_distcheck(argv, log=None) -> int:
         if os.path.isfile(demo):
             df = iou.load_any(demo)
             log(f"  EXAMPLES/Raman_example.txt: {len(df)} rows")
+        # the spectrometer's own formats: .spa (binary) and .mapx (HDF5 via h5py)
+        spa = os.path.join(base, "EXAMPLES", "Raman_example_omnic.spa")
+        if os.path.isfile(spa):
+            df, meta = iou.load_any(spa, return_meta=True)
+            if meta.get("selected_parser") != "omnic_spa" or len(df) < 100:
+                raise RuntimeError("OMNIC .spa reader failed in the frozen build")
+            log(f"  EXAMPLES/Raman_example_omnic.spa: {len(df)} points")
+        mapx = os.path.join(base, "EXAMPLES", "Raman_map_example.mapx")
+        if os.path.isfile(mapx):
+            from raman.thermo_omnic import read_mapx
+            mp = read_mapx(mapx)
+            log(f"  EXAMPLES/Raman_map_example.mapx: {len(mp.regions)} regions, {mp.n_spectra} spectra (h5py bundled)")
         deadline = time.time() + 0.5
         while time.time() < deadline:
             app.processEvents()

@@ -829,6 +829,47 @@ def _clean_float_or_none(val) -> float | None:
 
 
 # ==============================
+# Thermo OMNIC (DXR Raman microscope): .spa spectra and .mapx maps —
+# the group's own spectrometer. Format notes in raman/thermo_omnic.py.
+# ==============================
+
+def sniff_omnic_spa(path: str, head: str) -> bool:
+    return head.startswith("Spectral Data File")
+
+
+def parse_omnic_spa(path: str) -> tuple[pd.DataFrame, dict]:
+    from raman.thermo_omnic import read_spa
+    x, y, info = read_spa(path)
+    df = pd.DataFrame({"shift_cm-1": x, "intensity": y})
+    canonical = {"shift_cm^-1": "shift_cm-1", "intensity": "intensity", "X": "shift_cm-1", "Y": "intensity"}
+    meta = {"parser": "omnic_spa", "canonical_map": canonical, "path": os.path.abspath(path), "omnic": info}
+    for key in ("stage_x", "stage_y", "snr", "exposure_s"):
+        if key in info:
+            meta[key] = info[key]
+    return df, meta
+
+
+def sniff_omnic_mapx(path: str, head: str) -> bool:
+    from raman.thermo_omnic import is_mapx
+    return is_mapx(path)
+
+
+def parse_omnic_mapx(path: str) -> tuple[pd.DataFrame, dict]:
+    """The generic single-table view of a map: the mean spectrum of its first
+    region. The Library's import expands a map into its spectra instead
+    (core.qt_library.load_spectra_from_path)."""
+    from raman.thermo_omnic import mapx_summary, read_mapx
+    m = read_mapx(path)
+    r = m.regions[0]
+    df = pd.DataFrame({"shift_cm-1": m.x, "intensity": r.mean_spectrum()})
+    canonical = {"shift_cm^-1": "shift_cm-1", "intensity": "intensity", "X": "shift_cm-1", "Y": "intensity"}
+    meta = {"parser": "omnic_mapx", "canonical_map": canonical, "path": os.path.abspath(path),
+            "is_map": True, "n_regions": len(m.regions), "n_spectra": m.n_spectra,
+            "map_summary": mapx_summary(m), "region": r.name, "omnic": dict(m.meta)}
+    return df, meta
+
+
+# ==============================
 # JCAMP-DX (M15) — the de facto interchange standard across UV/IR/Raman/
 # NMR/MS instrument software; one reader unlocks broad compatibility.
 # Supports ##XYDATA=(X++(Y..Y)) with AFFN/PAC and compressed ASDF
@@ -1038,6 +1079,8 @@ def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
 # ==============================
 # Register parsers (priority)
 # ==============================
+register_parser(ParserSpec("omnic_mapx", sniff_omnic_mapx, parse_omnic_mapx, priority=3))
+register_parser(ParserSpec("omnic_spa", sniff_omnic_spa, parse_omnic_spa, priority=4))
 register_parser(ParserSpec("rasx", sniff_rasx, parse_rasx, priority=5))
 register_parser(ParserSpec("jcamp", sniff_jcamp, parse_jcamp, priority=8))
 register_parser(ParserSpec("ta_sdt", sniff_ta_sdt, parse_ta_sdt, priority=10))
@@ -1065,7 +1108,21 @@ def load_any(path: str, *, x_key: str | None = None, y_key: str | None = None,
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
 
-    head = _head_text(path, n_lines=160)
+    # Binary files are recognised by their signature before any text
+    # decoding: an OMNIC .spa is full of NUL bytes, which the text decoder
+    # reads as UTF-16 and turns into nonsense, and decoding a 250 MB map as
+    # text just to sniff it is wasted time.
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(18)
+    except OSError:
+        magic = b""
+    if magic == b"Spectral Data File":
+        head = "Spectral Data File"
+    elif path.lower().endswith((".mapx", ".rasx")) or magic.startswith(b"\x89HDF\r\n\x1a\n"):
+        head = ""
+    else:
+        head = _head_text(path, n_lines=160)
 
     chosen = None
     autodetect_failed = False

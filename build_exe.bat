@@ -35,7 +35,7 @@ if "%VER%"=="" (
 echo [1/5] PyInstaller, PRISM %VER%
 py -3.11 -m PyInstaller --noconfirm --clean --windowed --name PRISM ^
   --icon assets\prism.ico --add-data "assets;assets" --add-data "EXAMPLES;EXAMPLES" ^
-  --collect-submodules numpy --collect-data xraydb --collect-submodules sqlalchemy ^
+  --collect-submodules numpy --collect-data xraydb --collect-submodules sqlalchemy --collect-submodules h5py ^
   --exclude-module larch --exclude-module glasspy ^
   --exclude-module wx --exclude-module tkinter ^
   --exclude-module PyQt5 --exclude-module PyQt6 ^
@@ -44,7 +44,7 @@ py -3.11 -m PyInstaller --noconfirm --clean --windowed --name PRISM ^
   --exclude-module torch --exclude-module transformers --exclude-module tokenizers ^
   --exclude-module llvmlite --exclude-module numba ^
   --exclude-module botocore --exclude-module boto3 ^
-  --exclude-module h5py --exclude-module lxml ^
+  --exclude-module lxml ^
   --exclude-module cryptography --exclude-module paramiko ^
   --exclude-module pyarrow --exclude-module dask ^
   --exclude-module lightning --exclude-module pytorch_lightning ^

@@ -51,6 +51,46 @@ def _load_spectrum_from_path(path: str) -> Spectrum:
     )
 
 
+# A map bigger than this is imported as its region means only (one spectrum
+# per region); the per-pixel spectra wait for the raster-map viewer. A
+# 169 x 81 DXR map is 13,689 spectra: the Library can hold them, but not
+# usefully as a flat list.
+MAP_PIXEL_IMPORT_CAP = 2000
+
+
+def load_spectra_from_path(path: str) -> list:
+    """Every spectrum a file holds: one for ordinary files, and for an OMNIC
+    .mapx map one mean spectrum per region plus (below the cap) one per
+    pixel with its stage position in the metadata."""
+    from raman.thermo_omnic import is_mapx
+    if not is_mapx(path):
+        return [_load_spectrum_from_path(path)]
+    from raman.thermo_omnic import mapx_summary, read_mapx
+    m = read_mapx(path)
+    stem = Path(path).stem
+    base_meta = {"parser": "omnic_mapx", "selected_parser": "omnic_mapx", "path": str(path), "is_map": True,
+                 "map_summary": mapx_summary(m), "omnic": dict(m.meta),
+                 "canonical_map": {"X": "shift_cm-1", "Y": "intensity"}}
+    out = []
+    per_pixel = m.n_spectra <= MAP_PIXEL_IMPORT_CAP
+    for r in m.regions:
+        nx, ny = r.shape
+        meta = dict(base_meta, region=r.name, region_shape=[nx, ny], stage_box_um=list(r.stage_box),
+                    n_pixels=nx * ny, pixels_imported=per_pixel)
+        out.append(Spectrum(id=Spectrum.new_id(), title=f"{stem}_{r.name}_mean", path=str(path), kind="omnic_mapx",
+                            x=np.asarray(m.x, float), y=r.mean_spectrum(), df=None, meta=meta, status="imported"))
+        if not per_pixel:
+            continue
+        for ix in range(nx):
+            for iy in range(ny):
+                pm = dict(base_meta, region=r.name, pixel=[ix, iy],
+                          stage_um=[float(r.x_positions[ix]), float(r.y_positions[iy])])
+                out.append(Spectrum(id=Spectrum.new_id(), title=f"{stem}_{r.name}_x{ix}_y{iy}", path=str(path),
+                                    kind="omnic_mapx", x=np.asarray(m.x, float), y=r.spectrum(ix, iy), df=None,
+                                    meta=pm, status="imported"))
+    return out
+
+
 class CombineDialog(QDialog):
     """Sum / average / weighted-subtract multiple spectra, or scale one —
     the generalized successor of the old Tk SpectralSumWindow. The result
@@ -162,7 +202,7 @@ class LibraryPage(QWidget):
 
         left = QWidget()
         left.setObjectName("Card")
-        left.setFixedWidth(320)
+        left.setFixedWidth(360)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(12, 12, 12, 12)
 
@@ -191,7 +231,11 @@ class LibraryPage(QWidget):
 
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Title", "Kind"])
-        self.table.horizontalHeader().setStretchLastSection(True)
+        from PySide6.QtWidgets import QHeaderView
+        # the title is what the user reads: give it the room, keep the kind compact
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -226,7 +270,8 @@ class LibraryPage(QWidget):
     def _on_import_clicked(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Import files", "",
-            "Data files (*.txt *.dat *.csv *.xy *.asc);;All files (*.*)",
+            "Data files (*.txt *.dat *.csv *.xy *.asc *.spa *.mapx *.jdx *.dx *.rasx);;"
+            "Thermo OMNIC (*.spa *.mapx);;All files (*.*)",
         )
         if not paths:
             return
@@ -238,16 +283,25 @@ class LibraryPage(QWidget):
         the errors are also shown in one dialog."""
         added = 0
         errors = []
+        notes = []
         for path in paths:
             try:
-                spectrum = _load_spectrum_from_path(path)
-                self.library.add(spectrum)
-                added += 1
+                spectra = load_spectra_from_path(path)
+                for spectrum in spectra:
+                    self.library.add(spectrum)
+                added += len(spectra)
+                if len(spectra) > 1:
+                    first = spectra[0].meta
+                    capped = any(not s.meta.get("pixels_imported", True) for s in spectra)
+                    notes.append(f"{os.path.basename(path)}: {first.get('map_summary', '')} -> {len(spectra)} spectra imported"
+                                 + (" (region means only: the map exceeds the per-pixel import cap)" if capped else ""))
             except Exception as exc:
                 errors.append(f"{os.path.basename(path)}: {exc}")
                 logger.warning("Import failed for %s", path, exc_info=True)
         if added:
             self._refresh_table()
+        if notes:
+            QMessageBox.information(self, "Map import", "\n".join(notes))
         if errors:
             QMessageBox.warning(self, "Import", "Some files could not be imported:\n" + "\n".join(errors))
         return added, errors

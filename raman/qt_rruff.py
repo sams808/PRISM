@@ -24,10 +24,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
     QWidget,
 )
 
@@ -100,18 +100,30 @@ class RruffMatchWorkspace(QWidget):
         splitter = QSplitter()
         root.addWidget(splitter)
 
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setMaximumWidth(372)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         left = QWidget()
         left.setObjectName("Card")
-        left.setMaximumWidth(340)
         left_layout = QVBoxLayout(left)
+        left_layout.setSpacing(6)
 
-        left_layout.addWidget(QLabel("Query spectrum"))
+        def section(text: str) -> None:
+            lab = QLabel(text)
+            lab.setObjectName("GroupLabel")
+            left_layout.addWidget(lab)
+
+        # ---- Query
+        section("Query spectrum")
         self.spec_combo = QComboBox()
         self.spec_combo.currentIndexChanged.connect(
             lambda _=None: self.plot.request_redraw(lambda: self._render_preview(self._selected_candidates())))
         left_layout.addWidget(self.spec_combo)
 
         auto_btn = QPushButton("Auto-find peaks from spectrum")
+        auto_btn.setToolTip("Fill the peak list from the spectrum's own maxima (peak-position search only).")
         auto_btn.clicked.connect(self.auto_find_peaks)
         left_layout.addWidget(auto_btn)
 
@@ -122,58 +134,21 @@ class RruffMatchWorkspace(QWidget):
         tol_row = QHBoxLayout()
         tol_row.addWidget(QLabel("Tolerance (cm⁻¹)"))
         self.tolerance_edit = QLineEdit("10.0")
+        self.tolerance_edit.setToolTip("How far a reference peak may sit from a query peak and still count as matched.")
         tol_row.addWidget(self.tolerance_edit)
         left_layout.addLayout(tol_row)
 
-        # Database filters (user request): restrict candidates by laser
-        # wavelength / orientation / scan type / quality before ranking.
-        filters_label = QLabel("Database filters")
-        filters_label.setObjectName("SectionTitle")
-        left_layout.addWidget(filters_label)
-
-        wl_row = QHBoxLayout()
-        wl_row.addWidget(QLabel("Laser λ (nm)"))
-        self.wavelength_combo = QComboBox()
-        self.wavelength_combo.addItem("Any", None)  # real values fill in once the index loads
-        wl_row.addWidget(self.wavelength_combo, 1)
-        left_layout.addLayout(wl_row)
-
-        orient_row = QHBoxLayout()
-        orient_row.addWidget(QLabel("Orientation"))
-        self.orientation_combo = QComboBox()
-        for label, value in (("Any", None), ("Oriented", True), ("Unoriented", False)):
-            self.orientation_combo.addItem(label, value)
-        orient_row.addWidget(self.orientation_combo, 1)
-        left_layout.addLayout(orient_row)
-
-        scan_row = QHBoxLayout()
-        scan_row.addWidget(QLabel("Scan type"))
-        self.scan_type_combo = QComboBox()
-        for label, value in (("Any", None), ("Raman (high-res)", "Raman"), ("Broad scan (LR survey)", "Broad_Scan")):
-            self.scan_type_combo.addItem(label, value)
-        scan_row.addWidget(self.scan_type_combo, 1)
-        left_layout.addLayout(scan_row)
-
-        quality_row = QHBoxLayout()
-        quality_row.addWidget(QLabel("Quality"))
-        self.quality_combo = QComboBox()
-        for label, value in (("Any", None), ("Excellent", "excellent"), ("Fair", "fair"), ("Poor", "poor"), ("Unrated", "unrated")):
-            self.quality_combo.addItem(label, value)
-        quality_row.addWidget(self.quality_combo, 1)
-        left_layout.addLayout(quality_row)
-
-        # Match mode (Spectragryph parity): the peak-position overlap above,
-        # or a full-spectrum similarity ranking over RRUFF's measured spectra
-        # and the user's own reference library.
-        mode_label = QLabel("Search")
-        mode_label.setObjectName("SectionTitle")
-        left_layout.addWidget(mode_label)
+        # ---- Search: peak overlap, or full-spectrum similarity over RRUFF
+        # and the user's own reference library (Spectragryph parity).
+        section("Search")
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Match by"))
         self.match_mode_combo = QComboBox()
         self.match_mode_combo.addItem("Peak positions", "peaks")
         self.match_mode_combo.addItem("Spectrum similarity (Pearson)", "pearson")
         self.match_mode_combo.addItem("Spectrum similarity (Euclidean)", "euclid")
+        self.match_mode_combo.setToolTip("Peak positions: how many of your peaks each reference explains.\n"
+                                         "Spectrum similarity: correlation of the whole spectrum shape (1 = identical).")
         self.match_mode_combo.currentIndexChanged.connect(self._on_match_mode_changed)
         mode_row.addWidget(self.match_mode_combo, 1)
         left_layout.addLayout(mode_row)
@@ -208,50 +183,55 @@ class RruffMatchWorkspace(QWidget):
         find_btn.clicked.connect(self.find_matches)
         left_layout.addWidget(find_btn)
 
-        lib_row = QHBoxLayout()
-        add_lib_btn = QPushButton("Add query to my library…")
-        add_lib_btn.setToolTip("Store the query spectrum, as measured, in your own Raman reference library (used by the similarity search and shareable through Home > Export databases).")
-        add_lib_btn.clicked.connect(self.add_query_to_library)
-        lib_row.addWidget(add_lib_btn)
-        manage_lib_btn = QPushButton("Manage library…")
-        manage_lib_btn.clicked.connect(self.manage_library)
-        lib_row.addWidget(manage_lib_btn)
-        left_layout.addLayout(lib_row)
+        # ---- Database filters (user request): restrict candidates by laser
+        # wavelength / orientation / scan type / quality before ranking.
+        section("Database filters (RRUFF)")
+        wl_row = QHBoxLayout()
+        wl_row.addWidget(QLabel("Laser λ (nm)"))
+        self.wavelength_combo = QComboBox()
+        self.wavelength_combo.addItem("Any", None)  # real values fill in once the index loads
+        self.wavelength_combo.setToolTip("Keep only references measured with this laser (±2 nm): relative intensities depend on it.")
+        wl_row.addWidget(self.wavelength_combo, 1)
+        left_layout.addLayout(wl_row)
 
-        self.db_status_label = QLabel("RRUFF database not loaded yet.")
-        self.db_status_label.setWordWrap(True)
-        left_layout.addWidget(self.db_status_label)
+        orient_row = QHBoxLayout()
+        orient_row.addWidget(QLabel("Orientation"))
+        self.orientation_combo = QComboBox()
+        for label, value in (("Any", None), ("Oriented", True), ("Unoriented", False)):
+            self.orientation_combo.addItem(label, value)
+        orient_row.addWidget(self.orientation_combo, 1)
+        left_layout.addLayout(orient_row)
 
-        # No Python needed: downloads + indexes the RRUFF database straight
-        # from rruff.net, from inside the app — the same thing the shipped
-        # Download-RRUFF-database.bat/.ps1 scripts do via the CLI flag, for
-        # a colleague who only has the portable exe.
-        dl_row = QHBoxLayout()
-        self.download_db_btn = QPushButton("Download RRUFF database…")
-        self.download_db_btn.setToolTip(
-            "Downloads ~400-500 MB from rruff.net and builds the local search index "
-            "— no Python needed. Takes several minutes; safe to re-run if interrupted."
-        )
-        self.download_db_btn.clicked.connect(self.download_database)
-        dl_row.addWidget(self.download_db_btn)
-        self.download_amcsd_btn = QPushButton("Download AMCSD structures…")
-        self.download_amcsd_btn.setToolTip(
-            "Downloads ~66 MB of crystal structures, needed only for "
-            "'Overlay candidate's XRD (CIF)' below."
-        )
-        self.download_amcsd_btn.clicked.connect(self.download_amcsd)
-        dl_row.addWidget(self.download_amcsd_btn)
-        left_layout.addLayout(dl_row)
+        scan_row = QHBoxLayout()
+        scan_row.addWidget(QLabel("Scan type"))
+        self.scan_type_combo = QComboBox()
+        for label, value in (("Any", None), ("Raman (high-res)", "Raman"), ("Broad scan (LR survey)", "Broad_Scan")):
+            self.scan_type_combo.addItem(label, value)
+        scan_row.addWidget(self.scan_type_combo, 1)
+        left_layout.addLayout(scan_row)
 
-        self.overlay_raw_check = QCheckBox("Overlay candidate's measured spectrum (not just peaks)")
+        quality_row = QHBoxLayout()
+        quality_row.addWidget(QLabel("Quality"))
+        self.quality_combo = QComboBox()
+        for label, value in (("Any", None), ("Excellent", "excellent"), ("Fair", "fair"), ("Poor", "poor"), ("Unrated", "unrated")):
+            self.quality_combo.addItem(label, value)
+        quality_row.addWidget(self.quality_combo, 1)
+        left_layout.addLayout(quality_row)
+
+        # ---- Results
+        section("Results")
+        self.overlay_raw_check = QCheckBox("Overlay the candidate's measured spectrum")
+        self.overlay_raw_check.setToolTip("Draw the reference spectrum itself, not only its peak positions.")
         self.overlay_raw_check.setChecked(True)
         left_layout.addWidget(self.overlay_raw_check)
 
         accept_btn = QPushButton("Accept selected candidate as identification")
+        accept_btn.setToolTip("Record the selected reference on the spectrum; for mixtures the search continues over the remaining peaks.")
         accept_btn.clicked.connect(self.accept_selected_candidate)
         left_layout.addWidget(accept_btn)
 
-        send_cif_btn = QPushButton("Overlay candidate's XRD (CIF) in Raman workspace")
+        send_cif_btn = QPushButton("Overlay its XRD pattern (CIF) in Raman")
+        send_cif_btn.setToolTip("Look the mineral up in the AMCSD structures and send its predicted XRD lines to the Raman workspace.")
         send_cif_btn.clicked.connect(self.send_candidate_cifs)
         left_layout.addWidget(send_cif_btn)
 
@@ -266,12 +246,47 @@ class RruffMatchWorkspace(QWidget):
         clear_row.addWidget(clear_btn)
         left_layout.addLayout(clear_row)
 
+        # ---- the user's own reference library
+        section("My reference library")
+        lib_row = QHBoxLayout()
+        add_lib_btn = QPushButton("Add query to my library…")
+        add_lib_btn.setToolTip("Store the query spectrum, as measured, in your own Raman reference library (used by the similarity search and shareable through Home > Export databases).")
+        add_lib_btn.clicked.connect(self.add_query_to_library)
+        lib_row.addWidget(add_lib_btn)
+        manage_lib_btn = QPushButton("Manage library…")
+        manage_lib_btn.clicked.connect(self.manage_library)
+        lib_row.addWidget(manage_lib_btn)
+        left_layout.addLayout(lib_row)
+
+        # ---- Databases: no Python needed, downloads + indexes RRUFF/AMCSD
+        # from inside the app (what the shipped Download-*.bat scripts do).
+        section("Databases on this computer")
+        self.db_status_label = QLabel("RRUFF database not loaded yet.")
+        self.db_status_label.setWordWrap(True)
+        self.db_status_label.setObjectName("SectionNote")
+        left_layout.addWidget(self.db_status_label)
+        self.download_db_btn = QPushButton("Download RRUFF database…")
+        self.download_db_btn.setToolTip(
+            "Downloads ~400-500 MB from rruff.net and builds the local search index "
+            "— no Python needed. Takes several minutes; safe to re-run if interrupted."
+        )
+        self.download_db_btn.clicked.connect(self.download_database)
+        left_layout.addWidget(self.download_db_btn)
+        self.download_amcsd_btn = QPushButton("Download AMCSD structures…")
+        self.download_amcsd_btn.setToolTip(
+            "Downloads ~66 MB of crystal structures, needed only for "
+            "'Overlay its XRD pattern (CIF)'."
+        )
+        self.download_amcsd_btn.clicked.connect(self.download_amcsd)
+        left_layout.addWidget(self.download_amcsd_btn)
+
         citation_label = QLabel(f"{RRUFF_CITATION}\n\n{RRUFF_ATTRIBUTION_NOTE}")
         citation_label.setWordWrap(True)
         citation_label.setObjectName("SectionNote")
         left_layout.addWidget(citation_label)
         left_layout.addStretch(1)
-        splitter.addWidget(left)
+        left_scroll.setWidget(left)
+        splitter.addWidget(left_scroll)
 
         right = QWidget()
         right.setObjectName("Card")
@@ -405,7 +420,9 @@ class RruffMatchWorkspace(QWidget):
         elapsed = time.time() - t0
         if not self._index:
             self.db_status_label.setText(
-                f"No RRUFF database found at {self.cache_dir}. Run rruff_science.build_index() first."
+                "No RRUFF database on this computer yet: use 'Download RRUFF database…' below "
+                "(internet, ~450 MB, a few minutes), or Home › Import a database pack from a "
+                "colleague. Your own reference library works without it."
             )
             return False
         summary = index_summary(self._index)

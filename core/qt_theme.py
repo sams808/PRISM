@@ -240,7 +240,29 @@ def build_stylesheet(palette: dict = PALETTE) -> str:
     QSplitter::handle {{
         background: {p['border']};
     }}
-    """
+    QGroupBox {{
+        border: 1px solid {p['border']};
+        border-radius: 4px;
+        margin-top: 10px;
+        padding-top: 6px;
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        left: 8px;
+        padding: 0 4px;
+        color: {p['muted']};
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }}
+    QLabel#GroupLabel {{
+        color: {p['muted']};
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-top: 6px;
+    }}
+    """ + CHECK_QSS
 
 
 def apply_theme(app, palette: dict = PALETTE, *, dark: bool = False) -> None:
