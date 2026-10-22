@@ -24,9 +24,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
     QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
     QWidget,
 )
@@ -40,13 +41,16 @@ from raman.rruff_science import (
     RRUFF_CITATION,
     filter_rruff_index,
     find_cifs_for_mineral,
+    format_chemistry,
     index_summary,
     load_index,
     parse_rruff_txt,
     rank_rruff_matches,
+    record_details,
+    rruff_page_url,
 )
 
-RESULT_COLUMNS = ["Mineral", "RRUFF ID", "λ (nm)", "Matched", "Match %", "Category", "Score"]
+RESULT_COLUMNS = ["Mineral", "Formula", "RRUFF ID", "λ (nm)", "Matched", "Match %", "Quality", "Score"]
 
 
 class RruffMatchWorkspace(QWidget):
@@ -133,7 +137,7 @@ class RruffMatchWorkspace(QWidget):
 
         tol_row = QHBoxLayout()
         tol_row.addWidget(QLabel("Tolerance (cm⁻¹)"))
-        self.tolerance_edit = QLineEdit("10.0")
+        self.tolerance_edit = QLineEdit("3.0")
         self.tolerance_edit.setToolTip("How far a reference peak may sit from a query peak and still count as matched.")
         tol_row.addWidget(self.tolerance_edit)
         left_layout.addLayout(tol_row)
@@ -170,7 +174,8 @@ class RruffMatchWorkspace(QWidget):
         self.source_rruff_check = QCheckBox("RRUFF")
         self.source_rruff_check.setChecked(True)
         src_row.addWidget(self.source_rruff_check)
-        self.source_library_check = QCheckBox("My reference library")
+        self.source_library_check = QCheckBox("My library")
+        self.source_library_check.setToolTip("Your own reference library (Add query to my library…)")
         self.source_library_check.setChecked(True)
         src_row.addWidget(self.source_library_check)
         src_row.addStretch(1)
@@ -179,6 +184,7 @@ class RruffMatchWorkspace(QWidget):
         self._on_match_mode_changed()
 
         find_btn = QPushButton("Find matches")
+        find_btn.setToolTip("Search RRUFF (and your library) with the settings above; hits appear in the table on the right")
         find_btn.setObjectName("Primary")
         find_btn.clicked.connect(self.find_matches)
         left_layout.addWidget(find_btn)
@@ -186,37 +192,38 @@ class RruffMatchWorkspace(QWidget):
         # ---- Database filters (user request): restrict candidates by laser
         # wavelength / orientation / scan type / quality before ranking.
         section("Database filters (RRUFF)")
-        wl_row = QHBoxLayout()
-        wl_row.addWidget(QLabel("Laser λ (nm)"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
         self.wavelength_combo = QComboBox()
         self.wavelength_combo.addItem("Any", None)  # real values fill in once the index loads
         self.wavelength_combo.setToolTip("Keep only references measured with this laser (±2 nm): relative intensities depend on it.")
-        wl_row.addWidget(self.wavelength_combo, 1)
-        left_layout.addLayout(wl_row)
-
-        orient_row = QHBoxLayout()
-        orient_row.addWidget(QLabel("Orientation"))
         self.orientation_combo = QComboBox()
         for label, value in (("Any", None), ("Oriented", True), ("Unoriented", False)):
             self.orientation_combo.addItem(label, value)
-        orient_row.addWidget(self.orientation_combo, 1)
-        left_layout.addLayout(orient_row)
-
-        scan_row = QHBoxLayout()
-        scan_row.addWidget(QLabel("Scan type"))
+        self.orientation_combo.setToolTip("Oriented single-crystal spectra or unoriented (powder-like) ones")
         self.scan_type_combo = QComboBox()
         for label, value in (("Any", None), ("Raman (high-res)", "Raman"), ("Broad scan (LR survey)", "Broad_Scan")):
             self.scan_type_combo.addItem(label, value)
-        scan_row.addWidget(self.scan_type_combo, 1)
-        left_layout.addLayout(scan_row)
-
-        quality_row = QHBoxLayout()
-        quality_row.addWidget(QLabel("Quality"))
+        self.scan_type_combo.setToolTip("High-resolution scans, or the low-resolution broad survey scans")
         self.quality_combo = QComboBox()
         for label, value in (("Any", None), ("Excellent", "excellent"), ("Fair", "fair"), ("Poor", "poor"), ("Unrated", "unrated")):
             self.quality_combo.addItem(label, value)
-        quality_row.addWidget(self.quality_combo, 1)
-        left_layout.addLayout(quality_row)
+        self.quality_combo.setToolTip("RRUFF's own quality rating of the reference spectrum")
+        for combo in (self.wavelength_combo, self.orientation_combo, self.scan_type_combo, self.quality_combo):
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+        grid.addWidget(QLabel("Laser λ"), 0, 0)
+        grid.addWidget(self.wavelength_combo, 0, 1)
+        grid.addWidget(QLabel("Orientation"), 0, 2)
+        grid.addWidget(self.orientation_combo, 0, 3)
+        grid.addWidget(QLabel("Scan"), 1, 0)
+        grid.addWidget(self.scan_type_combo, 1, 1)
+        grid.addWidget(QLabel("Quality"), 1, 2)
+        grid.addWidget(self.quality_combo, 1, 3)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        left_layout.addLayout(grid)
 
         # ---- Results
         section("Results")
@@ -224,6 +231,18 @@ class RruffMatchWorkspace(QWidget):
         self.overlay_raw_check.setToolTip("Draw the reference spectrum itself, not only its peak positions.")
         self.overlay_raw_check.setChecked(True)
         left_layout.addWidget(self.overlay_raw_check)
+        self.show_query_peaks_check = QCheckBox("Show the query peaks")
+        self.show_query_peaks_check.setToolTip("The peak positions of the query (found or typed) as bars on the plot")
+        self.show_candidate_peaks_check = QCheckBox("Show the candidates' peaks")
+        self.show_candidate_peaks_check.setToolTip("The peak positions of the selected and accepted references as dashed lines")
+        for cb in (self.show_query_peaks_check, self.show_candidate_peaks_check):
+            cb.setChecked(True)
+            cb.toggled.connect(lambda *_: self.plot.request_redraw(lambda: self._render_preview(self._selected_candidates())))
+            left_layout.addWidget(cb)
+        card_btn = QPushButton("Card / RRUFF page…")
+        card_btn.setToolTip("Composition, measured chemistry, locality, source and the other header fields of the selected hit, "
+                            "with a button to its page on rruff.info (also: double-click the hit)")
+        card_btn.clicked.connect(self.show_candidate_card)
 
         accept_btn = QPushButton("Accept selected candidate as identification")
         accept_btn.setToolTip("Record the selected reference on the spectrum; for mixtures the search continues over the remaining peaks.")
@@ -236,7 +255,9 @@ class RruffMatchWorkspace(QWidget):
         left_layout.addWidget(send_cif_btn)
 
         clear_row = QHBoxLayout()
+        clear_row.addWidget(card_btn)
         update_btn = QPushButton("Update plot")
+        update_btn.setToolTip("Redraw the query with the selected hits")
         update_btn.clicked.connect(
             lambda: self.plot.request_redraw(lambda: self._render_preview(self._selected_candidates())))
         clear_row.addWidget(update_btn)
@@ -254,6 +275,7 @@ class RruffMatchWorkspace(QWidget):
         add_lib_btn.clicked.connect(self.add_query_to_library)
         lib_row.addWidget(add_lib_btn)
         manage_lib_btn = QPushButton("Manage library…")
+        manage_lib_btn.setToolTip("Rename, remove, export or import the spectra of your own reference library")
         manage_lib_btn.clicked.connect(self.manage_library)
         lib_row.addWidget(manage_lib_btn)
         left_layout.addLayout(lib_row)
@@ -291,6 +313,11 @@ class RruffMatchWorkspace(QWidget):
         right = QWidget()
         right.setObjectName("Card")
         right_layout = QVBoxLayout(right)
+        self.results_label = QLabel("Hits appear here after Find matches. Click a hit to overlay it on the query; "
+                                    "Shift/Ctrl-click to compare several; double-click for its card.")
+        self.results_label.setObjectName("SectionNote")
+        self.results_label.setWordWrap(True)
+        right_layout.addWidget(self.results_label)
 
         self.results_table = QTableWidget(0, len(RESULT_COLUMNS))
         self.results_table.setHorizontalHeaderLabels(RESULT_COLUMNS)
@@ -298,6 +325,12 @@ class RruffMatchWorkspace(QWidget):
         self.results_table.setSelectionMode(QTableWidget.ExtendedSelection)  # shift/ctrl-click overlays several candidates
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.results_table.itemSelectionChanged.connect(self._on_result_selected)
+        self.results_table.itemDoubleClicked.connect(lambda *_: self.show_candidate_card())
+        self.results_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.results_table.customContextMenuRequested.connect(self._results_menu)
+        self.results_table.setToolTip("Double-click a hit for its card (composition, locality, source, RRUFF page); right-click for more.\n"
+                                      "Match % = share of the query's peak intensity the reference explains; Score = geometric mean of "
+                                      "that and of the share of the reference's own peaks found in the query (1 = perfect).")
         right_layout.addWidget(self.results_table, 1)
 
         self.plot = PlotWidget(figsize=(7, 4.5))
@@ -456,6 +489,7 @@ class RruffMatchWorkspace(QWidget):
             QMessageBox.information(self, "Auto-find peaks", "No clear peak candidates were found.")
             return
         self.peaks_edit.setText(", ".join(f"{p:.1f}" for p in sorted(peaks)))
+        self.peaks_edit.setCursorPosition(0)       # show the list from its first value, not scrolled to the end
 
     def _parse_peaks(self) -> List[float]:
         text = self.peaks_edit.text().strip()
@@ -548,7 +582,9 @@ class RruffMatchWorkspace(QWidget):
     def _on_similarity_done(self, hits) -> None:
         self._results = list(hits)
         self._populate_results_table()
-        self.db_status_label.setText(f"{len(hits)} hit(s) by {self.match_mode_combo.currentText().lower()}; score 1 = identical shape.")
+        summary = f"{len(hits)} hit(s) by {self.match_mode_combo.currentText().lower()}; score 1 = identical shape."
+        self.db_status_label.setText(summary)
+        self.results_label.setText(summary + " Click a hit to overlay it; double-click for its card.")
         self._render_preview([self._results[0]] if self._results else [])
 
     def _on_similarity_error(self, traceback_text: str) -> None:
@@ -587,7 +623,7 @@ class RruffMatchWorkspace(QWidget):
         if not peaks:
             QMessageBox.warning(self, "Find matches", "Enter or auto-find at least one peak position.")
             return
-        tolerance = _to_float(self.tolerance_edit.text(), 10.0)
+        tolerance = _to_float(self.tolerance_edit.text(), 3.0)
         self._query_peaks = peaks
         searchable = filter_rruff_index(
             self._index,
@@ -608,14 +644,34 @@ class RruffMatchWorkspace(QWidget):
         accepted_ids = {m.get("rruff_id") for m in (spectrum.meta.get("rruff_matches", []) if spectrum else [])}
         if accepted_ids:
             searchable = [r for r in searchable if r.get("rruff_id") not in accepted_ids]
+        filter_note = ""
         if len(searchable) < len(self._index):
-            self.db_status_label.setText(
-                f"Filters keep {len(searchable)} of {len(self._index)} database spectra"
-                + (f" ({len(accepted_ids)} already-accepted excluded)." if accepted_ids else ".")
-            )
-        self._results = rank_rruff_matches(peaks, searchable, tolerance=tolerance, top_n=25)
-        self._populate_results_table()
-        self._render_preview([self._results[0]] if self._results else [])
+            filter_note = (f" Filters keep {len(searchable)} of {len(self._index)} database spectra"
+                           + (f" ({len(accepted_ids)} already-accepted excluded)." if accepted_ids else "."))
+        qxy = (np.asarray(spectrum.x, float), np.asarray(spectrum.y, float)) if spectrum is not None else None
+        n_searchable = len(searchable)
+        self.db_status_label.setText(f"Peak search over {n_searchable} spectra…")
+
+        def job(progress=None):
+            return rank_rruff_matches(peaks, searchable, tolerance=tolerance, top_n=25, query_xy=qxy, progress=progress)
+
+        def done(hits):
+            self._results = list(hits)
+            self._populate_results_table()
+            best = float(hits[0]["score"]) if hits else 0.0
+            verdict = ("convincing" if best >= 0.6 else "possible: judge the overlay" if best >= 0.4
+                       else "weak: no convincing match in the database")
+            summary = f"{len(hits)} hit(s) over {n_searchable} spectra; best score {best:.2f} ({verdict})."
+            self.db_status_label.setText(summary + filter_note)
+            self.results_label.setText(summary + " Click a hit to overlay it; double-click for its card.")
+            self._render_preview([self._results[0]] if self._results else [])
+
+        from core.qt_worker import run_in_thread
+        run_in_thread(job, done, self._on_search_error,
+                      on_progress=lambda i, n, what: self.db_status_label.setText(f"Peak search: {what} {i}/{n}…"))
+
+    def _on_search_error(self, traceback_text: str) -> None:
+        QMessageBox.critical(self, "Search failed", traceback_text)
 
     def _populate_results_table(self) -> None:
         self.results_table.setRowCount(len(self._results))
@@ -626,15 +682,19 @@ class RruffMatchWorkspace(QWidget):
             except (TypeError, ValueError):
                 wl_text = str(wl)
             values = [
-                rec.get("mineral", ""), rec.get("rruff_id", ""), wl_text,
+                rec.get("mineral", ""), format_chemistry(self._formula_of(rec)), rec.get("rruff_id", ""), wl_text,
                 str(rec.get("matched_peaks", "")) if "matched_peaks" in rec else "",
                 f"{rec.get('match_fraction', 0.0) * 100:.0f}%" if "match_fraction" in rec else "",
-                rec.get("category", ""),
+                str(rec.get("category", "")).split("_")[0],
                 f"{rec['score']:.3f}" if "score" in rec else "",
             ]
             for col, val in enumerate(values):
                 self.results_table.setItem(row, col, QTableWidgetItem(str(val)))
+            self.results_table.item(row, 6).setToolTip(str(rec.get("category", "")))
         self.results_table.resizeColumnsToContents()
+        if self.results_table.columnWidth(1) > 220:
+            self.results_table.setColumnWidth(1, 220)      # a long formula must not push the scores off screen
+        self.results_table.horizontalHeader().setStretchLastSection(True)
         if self._results:
             self.results_table.selectRow(0)
 
@@ -669,10 +729,12 @@ class RruffMatchWorkspace(QWidget):
         # peaks in black, peaks explained by accepted phases in gray.
         state = self._state()
         peaks = self._parse_peaks()
-        if peaks:
+        show_query = self.show_query_peaks_check.isChecked()
+        show_cand = self.show_candidate_peaks_check.isChecked()
+        if peaks and show_query:
             ax.vlines(peaks, 0, 1.04, color="black", lw=0.8, alpha=0.30,
                       label="query peaks")
-        if state["explained"]:
+        if state["explained"] and show_query:
             ax.vlines(state["explained"], 0, 1.04, color="gray", lw=0.8,
                       alpha=0.45, ls="--", label="explained by accepted phases")
 
@@ -680,13 +742,15 @@ class RruffMatchWorkspace(QWidget):
         for k, acc in enumerate(state["accepted"]):
             color = self.ACCEPTED_COLORS[k % len(self.ACCEPTED_COLORS)]
             acc_label = f"accepted: {acc.get('mineral', '?')} ({acc.get('rruff_id', '?')})"
-            for j, peak in enumerate(acc.get("peaks", [])):
+            for j, peak in enumerate(acc.get("peaks", []) if show_cand else []):
                 ax.axvline(peak, color=color, ls=":", lw=0.9, alpha=0.6,
                            label=acc_label if j == 0 else None)
 
         for k, candidate in enumerate(candidates):
             color = self.CANDIDATE_COLORS[k % len(self.CANDIDATE_COLORS)]
-            label = f"{candidate.get('mineral', '?')} ({candidate.get('rruff_id', '?')}, {candidate.get('wavelength_nm', '?')} nm)"
+            formula = format_chemistry(self._formula_of(candidate))
+            label = (f"{candidate.get('mineral', '?')}" + (f" {formula}" if formula else "")
+                     + f" ({candidate.get('rruff_id', '?')}, {candidate.get('wavelength_nm', '?')} nm)")
             drew_curve = False
             if candidate.get("entry") is not None:  # a hit from the user's reference library
                 ex, ey = candidate["entry"].arrays()
@@ -705,7 +769,7 @@ class RruffMatchWorkspace(QWidget):
                         drew_curve = True
                 except OSError:
                     pass
-            for j, peak in enumerate(candidate.get("peaks", [])):
+            for j, peak in enumerate(candidate.get("peaks", []) if show_cand else []):
                 ax.axvline(peak, color=color, ls="--", lw=0.7, alpha=0.5,
                            label=label if (not drew_curve and j == 0) else None)
 
@@ -718,6 +782,55 @@ class RruffMatchWorkspace(QWidget):
         self.plot.canvas.draw_idle()
 
     # ------------------------------------------------------------------
+    def _formula_of(self, rec: Dict[str, Any]) -> str:
+        """Ideal chemistry of a hit: from the index, else read once from the
+        header of its data file (older indexes have no chemistry field)."""
+        if rec.get("entry") is not None:
+            return str(rec["entry"].meta.get("formula") or "")
+        f = rec.get("ideal_chemistry")
+        if f is None:
+            f = ""
+            p = rec.get("raw_path")
+            if p and os.path.isfile(p):
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                        for _ in range(40):
+                            line = fh.readline()
+                            if not line:
+                                break
+                            if line.startswith("##IDEAL CHEMISTRY="):
+                                f = line.partition("=")[2].strip()
+                                break
+                except OSError:
+                    f = ""
+            rec["ideal_chemistry"] = f
+        return str(f or "")
+
+    def _results_menu(self, pos) -> None:
+        if not self._selected_candidates():
+            return
+        menu = QMenu(self)
+        menu.addAction("Card…", self.show_candidate_card)
+        menu.addAction("Open the RRUFF page", self.open_candidate_page)
+        menu.exec(self.results_table.viewport().mapToGlobal(pos))
+
+    def open_candidate_page(self) -> None:
+        cands = self._selected_candidates()
+        if not cands:
+            return
+        if cands[0].get("entry") is not None:
+            QMessageBox.information(self, "RRUFF page", "This hit is a spectrum of your own reference library; it has no RRUFF page.")
+            return
+        QDesktopServices.openUrl(QUrl(rruff_page_url(record_details(cands[0]))))
+
+    def show_candidate_card(self) -> None:
+        cands = self._selected_candidates()
+        if not cands:
+            QMessageBox.information(self, "Card", "Select a hit in the table first.")
+            return
+        from raman.qt_raman_dialogs import RruffCardDialog
+        RruffCardDialog(self, cands[0]).exec()
+
     def clear_session(self) -> None:
         """Start over on the current spectrum: peaks, results, and the
         accepted-overlay/explained-peak session state (identifications
@@ -775,7 +888,7 @@ class RruffMatchWorkspace(QWidget):
             QMessageBox.warning(self, "Accept identification", "Select a query spectrum and a candidate row first.")
             return
         candidate = self._results[rows[0].row()]
-        tolerance = _to_float(self.tolerance_edit.text(), 10.0)
+        tolerance = _to_float(self.tolerance_edit.text(), 3.0)
 
         previous_state = {
             "rruff_match": spectrum.meta.get("rruff_match"),

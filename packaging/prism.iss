@@ -46,6 +46,15 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
+; Upgrades: the AppId above never changes, so a newer setup finds the installed
+; copy by itself, keeps its folder, privileges and tasks, closes a running
+; PRISM through the Restart Manager and replaces the files in place (the
+; [InstallDelete] section below wipes the previous _internal first). No
+; uninstall is needed before installing a newer version.
+UsePreviousAppDir=yes
+UsePreviousPrivileges=yes
+UsePreviousTasks=yes
+VersionInfoVersion={#MyAppVersion}
 #ifexist "..\assets\prism.ico"
 SetupIconFile=..\assets\prism.ico
 #endif

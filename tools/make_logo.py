@@ -76,7 +76,7 @@ def make_splash(path, w=720, h=420):
              family="DejaVu Sans", va="center")
     fig.text(0.55, 0.42, "Platform for Research In\nSpectroscopy & Materials",
              color="#9fb0d0", fontsize=14, va="center")
-    fig.text(0.05, 0.07, "Raman · XRD · XAS · Thermal — one suite", color="#5d6b8a",
+    fig.text(0.05, 0.07, "NOME group · Washington State University", color="#5d6b8a",
              fontsize=11)
     fig.savefig(path, facecolor=NAVY)
     plt.close(fig)

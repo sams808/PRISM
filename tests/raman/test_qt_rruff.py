@@ -254,7 +254,7 @@ def test_find_matches_ranks_best_candidate_first(qtbot, tmp_path):
 
     assert widget.results_table.rowCount() == 2  # NoPeaksMineral excluded
     assert widget.results_table.item(0, 0).text() == "Quartz"
-    assert widget.results_table.item(0, 3).text() == "2"  # matched
+    assert widget.results_table.item(0, 4).text() == "2"  # matched (column 1 is the formula)
     assert "3 spectra" in widget.db_status_label.text() or "database" in widget.db_status_label.text().lower()
 
 
@@ -530,3 +530,40 @@ def test_wavelength_filter_restricts_candidates(qtbot, tmp_path):
     qtbot.wait(20)
     assert widget.results_table.rowCount() == 1
     assert widget.results_table.item(0, 0).text() == "Quartz"
+
+
+def test_hits_show_the_formula_open_a_card_and_peak_marks_toggle(qtbot, tmp_path):
+    cache_dir = tmp_path / "cache"
+    raw_dir = cache_dir / "raw"
+    _write_fake_cache(cache_dir, raw_dir)
+    raw = next(raw_dir.glob("*.txt"))
+    raw.write_text("##IDEAL CHEMISTRY=SiO_2_\n##URL=rruff.info/quartz/R040031\n##LOCALITY=Somewhere\n"
+                   + raw.read_text(encoding="utf-8"), encoding="utf-8")
+    library = SpectrumLibrary()
+    sp = _synthetic_query_spectrum()
+    library.add(sp)
+    widget = RruffMatchWorkspace(library=library, cache_dir=str(cache_dir))
+    qtbot.addWidget(widget)
+    widget.set_spectra([sp.id])
+    widget.peaks_edit.setText("464, 1085")
+    widget.find_matches()
+    assert widget.results_table.rowCount() >= 1
+    headers = [widget.results_table.horizontalHeaderItem(c).text() for c in range(widget.results_table.columnCount())]
+    assert headers[:3] == ["Mineral", "Formula", "RRUFF ID"]
+    assert widget.results_table.item(0, 1).text() == "SiO₂"       # read from the file: the fake index has no chemistry
+    from raman.qt_raman_dialogs import RruffCardDialog
+    dlg = RruffCardDialog(widget, widget._results[0])
+    qtbot.addWidget(dlg)
+    text = dlg.browser.toPlainText()
+    assert "SiO₂" in text and "Somewhere" in text and dlg.url == "https://rruff.info/quartz/R040031"
+    widget.results_table.selectRow(0)
+    widget._render_preview(widget._selected_candidates())
+    ax = widget.plot.figure.get_axes()[0]
+    with_marks = len(ax.lines) + len(ax.collections)
+    assert any(t.get_text() == "query peaks" for t in ax.get_legend().get_texts())
+    widget.show_query_peaks_check.setChecked(False)
+    widget.show_candidate_peaks_check.setChecked(False)
+    widget._render_preview(widget._selected_candidates())
+    ax = widget.plot.figure.get_axes()[0]
+    assert len(ax.lines) + len(ax.collections) < with_marks
+    assert not any(t.get_text() == "query peaks" for t in ax.get_legend().get_texts())

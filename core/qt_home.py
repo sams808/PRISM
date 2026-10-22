@@ -1,22 +1,19 @@
 """
-qt_home.py — the Home page: where the app is configured and started from.
+qt_home.py — the Home page and the Settings dialog.
 
-Three things live here, by request of the group lead (2026-10-21):
+Home shows what this computer is set up for: a card per ENABLED module
+with buttons to its workspaces, the quick actions, and one line about the
+reference databases. Nothing else — a Raman station shows the Raman
+cards and no trace of SAXS or XAS.
 
-1. **Modules**: one card per module with a description, its workspaces and
-   an Enabled switch. Everything starts switched OFF on a fresh install and
-   the choice is remembered per user, so a single-technique computer (the
-   Raman spectrometer's PC) shows exactly the workspaces that matter there
-   and nothing else; presets apply a whole configuration in one click.
-   Disabled modules are hidden, not removed: switch them back on here.
-2. **Reference databases**: what is installed on this computer, and the
-   export / import of a database pack (core.db_packs) so a licensed
-   colleague's PC receives the databases as one folder PRISM reads
-   directly.
-3. **Quick actions**: import, open a project, the guides.
+Switching modules on and off, the presets and the database export /
+import live in the Settings dialog (Settings › Modules…, Settings ›
+Reference databases…), so the configuration is one menu away but never
+in the way. A fresh install starts with every module off and Home says
+so, with the button that opens the dialog.
 
-The page talks to the shell through a small interface (module state,
-presets, navigation, library import) rather than reaching into widgets.
+The page and the dialog talk to the shell through a small interface
+(module catalogue and state, presets, navigation, library import).
 """
 from __future__ import annotations
 
@@ -26,19 +23,19 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QCheckBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox,
+    QPushButton, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
 
 class ModuleCard(QFrame):
-    """One module: colour stripe, name, description, workspace buttons and
-    the Enabled switch."""
+    """One module: colour stripe, name, description, workspace buttons and,
+    in the Settings dialog, the Enabled switch."""
 
     toggled = Signal(str, bool)
     open_requested = Signal(str)
 
-    def __init__(self, name: str, color: str, description: str, pages: List[str], parent=None):
+    def __init__(self, name: str, color: str, description: str, pages: List[str], parent=None, *, with_switch: bool = True):
         super().__init__(parent)
         self.name = name
         self.pages = list(pages)
@@ -59,9 +56,11 @@ class ModuleCard(QFrame):
         title = QLabel(name)
         title.setObjectName("SectionTitle")
         head.addWidget(title, 1)
-        self.switch = QCheckBox("Enabled")
-        self.switch.toggled.connect(lambda on: self.toggled.emit(self.name, bool(on)))
-        head.addWidget(self.switch)
+        self.switch: Optional[QCheckBox] = None
+        if with_switch:
+            self.switch = QCheckBox("Enabled")
+            self.switch.toggled.connect(lambda on: self.toggled.emit(self.name, bool(on)))
+            head.addWidget(self.switch)
         body.addLayout(head)
         desc = QLabel(description)
         desc.setObjectName("SectionNote")
@@ -82,116 +81,35 @@ class ModuleCard(QFrame):
 
     def set_state(self, enabled: bool) -> None:
         """Reflect the shell's state without re-emitting toggled."""
-        self.switch.blockSignals(True)
-        self.switch.setChecked(bool(enabled))
-        self.switch.blockSignals(False)
+        if self.switch is not None:
+            self.switch.blockSignals(True)
+            self.switch.setChecked(bool(enabled))
+            self.switch.blockSignals(False)
         for b in self.page_buttons.values():
             b.setEnabled(bool(enabled))
 
 
-class HomePage(QWidget):
-    def __init__(self, shell, parent: Optional[QWidget] = None):
+class DatabasePanel(QWidget):
+    """Inventory of the reference databases on this computer, and the pack
+    export / import (core.db_packs)."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.shell = shell
-        self.cards: Dict[str, ModuleCard] = {}
         self._db_items = None
         self._db_log: "queue.Queue[str]" = queue.Queue()
         self._db_timer = QTimer(self)
         self._db_timer.setInterval(200)
         self._db_timer.timeout.connect(self._drain_db_log)
         self._db_busy = False
-        self._build_ui()
-
-    # ------------------------------------------------------------------
-    def _build_ui(self) -> None:
-        from core.qt_help import APP_NAME, APP_TAGLINE, APP_VERSION, asset_path
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        root.addWidget(scroll)
-        content = QWidget()
-        scroll.setWidget(content)
-        lay = QVBoxLayout(content)
-        lay.setContentsMargins(24, 20, 24, 20)
-        lay.setSpacing(14)
-
-        # ---- header
-        head = QHBoxLayout()
-        logo = QLabel()
-        p = asset_path("prism_logo.png")
-        if os.path.isfile(p):
-            from PySide6.QtGui import QPixmap
-            pm = QPixmap(p)
-            if not pm.isNull():
-                logo.setPixmap(pm.scaledToHeight(56, Qt.SmoothTransformation))
-        head.addWidget(logo)
-        titles = QVBoxLayout()
-        t = QLabel(f"{APP_NAME} {APP_VERSION}")
-        t.setStyleSheet("font-size: 22px; font-weight: 600;")
-        titles.addWidget(t)
-        tag = QLabel(APP_TAGLINE)
-        tag.setObjectName("SectionNote")
-        titles.addWidget(tag)
-        head.addLayout(titles, 1)
-        actions = QHBoxLayout()
-        for text, slot in (("Import files…", self.shell.library_page._on_import_clicked),
-                           ("Open project…", self.shell.open_project),
-                           ("Quick-start guide", self.shell.show_help)):
-            b = QPushButton(text)
-            b.clicked.connect(slot)
-            actions.addWidget(b)
-        head.addLayout(actions)
-        lay.addLayout(head)
-
-        # ---- modules
-        sect = QLabel("Modules")
-        sect.setObjectName("SectionTitle")
-        lay.addWidget(sect)
-        note = QLabel("Switch on the techniques used on this computer; the others stay hidden until you "
-                      "come back here. The Library is always available. Your choice is remembered.")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        note = QLabel("Export packs the installed databases into one folder that another PRISM imports as is "
+                      "(for colleagues who hold the same database rights, e.g. the Raman spectrometer's PC). "
+                      "RRUFF and AMCSD are downloaded from the Raman ID workspace; XRD card databases and CIF "
+                      "folders are registered in the XRD ID workspace.")
         note.setObjectName("SectionNote")
         note.setWordWrap(True)
         lay.addWidget(note)
-        presets = QHBoxLayout()
-        presets.addWidget(QLabel("Presets:"))
-        self.preset_buttons: Dict[str, QPushButton] = {}
-        for preset in self.shell.module_presets():
-            b = QPushButton(preset)
-            b.clicked.connect(lambda _=False, name=preset: self.shell.apply_module_preset(name))
-            presets.addWidget(b)
-            self.preset_buttons[preset] = b
-        presets.addStretch(1)
-        self.modules_summary = QLabel("")
-        self.modules_summary.setObjectName("SectionNote")
-        presets.addWidget(self.modules_summary)
-        lay.addLayout(presets)
-
-        grid = QGridLayout()
-        grid.setSpacing(10)
-        for i, (name, color, description, pages) in enumerate(self.shell.module_catalog()):
-            card = ModuleCard(name, color, description, pages)
-            card.toggled.connect(self.shell.set_module_enabled)
-            card.open_requested.connect(self.shell.navigate_to)
-            self.cards[name] = card
-            grid.addWidget(card, i // 3, i % 3)
-        for c in range(3):
-            grid.setColumnStretch(c, 1)
-        lay.addLayout(grid)
-
-        # ---- databases
-        sect2 = QLabel("Reference databases on this computer")
-        sect2.setObjectName("SectionTitle")
-        lay.addWidget(sect2)
-        note2 = QLabel("Export packs the installed databases into one folder that another PRISM imports as is "
-                       "(for colleagues who hold the same database rights, e.g. the Raman spectrometer's PC). "
-                       "RRUFF and AMCSD are downloaded from the Raman ID workspace; XRD card databases and CIF "
-                       "folders are registered in the XRD ID workspace.")
-        note2.setObjectName("SectionNote")
-        note2.setWordWrap(True)
-        lay.addWidget(note2)
         self.db_card = QWidget()
         self.db_card.setObjectName("Card")
         db_lay = QVBoxLayout(self.db_card)
@@ -221,25 +139,6 @@ class HomePage(QWidget):
         lay.addWidget(self.db_card)
         lay.addStretch(1)
 
-        self.refresh_modules()
-
-    # ------------------------------------------------------------------
-    # Modules
-    # ------------------------------------------------------------------
-    def refresh_modules(self) -> None:
-        on = []
-        for name, card in self.cards.items():
-            enabled = self.shell.is_module_enabled(name)
-            card.set_state(enabled)
-            if enabled:
-                on.append(name)
-        self.modules_summary.setText(
-            f"{len(on)} of {len(self.cards)} modules on" + (f": {', '.join(on)}" if on else " — switch some on to start")
-        )
-
-    # ------------------------------------------------------------------
-    # Databases
-    # ------------------------------------------------------------------
     def showEvent(self, event) -> None:  # noqa: N802 - Qt name
         super().showEvent(event)
         if self._db_items is None:
@@ -257,7 +156,6 @@ class HomePage(QWidget):
 
     def _on_inventory(self, items) -> None:
         self._db_items = list(items)
-        # rebuild the rows
         while self.db_grid.count():
             it = self.db_grid.takeAt(0)
             if it.widget():
@@ -275,6 +173,12 @@ class HomePage(QWidget):
         self.db_grid.setColumnStretch(1, 1)
         n_inst = sum(1 for it in self._db_items if it.installed)
         self.db_status.setText(f"{n_inst} of {len(self._db_items)} database kinds installed.")
+
+    def summary(self) -> str:
+        if self._db_items is None:
+            return ""
+        inst = [it.label for it in self._db_items if it.installed]
+        return ("Installed: " + ", ".join(inst)) if inst else "No reference database installed yet."
 
     def _on_db_error(self, traceback_text: str) -> None:
         self._db_busy = False
@@ -364,3 +268,217 @@ class HomePage(QWidget):
                            lambda done: QMessageBox.information(
                                self, "Import databases",
                                "Installed:\n" + "\n".join(f"  • {dbp.LABELS.get(k, k)}: {v}" for k, v in done.items())))
+
+
+class SettingsDialog(QDialog):
+    """Settings › Modules… / Reference databases…: the module switches with
+    their presets, and the database manager."""
+
+    def __init__(self, shell, parent: Optional[QWidget] = None):
+        super().__init__(parent or shell)
+        self.shell = shell
+        self.setWindowTitle("Settings")
+        self.resize(900, 620)
+        lay = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        lay.addWidget(self.tabs, 1)
+
+        # ---- Modules
+        page = QWidget()
+        pl = QVBoxLayout(page)
+        note = QLabel("Switch on the techniques used on this computer; the others stay hidden until switched back on "
+                      "here. The Library is always available. The choice is remembered per user.")
+        note.setObjectName("SectionNote")
+        note.setWordWrap(True)
+        pl.addWidget(note)
+        presets = QHBoxLayout()
+        presets.addWidget(QLabel("Presets:"))
+        self.preset_buttons: Dict[str, QPushButton] = {}
+        for preset in self.shell.module_presets():
+            b = QPushButton(preset)
+            b.clicked.connect(lambda _=False, name=preset: self.shell.apply_module_preset(name))
+            presets.addWidget(b)
+            self.preset_buttons[preset] = b
+        presets.addStretch(1)
+        self.modules_summary = QLabel("")
+        self.modules_summary.setObjectName("SectionNote")
+        presets.addWidget(self.modules_summary)
+        pl.addLayout(presets)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        grid = QGridLayout(inner)
+        grid.setSpacing(10)
+        self.cards: Dict[str, ModuleCard] = {}
+        for i, (name, color, description, pages) in enumerate(self.shell.module_catalog()):
+            card = ModuleCard(name, color, description, pages, with_switch=True)
+            card.toggled.connect(self.shell.set_module_enabled)
+            card.open_requested.connect(self._open_page)
+            self.cards[name] = card
+            grid.addWidget(card, i // 2, i % 2)
+        grid.setRowStretch(grid.rowCount(), 1)
+        scroll.setWidget(inner)
+        pl.addWidget(scroll, 1)
+        self.tabs.addTab(page, "Modules")
+
+        # ---- Databases
+        self.db_panel = DatabasePanel()
+        self.tabs.addTab(self.db_panel, "Reference databases")
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        close = QPushButton("Close")
+        close.clicked.connect(self.close)
+        btns.addWidget(close)
+        lay.addLayout(btns)
+        self.refresh_modules()
+
+    def _open_page(self, page: str) -> None:
+        self.shell.navigate_to(page)
+        self.close()
+
+    def refresh_modules(self) -> None:
+        on = []
+        for name, card in self.cards.items():
+            enabled = self.shell.is_module_enabled(name)
+            card.set_state(enabled)
+            if enabled:
+                on.append(name)
+        self.modules_summary.setText(f"{len(on)} of {len(self.cards)} modules on")
+
+    def show_tab(self, name: str) -> None:
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i).lower().startswith(name.lower()):
+                self.tabs.setCurrentIndex(i)
+                break
+        self.refresh_modules()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+
+class HomePage(QWidget):
+    def __init__(self, shell, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.shell = shell
+        self.cards: Dict[str, ModuleCard] = {}
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        from core.qt_help import APP_NAME, APP_TAGLINE, APP_VERSION, asset_path
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        root.addWidget(scroll)
+        content = QWidget()
+        scroll.setWidget(content)
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setSpacing(14)
+
+        head = QHBoxLayout()
+        logo = QLabel()
+        p = asset_path("prism_logo.png")
+        if os.path.isfile(p):
+            from PySide6.QtGui import QPixmap
+            pm = QPixmap(p)
+            if not pm.isNull():
+                logo.setPixmap(pm.scaledToHeight(56, Qt.SmoothTransformation))
+        head.addWidget(logo)
+        titles = QVBoxLayout()
+        t = QLabel(f"{APP_NAME} {APP_VERSION}")
+        t.setStyleSheet("font-size: 22px; font-weight: 600;")
+        titles.addWidget(t)
+        tag = QLabel(APP_TAGLINE)
+        tag.setObjectName("SectionNote")
+        titles.addWidget(tag)
+        head.addLayout(titles, 1)
+        actions = QHBoxLayout()
+        for text, slot in (("Import files…", self.shell.library_page._on_import_clicked),
+                           ("Open project…", self.shell.open_project),
+                           ("Quick-start guide", self.shell.show_help),
+                           ("Settings…", lambda: self.shell.open_settings("Modules"))):
+            b = QPushButton(text)
+            b.setToolTip({"Import files…": "Open data files into the Library (Ctrl+O); files can also be dropped on the window",
+                          "Open project…": "Open a saved .prism project: every spectrum, result and setting of a session",
+                          "Quick-start guide": "The guide to every page (F1)",
+                          "Settings…": "Switch modules on or off, presets, reference databases"}.get(text, ""))
+            b.clicked.connect(slot)
+            actions.addWidget(b)
+        head.addLayout(actions)
+        lay.addLayout(head)
+
+        self.modules_title = QLabel("Your modules")
+        self.modules_title.setObjectName("SectionTitle")
+        lay.addWidget(self.modules_title)
+        self.empty_note = QLabel("No module is switched on. Choose the techniques used on this computer; "
+                                 "the choice is remembered on this computer.")
+        self.empty_note.setObjectName("SectionNote")
+        self.empty_note.setWordWrap(True)
+        lay.addWidget(self.empty_note)
+        self.choose_btn = QPushButton("Choose modules…")
+        self.choose_btn.setToolTip("Switch on the techniques used on this computer (Settings › Modules…)")
+        self.choose_btn.setObjectName("Primary")
+        self.choose_btn.setMaximumWidth(200)
+        self.choose_btn.clicked.connect(lambda: self.shell.open_settings("Modules"))
+        lay.addWidget(self.choose_btn)
+        self.grid_widget = QWidget()
+        self.grid = QGridLayout(self.grid_widget)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(10)
+        lay.addWidget(self.grid_widget)
+
+        db_row = QHBoxLayout()
+        self.db_line = QLabel("")
+        self.db_line.setObjectName("SectionNote")
+        self.db_line.setWordWrap(True)
+        db_row.addWidget(self.db_line, 1)
+        manage = QPushButton("Reference databases…")
+        manage.setToolTip("What is installed on this computer, and the export / import of database packs")
+        manage.clicked.connect(lambda: self.shell.open_settings("Reference"))
+        db_row.addWidget(manage)
+        lay.addLayout(db_row)
+        lay.addStretch(1)
+        self.refresh_modules()
+
+    def refresh_modules(self) -> None:
+        """Rebuild the grid with the enabled modules only."""
+        while self.grid.count():
+            it = self.grid.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)   # out of the layout AND off the page now, not at the next event-loop turn
+                w.deleteLater()
+        self.cards = {}
+        enabled = [(name, color, desc, pages) for name, color, desc, pages in self.shell.module_catalog()
+                   if self.shell.is_module_enabled(name)]
+        for i, (name, color, desc, pages) in enumerate(enabled):
+            card = ModuleCard(name, color, desc, pages, with_switch=False)
+            card.open_requested.connect(self.shell.navigate_to)
+            self.cards[name] = card
+            self.grid.addWidget(card, i // 3, i % 3)
+        for c in range(3):
+            self.grid.setColumnStretch(c, 1)
+        self.empty_note.setVisible(not enabled)
+        self.choose_btn.setVisible(not enabled)
+        self.grid_widget.setVisible(bool(enabled))
+        self.modules_title.setText("Your modules" if enabled else "Welcome")
+
+    def refresh_databases(self) -> None:
+        try:
+            import core.db_packs as dbp
+            inst = [it.label for it in dbp.inventory(sizes=False) if it.installed]
+        except Exception:
+            inst = []
+        self.db_line.setText(("Reference databases on this computer: " + ", ".join(inst))
+                             if inst else "No reference database on this computer yet (RRUFF, AMCSD, your Raman library…).")
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt name
+        super().showEvent(event)
+        if not self.db_line.text():
+            self.refresh_databases()

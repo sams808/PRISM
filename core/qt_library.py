@@ -216,16 +216,19 @@ class LibraryPage(QWidget):
         left_layout.addWidget(note)
 
         import_btn = QPushButton("Import files…")
+        import_btn.setToolTip("Open data files: text/CSV, JCAMP-DX, Thermo OMNIC .spa and .mapx, and more (Ctrl+O); files can also be dropped on the window")
         import_btn.setObjectName("Primary")
         import_btn.clicked.connect(self._on_import_clicked)
         left_layout.addWidget(import_btn)
 
         custom_import_btn = QPushButton("Custom import…")
+        custom_import_btn.setToolTip("Choose the parser, the columns and the decimal separator yourself, with a preview (Ctrl+I)")
         custom_import_btn.setToolTip("Pick the parser and X/Y columns manually — for files the auto-detection guesses wrong on.")
         custom_import_btn.clicked.connect(self._on_custom_import_clicked)
         left_layout.addWidget(custom_import_btn)
 
         combine_btn = QPushButton("Combine / scale selected…")
+        combine_btn.setToolTip("Sum, average, weighted difference or scaling of the selected spectra, written back as a new spectrum")
         combine_btn.clicked.connect(self._on_combine_clicked)
         left_layout.addWidget(combine_btn)
 
@@ -245,6 +248,7 @@ class LibraryPage(QWidget):
         left_layout.addWidget(self.table, 1)
 
         self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setToolTip("Undo the last library change: delete, rename, duplicate, applied operation, accepted identification (Ctrl+Z)")
         self.undo_btn.setToolTip("Undo the last library change: delete, rename, duplicate, combine result, applied baseline, or accepted mineral ID.")
         self.undo_btn.setEnabled(False)
         self.undo_btn.clicked.connect(self._undo)

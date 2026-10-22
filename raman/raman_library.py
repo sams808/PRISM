@@ -145,6 +145,10 @@ def similarity(qx: np.ndarray, qy: np.ndarray, rx: np.ndarray, ry: np.ndarray, *
     range, so a reference measured over a different window never scores."""
     qx = np.asarray(qx, float); qy = np.asarray(qy, float)
     rx = np.asarray(rx, float); ry = np.asarray(ry, float)
+    if qx.shape != qy.shape:
+        raise ValueError(f"query: x has {qx.size} points, y has {qy.size}")
+    if rx.shape != ry.shape:
+        raise ValueError(f"reference: x has {rx.size} points, y has {ry.size}")
     mq = np.isfinite(qx) & np.isfinite(qy); mr = np.isfinite(rx) & np.isfinite(ry)
     qx, qy, rx, ry = qx[mq], qy[mq], rx[mr], ry[mr]
     if qx.size < 7 or rx.size < 7:
@@ -187,7 +191,10 @@ def rank_library(qx: np.ndarray, qy: np.ndarray, entries: Sequence[LibraryEntry]
     n = len(entries)
     for i, e in enumerate(entries):
         rx, ry = e.arrays()
-        s = similarity(qx, qy, rx, ry, method=method, how=how, smooth_window=smooth_window, x_range=x_range)
+        try:
+            s = similarity(qx, qy, rx, ry, method=method, how=how, smooth_window=smooth_window, x_range=x_range)
+        except ValueError:
+            continue            # a damaged entry must not stop the search
         if np.isfinite(s):
             out.append({"entry": e, "score": float(s), "name": e.name, "id": e.id, "meta": e.meta})
         if progress and (i % 200 == 0 or i == n - 1):
@@ -216,7 +223,10 @@ def rank_rruff_by_similarity(qx: np.ndarray, qy: np.ndarray, records: Sequence[D
             continue
         if not len(ref.x):
             continue
-        s = similarity(qx, qy, ref.x, ref.y, method=method, how=how, smooth_window=smooth_window, x_range=x_range)
+        try:
+            s = similarity(qx, qy, ref.x, ref.y, method=method, how=how, smooth_window=smooth_window, x_range=x_range)
+        except ValueError:
+            continue            # a damaged reference file (x and y of different lengths) must not stop the search
         if np.isfinite(s):
             out.append({**rec, "score": float(s)})
         if progress and (i % 200 == 0 or i == n - 1):

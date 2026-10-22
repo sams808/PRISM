@@ -112,6 +112,62 @@ def peak_table(x: Sequence[float], y: Sequence[float], *, threshold_frac: float 
     return rows
 
 
+def manual_peak_rows(x: Sequence[float], y: Sequence[float], positions: Sequence[float], *,
+                     snap: float = 0.0, inverted: bool = False) -> List[PeakRow]:
+    """The same properties as peak_table for peaks pointed at by hand. With
+    snap > 0 the apex is the maximum within ± snap of the clicked x; with 0
+    the nearest sample is taken as it is (a shoulder keeps its position and
+    gets a zero prominence and width)."""
+    import warnings
+    from scipy.signal import peak_prominences, peak_widths
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    if x.size < 3 or not len(positions):
+        return []
+    order = np.argsort(x, kind="mergesort")
+    x, y = x[order], y[order]
+    yy = -y if inverted else y
+    rows: List[PeakRow] = []
+    seen = set()
+    for p in positions:
+        p = float(p)
+        if snap > 0:
+            win = np.nonzero(np.abs(x - p) <= snap)[0]
+            i = int(win[np.argmax(yy[win])]) if win.size else int(np.argmin(np.abs(x - p)))
+        else:
+            i = int(np.argmin(np.abs(x - p)))
+        if i in seen:
+            continue
+        seen.add(i)
+        is_max = 0 < i < x.size - 1 and yy[i] >= yy[i - 1] and yy[i] >= yy[i + 1]
+        prom = 0.0
+        if is_max:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                try:
+                    prom = float(peak_prominences(yy, [i])[0][0])
+                except Exception:
+                    prom = 0.0
+        pos, apex = _parabolic_apex(x, yy, i) if is_max else (float(x[i]), float(yy[i]))
+        left = right = float(x[i])
+        area = 0.0
+        if prom > 0:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                _w, _h, lips, rips = peak_widths(yy, [i], rel_height=0.5)
+            left = float(np.interp(float(lips[0]), np.arange(x.size), x))
+            right = float(np.interp(float(rips[0]), np.arange(x.size), x))
+            base = float(yy[i] - prom)
+            sel = (x >= left) & (x <= right)
+            if sel.sum() >= 2:
+                area = float(trapezoid(np.clip(yy[sel] - base, 0, None), x[sel]))
+        rows.append(PeakRow(position=pos, height=float(-apex if inverted else apex), prominence=prom,
+                            fwhm=abs(right - left), area=area, left=left, right=right, index=i))
+    rows.sort(key=lambda r: r.position)
+    return rows
+
+
 def peak_table_text(rows: Sequence[PeakRow], *, digits: int = 1, sep: str = "\t") -> str:
     head = sep.join(["position", "height", "FWHM", "area", "prominence"])
     body = [sep.join([f"{r.position:.{digits}f}", f"{r.height:.4g}", f"{r.fwhm:.{digits}f}",

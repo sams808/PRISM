@@ -97,8 +97,13 @@ def _cli_distcheck(argv, log=None) -> int:
     The installer's and the portable zip's self-test — a frozen build that
     misses a module or a data file dies here, in a log next to the exe,
     instead of on a colleague's desk. Returns 1 on any failure."""
+    import tempfile
     import time
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # the self-test switches every module on and visits every page: on a
+    # throw-away settings file, never in this user's own settings (2.8.0 did,
+    # and a checked installation woke up with all modules enabled)
+    os.environ["PRISM_SETTINGS_DIR"] = tempfile.mkdtemp(prefix="prism_distcheck_")
     log = log or _cli_log(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "prism_distcheck.log"))
     t0 = time.time()
     try:

@@ -90,9 +90,11 @@ class CalcWorkspace(QWidget):
         left_layout.addWidget(self.pick_btn)
 
         preview_btn = QPushButton("Preview")
+        preview_btn.setToolTip("Draw the result; nothing is changed")
         preview_btn.clicked.connect(self.preview)
         left_layout.addWidget(preview_btn)
         apply_btn = QPushButton("Apply → Library")
+        apply_btn.setToolTip("Write the result into the Library as a new spectrum (undo: Ctrl+Z)")
         apply_btn.setObjectName("Primary")
         apply_btn.clicked.connect(self.apply_selected)
         left_layout.addWidget(apply_btn)

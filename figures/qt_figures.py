@@ -97,6 +97,7 @@ class FiguresWorkspace(QWidget):
         self.spectra_list.setSelectionMode(QListWidget.ExtendedSelection)
         ll.addWidget(self.spectra_list, 1)
         add_btn = QPushButton("Add selected as layer(s)")
+        add_btn.setToolTip("Put the selected Library spectra on the figure as layers")
         add_btn.clicked.connect(self._add_layers)
         ll.addWidget(add_btn)
 
@@ -106,6 +107,7 @@ class FiguresWorkspace(QWidget):
         self.layers_table.cellChanged.connect(lambda *_: self._sync_layers_from_table())
         ll.addWidget(self.layers_table, 1)
         rm_btn = QPushButton("Remove selected layer")
+        rm_btn.setToolTip("Take the selected layer off the figure")
         rm_btn.clicked.connect(self._remove_layer)
         ll.addWidget(rm_btn)
 
@@ -158,6 +160,7 @@ class FiguresWorkspace(QWidget):
         ll.addLayout(tick_row)
 
         render_btn = QPushButton("Render")
+        render_btn.setToolTip("Draw the figure with the current layers, layout and preset")
         render_btn.setObjectName("Primary")
         render_btn.clicked.connect(lambda: self.xy_plot.request_redraw(self.render_xy))
         ll.addWidget(render_btn)
@@ -175,10 +178,19 @@ class FiguresWorkspace(QWidget):
         self.dpi_edit.setMaximumWidth(45)
         exp_row.addWidget(self.dpi_edit)
         export_btn = QPushButton("Export…")
+        export_btn.setToolTip("Save the figure at the chosen size and dpi (PNG, PDF, SVG)")
         export_btn.clicked.connect(self.export_figure)
         exp_row.addWidget(export_btn)
         ll.addLayout(exp_row)
-        splitter.addWidget(left)
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QFrame as _QFrame, QScrollArea as _QScrollArea
+        left_scroll = _QScrollArea()            # the panel is taller than a laptop screen: it scrolls
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(_QFrame.NoFrame)
+        left_scroll.setMaximumWidth(372)
+        left_scroll.setHorizontalScrollBarPolicy(_Qt.ScrollBarAlwaysOff)
+        left_scroll.setWidget(left)
+        splitter.addWidget(left_scroll)
 
         right = QWidget()
         right.setObjectName("Card")
@@ -204,6 +216,7 @@ class FiguresWorkspace(QWidget):
 
         btn_row = QHBoxLayout()
         add_cif_btn = QPushButton("Add CIF(s)…")
+        add_cif_btn.setToolTip("Overlay the Bragg positions of one or several structure files as sticks")
         add_cif_btn.clicked.connect(self.add_cif_overlays)
         btn_row.addWidget(add_cif_btn)
         add_folder_btn = QPushButton("Add folder…")
@@ -211,6 +224,7 @@ class FiguresWorkspace(QWidget):
         add_folder_btn.clicked.connect(self.add_cif_overlay_folder)
         btn_row.addWidget(add_folder_btn)
         rm_cif_btn = QPushButton("Remove")
+        rm_cif_btn.setToolTip("Remove the selected overlay")
         rm_cif_btn.clicked.connect(self._remove_cif_overlay)
         btn_row.addWidget(rm_cif_btn)
         parent_layout.addLayout(btn_row)

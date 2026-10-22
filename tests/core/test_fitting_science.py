@@ -375,3 +375,25 @@ def test_find_peak_candidates_detection_limit_filters_weak_peaks():
     assert any(abs(p - 300.0) < 15 for p in strict)
     assert not any(abs(p - 700.0) < 15 for p in strict)
     assert len(strict) < len(permissive)
+
+
+def test_origin_lm_iteration_step_fraction_applies_that_share_of_the_update():
+    """Step size x % in the Origin panel: the parameters move x % of the way
+    the full Levenberg-Marquardt update would take them (same damping)."""
+    x, y, params_struct, lm_params = _origin_setup()
+    full = fs.origin_lm_iteration(x, y, params_struct, lm_params, step_fraction=1.0)
+    quarter = fs.origin_lm_iteration(x, y, params_struct, lm_params, step_fraction=0.25)
+    assert full.accepted and quarter.accepted
+    assert full.lambda_used == quarter.lambda_used
+    p0 = {k: float(v.value) for k, v in lm_params.items()}
+    for name in ("f0", "a0", "l0"):
+        d_full = float(full.params[name].value) - p0[name]
+        d_quarter = float(quarter.params[name].value) - p0[name]
+        assert d_quarter == pytest.approx(0.25 * d_full, rel=1e-6, abs=1e-9)
+    assert quarter.chisq_after < quarter.chisq_before
+    # four quarter steps are not one full step (the Jacobian is re-evaluated), but they do walk towards the data
+    current = lm_params
+    for _ in range(4):
+        current = fs.origin_lm_iteration(x, y, params_struct, current, step_fraction=0.25).params
+    assert abs(float(current["f0"].value) - 505.0) < abs(float(lm_params["f0"].value) - 505.0)
+

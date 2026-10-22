@@ -161,7 +161,7 @@ class PrismMainWindow(QMainWindow):
 
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(180)
+        sidebar.setFixedWidth(164)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 12, 0, 0)
 
@@ -180,7 +180,14 @@ class PrismMainWindow(QMainWindow):
         self.stack = _CurrentPageStack()
         self.library_page = LibraryPage(self.library)
         self.stack.addWidget(self.library_page)
-        self.raman_page = RamanWorkspace(library=self.library)
+        self.raman_page = RamanWorkspace(
+            library=self.library,
+            on_derived_added=lambda ids: self.library_page.push_undo(("add", list(ids))),
+            on_navigate=self.navigate_to,
+            import_paths=self.library_page.import_paths,
+            on_undo_push=self.library_page.push_undo,
+            on_library_changed=self.library_page._refresh_table,
+        )
         self.stack.addWidget(self.raman_page)
         self.xas_page = XasWorkspace()
         self.stack.addWidget(self.xas_page)
@@ -263,12 +270,20 @@ class PrismMainWindow(QMainWindow):
         self.console_action.toggled.connect(self._on_console_toggled)
         self._console_dock = None  # created lazily on first open
 
-        # --- Modules menu (between View and Help): checkable per-module
-        # entries; default = everything OFF (2026-10-21), so a new install
-        # starts on the Home page and switches on what this computer needs.
-        from PySide6.QtCore import QSettings
-        settings = QSettings("PRISM", "PRISM")
-        modules_menu = self.menuBar().addMenu("&Modules")
+        # --- Settings menu (between View and Help): module activation lives
+        # in a dialog and a submenu, not on the Home page (user request
+        # 2026-10-22); default = everything OFF, so a new install starts on
+        # the Home page and switches on what this computer needs.
+        from core.app_settings import app_settings
+        settings = app_settings()
+        settings_menu = self.menuBar().addMenu("&Settings")
+        settings_menu.addAction("Modules…", lambda: self.open_settings("Modules"))
+        presets_menu = settings_menu.addMenu("Module presets")
+        for preset in MODULE_PRESETS:
+            presets_menu.addAction(preset, lambda p=preset: self.apply_module_preset(p))
+        settings_menu.addAction("Reference databases…", lambda: self.open_settings("Reference"))
+        settings_menu.addSeparator()
+        switches_menu = settings_menu.addMenu("Module switches")
         self.module_checks: dict = {}
         from PySide6.QtGui import QAction, QColor, QPixmap, QIcon
         for mod_name, (color, _pages) in MODULES.items():
@@ -280,12 +295,10 @@ class PrismMainWindow(QMainWindow):
             act.setChecked(settings.value(f"modules/{mod_name}", False, type=bool))
             act.toggled.connect(lambda on, m=mod_name: self._on_module_toggled(m, on))
             self.module_checks[mod_name] = act
-            modules_menu.addAction(act)
-        modules_menu.addSeparator()
-        presets_menu = modules_menu.addMenu("Presets")
-        for preset in MODULE_PRESETS:
-            presets_menu.addAction(preset, lambda p=preset: self.apply_module_preset(p))
-        modules_menu.addAction("Home page", lambda: self.navigate_to(NAV_HOME))
+            switches_menu.addAction(act)
+        settings_menu.addSeparator()
+        settings_menu.addAction("Home page", lambda: self.navigate_to(NAV_HOME))
+        self._settings_dialog = None
 
         from core.qt_home import HomePage
         self.home_page = HomePage(self)
@@ -322,12 +335,23 @@ class PrismMainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _on_module_toggled(self, module: str, enabled: bool) -> None:
-        from PySide6.QtCore import QSettings
-        QSettings("PRISM", "PRISM").setValue(f"modules/{module}", bool(enabled))
+        from core.app_settings import app_settings
+        app_settings().setValue(f"modules/{module}", bool(enabled))
         self._apply_module_visibility()
         home = getattr(self, "home_page", None)
         if home is not None:
             home.refresh_modules()
+        dlg = getattr(self, "_settings_dialog", None)
+        if dlg is not None:
+            dlg.refresh_modules()
+
+    def open_settings(self, tab: str = "Modules"):
+        """Settings › Modules… / Reference databases… (one non-modal dialog)."""
+        if self._settings_dialog is None:
+            from core.qt_home import SettingsDialog
+            self._settings_dialog = SettingsDialog(self)
+        self._settings_dialog.show_tab(tab)
+        return self._settings_dialog
 
     # ---- the interface the Home page uses -------------------------------
     def module_catalog(self) -> list:
@@ -351,7 +375,7 @@ class PrismMainWindow(QMainWindow):
         wanted = set(MODULE_PRESETS[preset])
         for name in MODULES:
             self.set_module_enabled(name, name in wanted)
-        self.statusBar().showMessage(f"Modules preset applied: {preset}.")
+        self.statusBar().showMessage(f"Modules preset applied: {preset}.", 6000)
 
     def navigate_to(self, nav_name: str) -> None:
         """Show a workspace by its rail name, switching its module on if needed."""
@@ -378,7 +402,7 @@ class PrismMainWindow(QMainWindow):
         if not paths:
             return
         added, errors = self.library_page.import_paths(paths)
-        self.statusBar().showMessage(f"Dropped files: {added} imported" + (f", {len(errors)} failed" if errors else "") + ".")
+        self.statusBar().showMessage(f"Dropped files: {added} imported" + (f", {len(errors)} failed" if errors else "") + ".", 8000)
         if self.stack.currentWidget() is self.home_page and added:
             self.navigate_to(NAV_LIBRARY)
         else:
@@ -406,8 +430,8 @@ class PrismMainWindow(QMainWindow):
         HelpDialog(self, html=CREDITS_HTML, title="Credits").exec()
 
     def closeEvent(self, event) -> None:
-        from PySide6.QtCore import QSettings
-        settings = QSettings("PRISM", "PRISM")
+        from core.app_settings import app_settings
+        settings = app_settings()
         settings.setValue("geometry", self.saveGeometry())
         settings.setValue("nav_row", self.nav.currentRow())
         super().closeEvent(event)
@@ -425,7 +449,7 @@ class PrismMainWindow(QMainWindow):
         workspace's CIF overlay and switch to it so the result is visible."""
         added = self.raman_page.add_cif_files(list(cif_paths))
         self.nav.setCurrentRow(NAV_ITEMS.index(NAV_RAMAN))
-        self.statusBar().showMessage(f"Added {added} CIF(s) to the Raman CIF overlay.")
+        self.statusBar().showMessage(f"Added {added} CIF(s) to the Raman CIF overlay.", 6000)
 
     def _on_console_toggled(self, visible: bool) -> None:
         if self._console_dock is None:
@@ -487,7 +511,7 @@ class PrismMainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Save project error", str(exc))
             return
-        self.statusBar().showMessage(f"Project saved: {path}")
+        self.statusBar().showMessage(f"Project saved: {path}", 8000)
 
     def open_project(self) -> None:
         import core.project_io as project_io

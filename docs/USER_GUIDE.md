@@ -51,19 +51,54 @@ on the plot. **Preview** shows raw + baseline + subtracted; **Apply** creates a
 **1e7**. At the usual 1e5 the baseline eats the band itself. (Verified against
 the ISG pressure series: λ=1e7 beat a hand-drawn baseline.)
 
-## Raman (Simple Plot)
+## Raman (workbench)
 
-Multi-select spectra to overlay them: separate panels or stacked with an
-offset. Load CIF files to overlay predicted Bragg positions (managed per-CIF:
-color, label, visibility). Difference mode shows A−B for exactly two selected
-spectra. Toggle **Annotate on click** to pin peak-position labels.
-**Peak labels** marks every peak above the threshold (% of the intensity
-range) with its position, and **Peak table…** lists position, height, FWHM
-(full width at half prominence) and area for the selected spectra, to copy or
-save as CSV. **Cursor readout** shows the value of every plotted spectrum at
-the mouse position. Line width, lines/points and legend placement are in the
-style row; **Copy plot** and **Copy data** put the figure (image) or the
-selected spectra (tab-separated text) on the clipboard.
+The Raman workbench is the one page a Raman user needs. The ribbon on top
+has eight tabs. **Spectra**: import files or a folder, paste, rename,
+duplicate, remove (or remove all), filter the list by name, sort (name, laser,
+time, maximum), properties (colour, line style, width, offset, scale, laser
+wavelength, notes), colour by property.
+**Display**: overlay / stacked (with shift) / separate panels, difference
+of two, colour schemes and colormaps, line width, points, legend placement,
+display smoothing, log y, x axis shown in another unit (nm, cm⁻¹, Raman shift,
+eV; needs the laser λ), flip x, grid, automated **peak labels** with a
+threshold, **cursor readout** of every shown spectrum, click annotations;
+**Plot settings…** opens a panel under the
+ribbon for the titles, limits, font size, the unit of the measured x axis and
+the peak-label options (x / y / both, digits, angle). **Process** and
+**Transform** hold every operation on
+the data: baselines (simple range mean, linear through ranges, arPLS / ALS /
+polynomial / spline / rubberband, through anchor points clicked on the plot,
+or output the baseline itself), normalise
+(peak, area, min–max, value at x, peak in a range), smoothing (Savitzky-Golay,
+moving / triangular average, median, percentile filter), spike removal, peak
+removal, cut-off, offset / stretch, SNV, detrending, MSC; arithmetic with a
+reference, scaled subtraction with a live slider, sensitivity correction,
+average / median, merge, axis conversion (wavelength ⇄ Raman shift ⇄ eV, cut
+below), derivatives 1–4, resample, x calibration against reference lines.
+Each operation opens a panel under the ribbon: set the parameters (**Pick…**
+fills a field from clicks on the plot: one click for a value, two per range,
+as many ranges or points as needed; right-click, Esc or Done ends the picking,
+and the chosen ranges and points are shaded on the plot), **Preview** draws the result
+dashed, **Apply** writes new spectra into the Library (undoable), with
+*Treat all shown spectra* and *Hide originals*. **Analyze**: peaks
+& FWHM (detected automatically, or pointed at by hand and added to the
+detected ones or replacing them; **Display › Found peaks** marks them on the
+plot), the **Peak table…** window, integration (zero or linear baseline,
+centre of gravity), extract
+data (one row per spectrum), statistics — results land in the table under
+the plot (copy, save CSV) — plus shortcuts to Peak Fitting and mixture
+analysis. **Identify**: Raman ID, add spectra to your reference library,
+quick similarity ranking against it, CIF structure overlays. **Sequence**:
+every operation can be added as a step; the steps are listed in a panel under
+the ribbon (double-click one to reopen it with its parameters); run the
+sequence on the highlighted spectra, on all shown ones or on a folder of
+files; save and load it (JSON). **Export**: text
+files, one combined CSV, JCAMP-DX, copy data; plot as PNG / SVG / PDF / EPS /
+TIFF at a chosen dpi, copy plot, print; the results table as CSV.
+
+In the list, the tick shows a spectrum on the plot and the highlight makes
+it the target of an operation; clicking a spectrum always shows it.
 
 ## Peak Fitting
 
@@ -183,9 +218,22 @@ source, notes), **Manage library…** renames, removes, exports and imports
 it, and the library travels with a database pack (Home). A score of 1 means an
 identical shape; hits from the library are marked "my library".
 
+Every hit shows the mineral's **ideal formula**; double-click a hit (or
+**Card / RRUFF page…**) opens its card — composition, measured chemistry,
+locality, source, laser, data file — with a button to its page on rruff.info.
+**Show the query peaks** / **Show the candidates' peaks** switch the
+peak marks on the plot.
+
 Auto-find (or type) your spectrum's peak positions, then **Find matches**:
-candidates are ranked by peak overlap, each showing its **laser wavelength** —
+candidates are scored by an intensity-weighted, two-sided peak agreement:
+**Match %** is the share of the query's peak intensity the reference
+explains, **Score** the geometric mean of that and of the share of the
+reference's own peaks (re-detected from its data file) found in the query —
+1 is perfect, below about 0.4 nothing in the database really fits, and the
+status line says so. Each candidate shows its **laser wavelength**:
 relative intensities vary between wavelengths, so judge the overlay yourself.
+RRUFF is a mineral database: a synthetic phase has no entry to find, only
+analogues.
 The **Database filters** restrict candidates before ranking: laser λ
 (matched ±2 nm, so 532 also covers 532.6), oriented/unoriented, high-res vs
 broad-scan, and quality category. Shift/Ctrl-click several result rows to
@@ -353,7 +401,7 @@ View menu: dark mode, Python console (the live app objects are in scope).
 
 ---
 
-## PRISM 2.8.0
+## PRISM 2.9.0
 
 *Platform for Research In Spectroscopy & Materials*
 

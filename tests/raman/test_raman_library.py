@@ -60,3 +60,25 @@ def test_rank_library_orders_by_score():
     assert [r["name"] for r in ranked][:2] == ["b", "c"]
     assert ranked[0]["score"] == pytest.approx(1.0)
     assert ranked[0]["score"] > ranked[1]["score"] > ranked[2]["score"]
+
+
+def test_similarity_rejects_misaligned_arrays_and_the_ranking_skips_them(tmp_path, monkeypatch):
+    x, y = _spec(500)
+    with pytest.raises(ValueError):
+        rl.similarity(x, y, x[:-1], y)
+    p1, p2 = tmp_path / "a.txt", tmp_path / "b.txt"
+    for p in (p1, p2):
+        p.write_text("##NAMES=M\n" + "\n".join(f"{a:.2f}, {b:.4f}" for a, b in zip(x, y)) + "\n", encoding="utf-8")
+    records = [{"mineral": "A", "rruff_id": "R1", "raw_path": str(p1)}, {"mineral": "B", "rruff_id": "R2", "raw_path": str(p2)}]
+    real = rl.similarity
+    calls = []
+
+    def flaky(qx, qy, rx, ry, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("reference: x has 1025 points, y has 1024")
+        return real(qx, qy, rx, ry, **kw)
+
+    monkeypatch.setattr(rl, "similarity", flaky)
+    hits = rl.rank_rruff_by_similarity(x, y, records)
+    assert [h["rruff_id"] for h in hits] == ["R2"]          # the damaged one is skipped, the search goes on

@@ -31,13 +31,15 @@ def test_home_lists_the_installed_databases(qtbot, tmp_path):
     _fake_caches(tmp_path)
     window = PrismMainWindow()
     qtbot.addWidget(window)
-    home = window.home_page
+    home = window.open_settings("Reference").db_panel
     home.refresh_databases(force=True)  # workers run inline in tests
     assert set(home.db_rows) == set(dbp.ALL_KEYS)
     assert "1 spectra" in home.db_rows["rruff"][1].text()
     assert "installed" in home.db_rows["raman_library"][1].text()
     assert "not installed" in home.db_rows["amcsd"][1].text()
     assert "2 of 5" in home.db_status.text()
+    window.home_page.refresh_databases()
+    assert "RRUFF" in window.home_page.db_line.text()
 
 
 def test_home_export_then_import_round_trip(qtbot, tmp_path, monkeypatch):
@@ -48,7 +50,7 @@ def test_home_export_then_import_round_trip(qtbot, tmp_path, monkeypatch):
     _fake_caches(tmp_path)
     window = PrismMainWindow()
     qtbot.addWidget(window)
-    home = window.home_page
+    home = window.open_settings("Reference").db_panel
     home.refresh_databases(force=True)
 
     pack = tmp_path / "pack"

@@ -1056,6 +1056,40 @@ def parse_jcamp(path: str) -> tuple[pd.DataFrame, dict]:
     return df, meta
 
 
+def write_jcamp_dx(path: str, x, y, *, title: str = "", xunits: str = "1/CM", yunits: str = "ARBITRARY UNITS",
+                   data_type: str = "RAMAN SPECTRUM") -> None:
+    """Write a JCAMP-DX 4.24 file: AFFN ``##XYDATA=(X++(Y..Y))`` when the x
+    grid is regular (what every reader expects), ``##XYPOINTS=(XY..XY)``
+    pairs otherwise. Nothing is compressed, so any software reads it."""
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    order = np.argsort(x, kind="mergesort")
+    x, y = x[order], y[order]
+    if x.size < 2:
+        raise ValueError("A JCAMP-DX file needs at least two points.")
+    steps = np.diff(x)
+    regular = np.allclose(steps, steps[0], rtol=1e-6, atol=1e-9 * max(1.0, abs(float(x[-1]))))
+    lines = [f"##TITLE={title or os.path.splitext(os.path.basename(path))[0]}", "##JCAMP-DX=4.24", f"##DATA TYPE={data_type}",
+             "##ORIGIN=PRISM", "##OWNER=", f"##XUNITS={xunits}", f"##YUNITS={yunits}", "##XFACTOR=1", "##YFACTOR=1",
+             f"##FIRSTX={x[0]:.6f}", f"##LASTX={x[-1]:.6f}", f"##NPOINTS={x.size}", f"##FIRSTY={y[0]:.6g}",
+             f"##MAXY={np.max(y):.6g}", f"##MINY={np.min(y):.6g}"]
+    if regular:
+        lines.append(f"##DELTAX={steps[0]:.6f}")
+        lines.append("##XYDATA=(X++(Y..Y))")
+        per_line = 6
+        for i in range(0, x.size, per_line):
+            ys = " ".join(f"{v:.6g}" for v in y[i:i + per_line])
+            lines.append(f"{x[i]:.4f} {ys}")
+    else:
+        lines.append("##XYPOINTS=(XY..XY)")
+        for xi, yi in zip(x, y):
+            lines.append(f"{xi:.6f}, {yi:.6g}")
+    lines.append("##END=")
+    with open(path, "w", encoding="ascii", errors="replace") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def parse_dta_table(path: str) -> tuple[pd.DataFrame, dict]:
     header, signals, df = parse_ta_sdt_txt(Path(path))
     canonical = _build_dta_canonical(df)

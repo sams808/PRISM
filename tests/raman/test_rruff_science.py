@@ -224,7 +224,43 @@ def test_score_match_counts_peaks_within_tolerance():
 
 
 def test_score_match_empty_query_returns_zero():
-    assert rs.score_match([], [100.0], tolerance=10.0) == {"matched": 0, "fraction": 0.0}
+    r = rs.score_match([], [100.0], tolerance=10.0)
+    assert r["matched"] == 0 and r["fraction"] == 0.0 and r["score"] == 0.0
+
+
+def test_score_match_is_two_sided_and_intensity_weighted():
+    # a noisy reference covering half the query with many peaks of its own scores low; a clean one scores high
+    query = [147.0, 178.0, 226.0, 251.0]
+    noisy = [147.0, 178.0] + [400.0 + 20 * k for k in range(12)]
+    clean = [147.5, 178.5, 226.5, 251.5]
+    assert rs.score_match(query, noisy, 2.0)["score"] < 0.3 < 0.9 < rs.score_match(query, clean, 2.0)["score"]
+    # weights: missing the strongest query peak costs more than missing weak ones
+    strong_missing = rs.score_match(query, [178.0, 226.0, 251.0], 2.0, query_weights=[1.0, 0.1, 0.1, 0.1])
+    weak_missing = rs.score_match(query, [147.0, 178.0, 226.0], 2.0, query_weights=[1.0, 0.1, 0.1, 0.1])
+    assert strong_missing["fraction"] < 0.3 and weak_missing["fraction"] > 0.9
+
+
+def test_rank_rruff_matches_rescores_from_the_data_files(tmp_path):
+    import numpy as np
+    x = np.linspace(100.0, 1200.0, 1101)
+
+    def spec(peaks):
+        return sum(a * np.exp(-0.5 * ((x - p) / 4.0) ** 2) for p, a in peaks) + 5.0
+
+    def write(name, peaks):
+        p = tmp_path / f"{name}.txt"
+        p.write_text(f"##NAMES={name}\n" + "\n".join(f"{a:.2f}, {b:.4f}" for a, b in zip(x, spec(peaks))) + "\n", encoding="utf-8")
+        return str(p)
+
+    extra = [(320.0 + 40.0 * k, 30.0) for k in range(15)]          # none within 5 of 464 or 1085
+    index = [{"mineral": "Good", "rruff_id": "R1", "peaks": [464.0, 1085.0], "raw_path": write("Good", [(464.0, 100.0), (1085.0, 60.0)])},
+             {"mineral": "Noisy", "rruff_id": "R2", "peaks": [464.0] + [p for p, _a in extra],
+              "raw_path": write("Noisy", [(464.0, 100.0)] + extra)}]
+    ranked = rs.rank_rruff_matches([464.0, 1085.0], index, tolerance=5.0, query_xy=(x, spec([(464.0, 100.0), (1085.0, 60.0)])))
+    assert [r["mineral"] for r in ranked] == ["Good", "Noisy"]
+    assert ranked[0]["score"] > 0.95 and ranked[0]["matched_peaks"] == 2
+    assert ranked[1]["score"] < 0.5 and ranked[1]["precision"] < 0.3
+    assert abs(ranked[0]["peaks"][0] - 464.0) < 1.0 and ranked[0]["index_peaks"] == [464.0, 1085.0]   # re-detected from the file
 
 
 def test_score_match_no_overlap_returns_zero():
@@ -516,3 +552,26 @@ def test_pack_and_unpack_rruff_database_round_trip(tmp_path):
     assert restored[0]["mineral"] == "Quartz"
     assert str(dest_cache) in restored[0]["raw_path"]  # rewritten to the new machine
     assert (dest_cache / "raw" / "Quartz__R1__Raman__532____Processed__x.txt").exists()
+
+
+def test_parse_rruff_txt_keeps_x_and_y_aligned_on_a_damaged_line():
+    sp = rs.parse_rruff_txt("##NAMES=X\n100.0, 1.0\n101.0,\n102.0, junk\n103.0, 3.0\n")
+    assert list(sp.x) == [100.0, 103.0] and list(sp.y) == [1.0, 3.0]
+
+
+def test_format_chemistry_and_page_url():
+    assert rs.format_chemistry("SiO_2_") == "SiO₂"
+    assert rs.format_chemistry("Fe^2+^Fe^3+^_2_O_4_") == "Fe²⁺Fe³⁺₂O₄"
+    assert rs.format_chemistry("Ca_5_(PO_4_)_3_F") == "Ca₅(PO₄)₃F"
+    assert rs.format_chemistry(None) == ""
+    assert rs.rruff_page_url({"url": "rruff.info/quartz/R040031"}) == "https://rruff.info/quartz/R040031"
+    assert rs.rruff_page_url({"rruff_id": "R040031"}) == "https://rruff.info/R040031"
+
+
+def test_record_details_reads_the_header_of_the_data_file(tmp_path):
+    p = tmp_path / "Quartz__R040031__Raman__532__0-000____Raman_Data_Processed__abc.txt"
+    p.write_text("##NAMES=Quartz\n##RRUFFID=R040031\n##IDEAL CHEMISTRY=SiO_2_\n##LOCALITY=Somewhere\n"
+                 "##URL=rruff.info/quartz/R040031\n460.0, 10.0\n464.0, 500.0\n", encoding="utf-8")
+    d = rs.record_details({"mineral": "Quartz", "rruff_id": "R040031", "raw_path": str(p), "peaks": [464.0]})
+    assert d["ideal_chemistry"] == "SiO_2_" and d["LOCALITY"] == "Somewhere" and d["url"] == "rruff.info/quartz/R040031"
+    assert "peaks" not in d

@@ -151,13 +151,15 @@ def test_home_cards_and_presets_drive_the_modules(qtbot):
     window = PrismMainWindow()
     qtbot.addWidget(window)
     home = window.home_page
-    # card -> shell
-    home.cards["XAS"].switch.setChecked(False)
+    dlg = window.open_settings("Modules")
+    # dialog card -> shell -> Home shows only enabled modules
+    dlg.cards["XAS"].switch.setChecked(False)
     assert not window.module_checks["XAS"].isChecked()
     assert window.nav.isRowHidden(NAV_ITEMS.index("XAS"))
-    # menu -> card
+    assert "XAS" not in home.cards and "Raman" in home.cards
+    # menu -> dialog card
     window.module_checks["XAS"].setChecked(True)
-    assert home.cards["XAS"].switch.isChecked()
+    assert dlg.cards["XAS"].switch.isChecked() and "XAS" in home.cards
     # preset
     window.apply_module_preset("Raman station")
     on = {m for m in MODULES if window.module_checks[m].isChecked()}
@@ -166,10 +168,12 @@ def test_home_cards_and_presets_drive_the_modules(qtbot):
     assert not window.nav.isRowHidden(NAV_ITEMS.index("Raman ID"))
     window.apply_module_preset("None")
     assert not any(window.module_checks[m].isChecked() for m in MODULES)
-    # a card's workspace button switches the module on and navigates
-    home.cards["Raman"].open_requested.emit("Raman ID")
+    assert home.cards == {} and home.empty_note.isVisibleTo(home)
+    # a dialog card's workspace button switches the module on and navigates
+    dlg.cards["Raman"].open_requested.emit("Raman ID")
     assert window.module_checks["Raman"].isChecked()
     assert window.stack.currentWidget() is window.rruff_page
+    assert list(home.cards) == ["Raman"]
 
 
 def test_module_state_persists_via_qsettings(qtbot):

@@ -96,6 +96,52 @@ class RruffSpectrum:
     source_filename: str = ""
 
 
+_SUBSCRIPT = str.maketrans("0123456789.", "₀₁₂₃₄₅₆₇₈₉.")
+_SUPERSCRIPT = str.maketrans("0123456789+-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻")
+
+
+def format_chemistry(text: Optional[str]) -> str:
+    """RRUFF's ideal-chemistry markup as readable text: SiO_2_ -> SiO₂,
+    Fe^2+^ -> Fe²⁺. Anything without a mapping is left as written."""
+    import re
+    if not text:
+        return ""
+    s = re.sub(r"_([^_]*)_", lambda m: m.group(1).translate(_SUBSCRIPT), str(text))
+    s = re.sub(r"\^([^^]*)\^", lambda m: m.group(1).translate(_SUPERSCRIPT), s)
+    return s.strip()
+
+
+def rruff_page_url(rec: Dict[str, Any]) -> str:
+    """The sample's page on rruff.info: the ##URL of its file when known,
+    else the id lookup."""
+    url = str(rec.get("url") or "").strip()
+    if url:
+        return url if url.startswith("http") else "https://" + url
+    rid = str(rec.get("rruff_id") or "").strip()
+    return f"https://rruff.info/{rid}" if rid else "https://rruff.info/"
+
+
+def record_details(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """An index record plus every ## header field of its data file (read on
+    demand): what the hit's card shows."""
+    details = {k: v for k, v in rec.items() if k not in ("peaks", "entry") and v not in (None, "", [])}
+    p = rec.get("raw_path")
+    if p and os.path.isfile(p):
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                sp = parse_rruff_txt(f.read(), source_filename=os.path.basename(p))
+        except Exception:
+            return details
+        for k, v in sp.header.items():
+            if v and k not in details:
+                details[k] = v
+        if sp.ideal_chemistry and not details.get("ideal_chemistry"):
+            details["ideal_chemistry"] = sp.ideal_chemistry
+        if sp.url and not details.get("url"):
+            details["url"] = sp.url
+    return details
+
+
 def parse_rruff_filename(filename: str) -> Dict[str, Any]:
     """Split a RRUFF bulk-download filename into its positional fields.
     Returns {} if the filename doesn't match the expected double-underscore
@@ -157,10 +203,11 @@ def parse_rruff_txt(text: str, source_filename: str = "") -> RruffSpectrum:
         if "," in line:
             left, _, right = line.partition(",")
             try:
-                xs.append(float(left.strip()))
-                ys.append(float(right.strip()))
+                xv, yv = float(left.strip()), float(right.strip())
             except ValueError:
-                continue
+                continue        # one number or junk on the line: the PAIR is skipped, x and y stay aligned
+            xs.append(xv)
+            ys.append(yv)
 
     filename_fields = parse_rruff_filename(source_filename) if source_filename else {}
     # Header first, filename as fallback only — confirmed necessary on the
@@ -432,15 +479,87 @@ def download_and_build_rruff_cache(
 # requires an explicit user accept/reject before anything gets applied.
 # =============================================================================
 
-def score_match(query_peaks: List[float], candidate_peaks: List[float], tolerance: float = 10.0) -> Dict[str, float]:
-    """How many of the query's peaks have a candidate peak within
-    `tolerance` cm^-1. A simple, explainable first-pass metric (peak-count
-    overlap), not a claim of definitive identification — deliberately easy
-    for a user to sanity-check by eye against the overlay this feeds."""
-    if not query_peaks:
-        return {"matched": 0, "fraction": 0.0}
-    matched = sum(1 for qp in query_peaks if any(abs(qp - cp) <= tolerance for cp in candidate_peaks))
-    return {"matched": matched, "fraction": matched / len(query_peaks)}
+def score_match(query_peaks: List[float], candidate_peaks: List[float], tolerance: float = 10.0, *,
+                query_weights: Optional[Sequence[float]] = None,
+                candidate_weights: Optional[Sequence[float]] = None) -> Dict[str, float]:
+    """Two-sided, intensity-weighted peak agreement (a search-match figure of
+    merit, not a claim of identification):
+
+    - fraction: the share of the query's peak weight that the candidate
+      explains (a query peak counts when a candidate peak lies within
+      `tolerance` cm⁻¹);
+    - precision: the share of the candidate's own peak weight present in the
+      query, so a reference with many peaks of its own that happens to cover
+      a few query peaks no longer floats up;
+    - score: the geometric mean of the two, 1 = every peak of both, at the
+      right intensity order.
+
+    Unit weights (the default) give plain peak counts."""
+    nq, nc = len(query_peaks), len(candidate_peaks)
+    empty = {"matched": 0, "fraction": 0.0, "precision": 0.0, "score": 0.0, "mean_shift": float("nan")}
+    if nq == 0 or nc == 0:
+        return empty
+    qp = np.asarray(query_peaks, float)
+    cp = np.asarray(candidate_peaks, float)
+    qw = np.ones(nq) if query_weights is None else np.clip(np.asarray(query_weights, float), 0.0, None)
+    cw = np.ones(nc) if candidate_weights is None else np.clip(np.asarray(candidate_weights, float), 0.0, None)
+    d = np.abs(qp[:, None] - cp[None, :])
+    q_hit = d.min(axis=1) <= tolerance
+    c_hit = d.min(axis=0) <= tolerance
+    recall = float(qw[q_hit].sum() / qw.sum()) if qw.sum() > 0 else 0.0
+    precision = float(cw[c_hit].sum() / cw.sum()) if cw.sum() > 0 else 0.0
+    shifts = d.min(axis=1)[q_hit]
+    return {"matched": int(q_hit.sum()), "fraction": recall, "precision": precision,
+            "score": float(np.sqrt(recall * precision)),
+            "mean_shift": float(shifts.mean()) if shifts.size else float("nan")}
+
+
+def peak_weights_from_spectrum(x: np.ndarray, y: np.ndarray, positions: Sequence[float], tolerance: float,
+                               floor: float = 0.05) -> List[float]:
+    """Relative prominence of the spectrum at each position (apex within
+    ± tolerance): 1 for the strongest peak; a position with no peak there
+    keeps `floor` so a typed position still counts a little."""
+    import warnings
+    from scipy.signal import peak_prominences
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    if x.size < 3 or not len(positions):
+        return [1.0] * len(positions)
+    order = np.argsort(x, kind="mergesort")
+    x, y = x[order], y[order]
+    proms = []
+    for p in positions:
+        win = np.nonzero(np.abs(x - float(p)) <= tolerance)[0]
+        i = int(win[np.argmax(y[win])]) if win.size else int(np.argmin(np.abs(x - float(p))))
+        prom = 0.0
+        if 0 < i < x.size - 1 and y[i] >= y[i - 1] and y[i] >= y[i + 1]:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                try:
+                    prom = float(peak_prominences(y, [i])[0][0])
+                except Exception:
+                    prom = 0.0
+        proms.append(max(prom, 0.0))
+    top = max(proms) if proms else 0.0
+    if top <= 0:
+        return [1.0] * len(positions)
+    return [max(pr / top, floor) for pr in proms]
+
+
+def reference_peaks_from_file(raw_path: str, *, max_peaks: int = 25) -> Tuple[List[float], List[float]]:
+    """The peaks of a RRUFF spectrum re-detected from its data file:
+    positions and relative prominences (1 = its strongest peak)."""
+    from raman.raman_tools import peak_table
+    with open(raw_path, "r", encoding="utf-8", errors="replace") as f:
+        sp = parse_rruff_txt(f.read(), source_filename=os.path.basename(raw_path))
+    if len(sp.x) < 5:
+        return [], []
+    rows = peak_table(sp.x, sp.y, threshold_frac=0.03, min_prominence_frac=0.02, max_peaks=max_peaks)
+    if not rows:
+        return [], []
+    top = max(r.prominence for r in rows) or 1.0
+    return [float(r.position) for r in rows], [float(r.prominence / top) for r in rows]
 
 
 def filter_rruff_index(
@@ -483,22 +602,58 @@ def filter_rruff_index(
 
 def rank_rruff_matches(
     query_peaks: List[float], index: List[Dict[str, Any]], *, tolerance: float = 10.0, top_n: int = 25,
+    query_xy: Optional[Tuple[np.ndarray, np.ndarray]] = None, screen: int = 600, progress=None,
 ) -> List[Dict[str, Any]]:
-    """Rank indexed RRUFF spectra by peak-overlap against query_peaks.
-    Returns a plain ranked list (each record + matched/fraction fields),
-    best match first — never a single "the" answer. Records with zero
-    matched peaks, or with no pre-extracted peaks at all (RAW spectra, per
-    ingest_zip's Processed-only peak extraction), are excluded."""
-    scored = []
+    """Rank indexed RRUFF spectra against the query's peaks, in two stages:
+
+    1. a cheap two-sided screen over the whole index on its stored peak
+       lists (unit weights) keeps the best `screen` candidates;
+    2. those are rescored with intensities: the query's peaks weighted by
+       their prominence in the query spectrum (`query_xy`), the reference's
+       peaks re-detected from its data file with their prominences (records
+       without a readable file keep their stored peaks, unit weights).
+
+    Each hit carries matched_peaks, match_fraction (weighted recall),
+    precision, score (see score_match) and mean_shift; best score first.
+    Records with no stored peaks (RAW spectra) or no matched peak are
+    left out. Never a single "the" answer: the user judges the overlay."""
+    q_weights = None
+    if query_xy is not None and query_xy[0] is not None:
+        try:
+            q_weights = peak_weights_from_spectrum(query_xy[0], query_xy[1], query_peaks, tolerance)
+        except Exception:
+            q_weights = None
+    stage1 = []
     for rec in index:
         candidate_peaks = rec.get("peaks") or []
         if not candidate_peaks:
             continue
-        result = score_match(query_peaks, candidate_peaks, tolerance=tolerance)
-        if result["matched"] == 0:
+        r1 = score_match(query_peaks, candidate_peaks, tolerance=tolerance)
+        if r1["matched"] == 0:
             continue
-        scored.append({**rec, "matched_peaks": result["matched"], "match_fraction": result["fraction"]})
-    scored.sort(key=lambda r: (r["matched_peaks"], r["match_fraction"]), reverse=True)
+        stage1.append((r1["score"], rec))
+    stage1.sort(key=lambda t: t[0], reverse=True)
+    keep = [rec for _s, rec in stage1[:max(1, int(screen))]]
+    scored = []
+    for i, rec in enumerate(keep):
+        cp, cw = [], None
+        p = rec.get("raw_path")
+        if p and os.path.isfile(p):
+            try:
+                cp, cw = reference_peaks_from_file(p)
+            except Exception:
+                cp, cw = [], None
+        if not cp:
+            cp, cw = list(rec.get("peaks") or []), None
+        r = score_match(query_peaks, cp, tolerance=tolerance, query_weights=q_weights, candidate_weights=cw)
+        if r["matched"] == 0:
+            continue
+        scored.append({**rec, "peaks": cp, "index_peaks": list(rec.get("peaks") or []),
+                       "matched_peaks": r["matched"], "match_fraction": r["fraction"], "precision": r["precision"],
+                       "score": r["score"], "mean_shift": r["mean_shift"]})
+        if progress and (i % 50 == 0 or i == len(keep) - 1):
+            progress(i + 1, len(keep), "scoring")
+    scored.sort(key=lambda r: (r["score"], r["matched_peaks"]), reverse=True)
     return scored[:top_n]
 
 

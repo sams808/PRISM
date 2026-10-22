@@ -107,9 +107,9 @@ def test_raman_id_similarity_search_uses_the_reference_library(qtbot, tmp_path, 
     ws.find_matches()
     assert ws.results_table.rowCount() == 2
     assert ws.results_table.item(0, 0).text() == "standard 520"
-    assert ws.results_table.item(0, 5).text() == "my library"
-    assert float(ws.results_table.item(0, 6).text()) > 0.99
-    assert float(ws.results_table.item(1, 6).text()) < 0.5
+    assert ws.results_table.item(0, 6).text() == "my library"   # column 1 is the formula
+    assert float(ws.results_table.item(0, 7).text()) > 0.99   # score column, after the formula
+    assert float(ws.results_table.item(1, 7).text()) < 0.5
     # the hit's curve is overlaid and accepting records a score
     ax = ws.plot.figure.get_axes()[0]
     assert any("my library" in line.get_label() for line in ax.get_lines())
@@ -146,4 +146,4 @@ def test_raman_id_similarity_over_a_fake_rruff_cache(qtbot, tmp_path):
     ws.find_matches()
     assert ws.results_table.rowCount() == 2
     assert ws.results_table.item(0, 0).text() == "Quartzlike"
-    assert float(ws.results_table.item(0, 6).text()) > 0.99
+    assert float(ws.results_table.item(0, 7).text()) > 0.99   # score column, after the formula

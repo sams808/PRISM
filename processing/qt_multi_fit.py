@@ -106,10 +106,13 @@ class MultiFitWorkspace(QWidget):
 
         recipe_btn_row = QHBoxLayout()
         new_recipe_btn = QPushButton("New…")
+        new_recipe_btn.setToolTip("Create a fit recipe: the set of components applied to every selected spectrum")
         new_recipe_btn.clicked.connect(self._new_recipe)
         edit_recipe_btn = QPushButton("Edit…")
+        edit_recipe_btn.setToolTip("Change the components of the selected recipe")
         edit_recipe_btn.clicked.connect(self._edit_recipe)
         refresh_btn = QPushButton("Refresh")
+        refresh_btn.setToolTip("Re-read the saved recipes")
         refresh_btn.clicked.connect(self._refresh_recipe_list)
         recipe_btn_row.addWidget(new_recipe_btn)
         recipe_btn_row.addWidget(edit_recipe_btn)
@@ -132,6 +135,7 @@ class MultiFitWorkspace(QWidget):
         left_layout.addWidget(self.writeback_check)
 
         self._run_btn = QPushButton("Run batch fit")
+        self._run_btn.setToolTip("Fit every selected spectrum with the recipe; one row per fitted component in the table")
         self._run_btn.setObjectName("Primary")
         self._run_btn.clicked.connect(self.run_batch)
         left_layout.addWidget(self._run_btn)
@@ -154,6 +158,7 @@ class MultiFitWorkspace(QWidget):
 
         export_row = QHBoxLayout()
         export_btn = QPushButton("Export results to CSV…")
+        export_btn.setToolTip("The results table as a CSV file")
         export_btn.clicked.connect(self.export_results_csv)
         export_row.addWidget(export_btn)
         export_row.addStretch(1)

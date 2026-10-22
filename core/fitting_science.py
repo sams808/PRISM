@@ -396,6 +396,7 @@ def origin_lm_iteration(
     x: np.ndarray, y: np.ndarray, params_struct: List[Dict[str, Any]],
     lm_params: "lmfit.Parameters", *, lambda_lm: float = 1e-3,
     lambda_up: float = 10.0, lambda_down: float = 10.0, max_retries: int = 8,
+    step_fraction: float = 1.0,
 ) -> OriginStepResult:
     """One Levenberg-Marquardt iteration, the way Origin's NLFit does it:
 
@@ -407,6 +408,11 @@ def origin_lm_iteration(
        accept and shrink λ for the next iteration; otherwise grow λ and
        retry — up to max_retries — and report accepted=False if nothing
        improves (the caller shows that as "converged/stuck", like Origin).
+
+    step_fraction (0 < f ≤ 1) applies only that fraction of the computed
+    update, p + f·δ: a way to walk towards the data in visible increments
+    (several clicks at 25 % show the path one full step would take at
+    once). The acceptance test is applied to the fractional step.
     """
     x, y = _ensure_numeric(x, y)
     mask = np.isfinite(x) & np.isfinite(y)
@@ -440,13 +446,14 @@ def origin_lm_iteration(
     diag[diag <= 0] = 1e-12
 
     lam = max(float(lambda_lm), 1e-12)
+    frac = float(np.clip(step_fraction, 1e-3, 1.0))
     for _ in range(max_retries):
         try:
             delta = np.linalg.solve(JtJ + lam * np.diag(diag), -Jtr)
         except np.linalg.LinAlgError:
             delta = np.linalg.lstsq(JtJ + lam * np.diag(diag), -Jtr, rcond=None)[0]
         trial = params.copy()
-        _set_free_values(trial, names, v0 + delta)
+        _set_free_values(trial, names, v0 + frac * delta)
         r1 = residual_at(trial)
         chisq1 = float(np.dot(r1, r1))
         if np.isfinite(chisq1) and chisq1 < chisq0:

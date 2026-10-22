@@ -12,7 +12,7 @@ def test_help_covers_every_workspace():
     expected_mentions = {
         "Home": "Home",
         "Library": "Library",
-        "Raman": "Simple Plot",
+        "Raman": "Raman (workbench)",
         "XAS": "XAS",
         "DTA / Thermal": "DTA / Thermal",
         "Peak Fitting": "Peak Fitting",

@@ -818,8 +818,8 @@ class XrdIdWorkspace(QWidget):
     # Peak search options
     # ------------------------------------------------------------------
     def _peak_settings_store(self):
-        from PySide6.QtCore import QSettings
-        return QSettings("PRISM", "PRISM")
+        from core.app_settings import app_settings
+        return app_settings()
 
     def _load_peak_options(self) -> Optional[Dict[str, Any]]:
         try:
@@ -1247,8 +1247,8 @@ class XrdIdWorkspace(QWidget):
     # CIF export
     # ------------------------------------------------------------------
     def _cif_settings(self):
-        from PySide6.QtCore import QSettings
-        return QSettings("PRISM", "PRISM")
+        from core.app_settings import app_settings
+        return app_settings()
 
     def _load_cif_settings(self) -> None:
         try:

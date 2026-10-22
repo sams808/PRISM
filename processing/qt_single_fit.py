@@ -113,18 +113,23 @@ class SingleFitWorkspace(QWidget):
         plot_x_row.addWidget(QLabel("Plot X"))
         self.xmin_edit = QLineEdit()
         self.xmax_edit = QLineEdit()
+        self.xmin_edit.setPlaceholderText("x min")
+        self.xmax_edit.setPlaceholderText("x max")
         for e in (self.xmin_edit, self.xmax_edit):
             e.setMaximumWidth(60)
+            e.setToolTip("Plotted x range (display only; the fit uses the whole spectrum)")
             e.textChanged.connect(self._request_render)
         plot_x_row.addWidget(self.xmin_edit)
         plot_x_row.addWidget(self.xmax_edit)
         left_layout.addLayout(plot_x_row)
 
         param_btn = QPushButton("Fit param.")
+        param_btn.setToolTip("The table of components: shape, centre, width, amplitude, bounds and links; add or remove peaks here")
         param_btn.clicked.connect(self.open_param_window)
         left_layout.addWidget(param_btn)
 
         self.pick_peaks_btn = QPushButton("Pick peaks on plot")
+        self.pick_peaks_btn.setToolTip("Toggle, then click each peak apex on the plot to add a component there")
         self.pick_peaks_btn.setCheckable(True)
         self.pick_peaks_btn.setToolTip(
             "Toggle on, then click peak apexes on the plot — each click adds a fit component "
@@ -134,11 +139,13 @@ class SingleFitWorkspace(QWidget):
         left_layout.addWidget(self.pick_peaks_btn)
 
         fit_btn = QPushButton("Fit !")
+        fit_btn.setToolTip("Run the fit with the current components (Classic: full least squares; Origin-like: use the iteration buttons below)")
         fit_btn.setObjectName("Primary")
         fit_btn.clicked.connect(self.run_fit)
         left_layout.addWidget(fit_btn)
 
         reset_btn = QPushButton("Reset params to snapshot")
+        reset_btn.setToolTip("Put the parameters back to the values they had before the last fit")
         reset_btn.clicked.connect(self.reset_params_to_snapshot)
         left_layout.addWidget(reset_btn)
 
@@ -172,11 +179,24 @@ class SingleFitWorkspace(QWidget):
         step_row = QHBoxLayout()
         step_row.addWidget(QLabel("Iterate:"))
         for n in (1, 2, 5, 10):
-            btn = QPushButton(f"{n}×" if n > 1 else "1 iteration")
+            btn = QPushButton(f"{n}×")
             btn.setToolTip("One Levenberg-Marquardt parameter update per iteration — watch the curve move, like Origin's NLFit.")
             btn.clicked.connect(lambda _checked=False, n=n: self.run_fit_origin_stepwise(n))
             step_row.addWidget(btn)
         origin_layout.addLayout(step_row)
+
+        frac_row = QHBoxLayout()
+        frac_row.addWidget(QLabel("Step size:"))
+        from PySide6.QtWidgets import QComboBox as _QCB
+        self.origin_step_combo = _QCB()
+        self.origin_step_combo.addItems(["100 %", "50 %", "25 %", "10 %"])
+        self.origin_step_combo.setToolTip(
+            "Fraction of each Levenberg-Marquardt update that is applied: 100 % is the full step; "
+            "25 % moves the parameters a quarter of the way per click so the model walks visibly towards the data."
+        )
+        frac_row.addWidget(self.origin_step_combo)
+        frac_row.addStretch(1)
+        origin_layout.addLayout(frac_row)
 
         full_btn = QPushButton("Fit until converged")
         full_btn.clicked.connect(self.run_fit_origin_full)
@@ -218,15 +238,19 @@ class SingleFitWorkspace(QWidget):
         chi2_row.addWidget(self.r2_label)
 
         ci_btn = QPushButton("Conf. intervals")
+        ci_btn.setToolTip("Confidence intervals of the fitted parameters (takes a moment)")
         ci_btn.clicked.connect(self.show_confidence_intervals)
         chi2_row.addWidget(ci_btn)
         quick_report_btn = QPushButton("Quick report")
+        quick_report_btn.setToolTip("The fit result as text in the log: parameters, errors, chi-square")
         quick_report_btn.clicked.connect(lambda: self.generate_report(quick=True))
         chi2_row.addWidget(quick_report_btn)
         report_btn = QPushButton("Report as…")
+        report_btn.setToolTip("Save the fit report as a text file")
         report_btn.clicked.connect(lambda: self.generate_report(quick=False))
         chi2_row.addWidget(report_btn)
         components_btn = QPushButton("Export components…")
+        components_btn.setToolTip("Save data, total fit and every component as columns of a text file")
         components_btn.clicked.connect(self.export_components_csv)
         chi2_row.addWidget(components_btn)
         chi2_row.addStretch(1)
@@ -240,6 +264,7 @@ class SingleFitWorkspace(QWidget):
         for cb in (self.export_png_check, self.export_svg_check, self.export_pdf_check):
             export_row.addWidget(cb)
         export_btn = QPushButton("Export plot")
+        export_btn.setToolTip("Save the fit plot in the ticked formats")
         export_btn.clicked.connect(self.export_plot)
         export_row.addWidget(export_btn)
         export_row.addStretch(1)
@@ -544,9 +569,11 @@ class SingleFitWorkspace(QWidget):
             self._origin_reset_damping()
 
         current = lm_params
+        frac = (_to_float(self.origin_step_combo.currentText().replace("%", ""), 100.0) or 100.0) / 100.0
         for _ in range(max_iters):
             try:
-                step = origin_lm_iteration(x, y, params_struct, current, lambda_lm=self._origin_lambda)
+                step = origin_lm_iteration(x, y, params_struct, current, lambda_lm=self._origin_lambda,
+                                           step_fraction=frac)
             except ValueError as exc:
                 QMessageBox.warning(self, "Origin-like fit", str(exc))
                 return
