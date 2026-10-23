@@ -56,6 +56,21 @@ class PlotWidget(QWidget):
         self.figure = Figure(figsize=figsize, dpi=dpi)
         self.ax = self.figure.add_subplot(111)
         self.canvas = FigureCanvasQTAgg(self.figure)
+        # matplotlib's draw_idle() arms an unparented QTimer.singleShot(0) on
+        # the canvas; if the widget is deleted first (a test teardown, a page
+        # rebuilt), the callback runs on a dead C++ object and raises
+        # "Internal C++ object already deleted" inside whatever next pumps the
+        # event loop. Clearing the pending flag at destruction makes that
+        # callback return before it touches the C++ side.
+        canvas = self.canvas
+
+        def _no_more_idle_draws(*_args):
+            try:
+                canvas._draw_pending = False
+            except Exception:
+                pass
+
+        self.canvas.destroyed.connect(_no_more_idle_draws)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
 
         layout = QVBoxLayout(self)

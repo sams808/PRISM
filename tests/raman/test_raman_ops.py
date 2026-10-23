@@ -6,6 +6,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from core.np_compat import trapezoid
 import raman.raman_ops as ro
 
 
@@ -62,7 +63,7 @@ def test_baselines():
 def test_normalize_modes():
     s = _spec()
     for mode, check in (("peak (max = 1)", lambda x, y: y.max() == pytest.approx(1.0)),
-                        ("area (= 100)", lambda x, y: np.trapezoid(y, x) == pytest.approx(100.0)),
+                        ("area (= 100)", lambda x, y: trapezoid(y, x) == pytest.approx(100.0)),
                         ("min-max (0..1)", lambda x, y: (y.min(), y.max()) == (0.0, 1.0)),
                         ("value at x", lambda x, y: np.interp(520.0, x, y) == pytest.approx(2.0)),
                         ("peak in range", lambda x, y: y[(x > 1000) & (x < 1100)].max() == pytest.approx(1.0))):

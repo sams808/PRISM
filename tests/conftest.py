@@ -243,6 +243,22 @@ def _flush_pending_qt_draws():
     app = QApplication.instance()
     if app is None:
         return
+    # first until no live canvas still has an idle draw pending (bounded),
+    # then a short beat for anything scheduled by those draws
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        app.processEvents()
+        pending = False
+        for w in app.allWidgets():
+            try:
+                if getattr(w, "_draw_pending", False):
+                    pending = True
+                    break
+            except RuntimeError:
+                continue
+        if not pending:
+            break
+        time.sleep(0.01)
     deadline = time.time() + 0.25
     while time.time() < deadline:
         app.processEvents()
