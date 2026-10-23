@@ -629,7 +629,12 @@ def _now_ts() -> float:
 
 
 def _uid(prefix: str = "sp") -> str:
-    return f"{prefix}_{int(_now_ts()*1000)}_{np.random.randint(1000,9999)}"
+    """Unique spectrum id: time prefix kept for readability, the suffix comes
+    from uuid4 (the former randint(1000, 9999) let two spectra created in
+    the same millisecond share an id, and one of them vanished from the
+    store)."""
+    import uuid
+    return f"{prefix}_{int(_now_ts()*1000)}_{uuid.uuid4().hex[:8]}"
 
 
 @dataclass
@@ -674,7 +679,9 @@ class SpectrumStore:
         self._order.clear(); self._sp.clear()
 
     def add(self, sp: Spectrum):
-        self._sp[sp.sid] = sp; self._order.append(sp.sid)
+        self._sp[sp.sid] = sp
+        if sp.sid not in self._order:      # a re-added id must not appear twice in the order
+            self._order.append(sp.sid)
 
     def remove(self, sid: str):
         if sid in self._sp:
